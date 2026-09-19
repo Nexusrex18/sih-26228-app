@@ -263,16 +263,25 @@ def test_an_internal_node_presented_as_a_leaf_does_not_verify_against_the_root()
     assert not verify_inclusion(leaf_hash(n01), 0, 2, [leaf_hash(n23)], root)
 
 
-def test_without_domain_separation_the_same_confusion_would_succeed():
-    """Shows the test above is meaningful: hash leaves as bare SHA-256 and the attack works."""
+def test_without_domain_separation_the_same_second_preimage_attack_would_succeed():
+    """Makes the test above meaningful. With bare hashes (leaf = H(d), node = H(l||r)) an attacker can
+    present a TWO-leaf tree whose leaf DATA are the concatenated leaf hashes and obtain the FOUR-leaf
+    tree's root. The 0x00/0x01 prefixes are exactly what stop this."""
     import hashlib
-    def bare(d): return hashlib.sha256(d).digest()
-    def bare_node(a, b): return hashlib.sha256(a + b).digest()
-    l = [bare(bytes([i])) for i in range(4)]
-    n01, n23 = bare_node(l[0], l[1]), bare_node(l[2], l[3])
-    assert bare_node(n01, n23) == bare_node(bare_node(l[0], l[1]), bare_node(l[2], l[3]))
-    forged_root = bare_node(n01, n23)
-    assert bare_node(n01, n23) == forged_root            # a 2-leaf 'tree' whose leaves ARE n01, n23
+
+    def bare(d: bytes) -> bytes:
+        return hashlib.sha256(d).digest()
+
+    data = [bytes([i]) for i in range(4)]
+    h = [bare(x) for x in data]
+    root4 = bare(bare(h[0] + h[1]) + bare(h[2] + h[3]))
+    forged = bare(bare(h[0] + h[1]) + bare(h[2] + h[3]))            # leaf data D0 = h0||h1, D1 = h2||h3
+    d0, d1 = h[0] + h[1], h[2] + h[3]
+    assert bare(bare(d0) + bare(d1)) == root4 == forged            # the forgery WORKS without domain separation
+
+    ours = [leaf_hash(x) for x in data]
+    ours_d0, ours_d1 = ours[0] + ours[1], ours[2] + ours[3]
+    assert mth([leaf_hash(ours_d0), leaf_hash(ours_d1)]) != mth(ours)     # ... and fails with it
 
 
 def test_a_leaf_hash_never_equals_a_node_hash_of_the_same_bytes():

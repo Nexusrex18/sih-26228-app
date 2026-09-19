@@ -24,7 +24,7 @@ from typing import Any
 
 from .canonical import parse_strict
 from .constants import DOMAIN_LINK, TAG_RECORD
-from .errors import InvalidRecord, NonCanonical
+from .errors import InvalidRecord, NonCanonical, SealError, SigningFailed
 from .keys import KeyProvider, verify_ed25519
 from .records import (
     build_record,
@@ -46,7 +46,12 @@ def sign_record(unsigned: Mapping[str, Any], key: KeyProvider) -> dict[str, Any]
     validate_record(unsigned, signed=False)
     if unsigned["key_id"] != key.key_id:
         raise ValueError(f"record names key {unsigned['key_id'][:16]}… but the signing key is {key.key_id[:16]}…")
-    sig = key.sign(TAG_RECORD + canon(unsigned))
+    try:
+        sig = key.sign(TAG_RECORD + canon(unsigned))
+    except SealError:
+        raise
+    except Exception as e:                                   # noqa: BLE001 - any provider failure means "cannot sign"
+        raise SigningFailed(f"the signing key could not sign: {type(e).__name__}: {e}") from None
     signed = dict(unsigned)
     signed["signature"] = sig.hex()
     validate_record(signed, signed=True)
