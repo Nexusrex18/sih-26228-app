@@ -16,16 +16,7 @@ import torch.nn as nn
 from cva.core.capability import Capability, CapabilitySet
 from .base import ProbeLog, digest_weights, softmax
 
-TORCH_MIN = (2, 6, 0)
-
-
-def _check_torch_version() -> None:
-    v = tuple(int(p) for p in torch.__version__.split("+")[0].split(".")[:3])
-    if v < TORCH_MIN:
-        raise RuntimeError(
-            f"torch {torch.__version__} < 2.6.0 — weights_only=True does not fully "
-            "close CVE-2025-32434. Refusing to load an untrusted checkpoint."
-        )
+from cva.loaders.safety import check_torch_version as _check_torch_version
 
 
 class TorchModelHandle:

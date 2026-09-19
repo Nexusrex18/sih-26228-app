@@ -1,4 +1,4 @@
-from cva.core.finding import Disposition
+from cva.core.types import Disposition
 from cva.detectors.base import CheckContext
 from cva.detectors.model.anomalous import AnomalousBehaviourCheck
 

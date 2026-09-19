@@ -69,7 +69,7 @@ class SyntheticModel:
         return [("conv1", "Conv2d")] if Capability.MODEL_ARCHITECTURE in self._caps else None
 
     def weight_digest(self):
-        from cva.adapters.models.base import digest_weights
+        from cva.loaders.models.base import digest_weights
         w = self.get_weights()
         return digest_weights(w) if w else "unavailable"
 

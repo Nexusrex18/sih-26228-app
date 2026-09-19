@@ -1,6 +1,6 @@
 import numpy as np
 
-from cva.core.finding import Severity
+from cva.core.types import Severity
 from cva.core.model import Manifest, ModelBattery
 from cva.detectors.base import CheckContext
 from cva.detectors.model.fingerprint import FingerprintCheck, fingerprint

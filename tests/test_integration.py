@@ -12,13 +12,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from cva.adapters.models import load_model
+from cva.loaders.models import load_model
 from attacklab.arch import ARCH_REGISTRY
 from cva.core.capability import Availability, Capability, CapabilitySet
-from cva.core.finding import Severity
+from cva.core.types import Severity
 from cva.core.model import ModelBattery
 from cva.detectors.base import REGISTRY
-from cva.orchestrator import RunContext, scan
+from cva.core.orchestrator import RunContext, scan
 
 CORPUS = Path("artifacts/corpus")
 pytestmark = pytest.mark.skipif(not (CORPUS / "manifest.json").exists(),

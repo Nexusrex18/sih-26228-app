@@ -13,13 +13,14 @@ from pathlib import Path
 
 import numpy as np
 
-from cva.adapters.models import load_model
+from cva.loaders.models import load_model
 from attacklab.arch import ARCH_REGISTRY
 from cva.core.capability import Availability
-from cva.core.finding import Disposition
+from cva.core.types import Disposition
 from cva.core.model import ModelBattery
-from cva.orchestrator import RunContext, scan
-from cva.report.render import render
+import cva.detectors.model.registry  # noqa: F401 — registration happens at the entrypoint, never in core
+from cva.core.orchestrator import RunContext, scan
+from cva.report.render_html import render
 
 
 def _fired(f) -> bool:
@@ -98,7 +99,7 @@ def run_bench(corpus: Path, out: Path, profile: str = "deep",
 
 
 def _render_matrix(rows, scoreboard, detectors, path: Path) -> None:
-    from cva.report.render import CSS
+    from cva.report.render_html import CSS
     import html as H
     p = [f"<!doctype html><meta charset=utf-8><title>Module B benchmark</title>"
          f"<style>{CSS}.fire{{background:#fdeceb;color:#b3261e;font-weight:700}}"

@@ -16,12 +16,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cva.adapters.models import load_model
+from cva.loaders.models import load_model
 from attacklab.arch import ARCH_REGISTRY
 from cva.cli import build_battery, emit_reference, load_probes, manifest_from
 from cva.core.model import ModelBattery
-from cva.orchestrator import RunContext, scan
-from cva.report.render import render
+import cva.detectors.model.registry  # noqa: F401 — registration happens at the entrypoint, never in core
+from cva.core.orchestrator import RunContext, scan
+from cva.report.render_html import render
 
 
 def run(corpus: Path, out: Path) -> None:

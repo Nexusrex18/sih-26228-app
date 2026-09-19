@@ -6,11 +6,14 @@ from pathlib import Path
 
 import numpy as np
 
-from cva.adapters.models import load_model
+from cva.loaders.models import load_model
 from attacklab.arch import ARCH_REGISTRY
 from cva.core.model import Manifest, ModelBattery
-from cva.orchestrator import RunContext, scan
-from cva.report.render import render
+import cva.detectors.model.registry  # noqa: F401 — registration happens at the entrypoint, never in core
+from cva.core.orchestrator import RunContext, scan
+from cva.report.coverage import write as write_coverage
+from cva.report.render_html import render
+from cva.report.report_json import write as write_report_json
 
 
 def load_probes(corpus: Path, n: int = 400):
@@ -62,6 +65,8 @@ def run_scan(model_path: Path, corpus: Path, out_dir: Path, profile: str = "deep
     emit_reference(model, out_dir / f"{model.model_id}.reference.json")
     (out_dir / f"{model.model_id}.findings.json").write_text(
         json.dumps([f.to_dict() for f in res.findings], indent=2))
+    write_report_json(res, out_dir / f"{model.model_id}.report.json")
+    write_coverage(res, out_dir / f"{model.model_id}.coverage.md")
     render([res], out_dir / f"{model.model_id}.report.html",
            f"CV Assurance — Module B — {model.model_id}")
     return res

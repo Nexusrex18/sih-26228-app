@@ -11,7 +11,7 @@ same class of problem as torch.load executing pickle.
 from __future__ import annotations
 
 from cva.core.capability import Availability, Capability
-from cva.core.finding import (Disposition, Evidence, Finding, Nature, Severity,
+from cva.core.types import (Disposition, Evidence, Finding, Nature, Severity,
                               unavailable_finding)
 from cva.detectors.base import CheckContext, register
 

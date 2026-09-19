@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 from cva.core.capability import Availability, Capability
-from cva.core.finding import Disposition, Severity
+from cva.core.types import Disposition, Severity
 
 CSS = """
 :root{--bg:#fbfbfd;--fg:#1a1d23;--mut:#666c78;--line:#e2e5ea;--card:#fff;

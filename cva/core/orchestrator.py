@@ -18,45 +18,12 @@ from typing import Any
 import numpy as np
 
 from cva.core.capability import (Availability, Capability, CapabilitySet, Resolution)
-from cva.core.finding import Evidence, Finding, Severity, Disposition, Nature
+from cva.core.types import Evidence, Finding, Severity, Disposition, Nature
 from cva.core.model import ModelBattery
-from cva.detectors.base import REGISTRY, CheckContext
-import cva.detectors.model.registry  # noqa: F401 — explicit registration, ADR-008
-
-
-@dataclass
-class RunContext:
-    probes_x: np.ndarray | None = None
-    probes_y: np.ndarray | None = None
-    suspect_x: np.ndarray | None = None
-    battery: ModelBattery | None = None
-    profile: dict = field(default_factory=dict)
-    out_dir: Path | None = None
-    seed: int = 0
-
-    def capabilities(self) -> CapabilitySet:
-        caps, notes = set(), []
-        if self.probes_x is not None and len(self.probes_x):
-            caps.add(Capability.REFERENCE_CLEAN_SET)
-        else:
-            notes.append((Capability.REFERENCE_CLEAN_SET, "no clean probe set supplied"))
-        if self.suspect_x is not None and len(self.suspect_x):
-            caps.add(Capability.SUSPECT_INPUTS)
-        else:
-            notes.append((Capability.SUSPECT_INPUTS,
-                          "no suspect input set supplied — only known-clean probes"))
-        if self.battery and self.battery.models:
-            caps.add(Capability.REFERENCE_MODEL_BATTERY)
-        else:
-            notes.append((Capability.REFERENCE_MODEL_BATTERY,
-                          "no reference model battery supplied — organisers provide none, "
-                          "so this is the expected case"))
-        if self.battery and self.battery.manifest:
-            caps.add(Capability.REFERENCE_MANIFEST)
-        else:
-            notes.append((Capability.REFERENCE_MANIFEST,
-                          "no manifest registered for this model"))
-        return CapabilitySet(frozenset(caps), tuple(notes))
+from cva.core.profile import PROFILES
+from cva.core.runcontext import RunContext
+from cva.core.context import CheckContext
+from cva.core.registry import REGISTRY
 
 
 @dataclass
@@ -76,17 +43,6 @@ class ScanResult:
     findings: list[Finding]
     timings: dict
     verdict: str
-
-
-PROFILES = {
-    "triage":   {"checks": {"model.weight_digest", "model.graph_structure"}},
-    "standard": {"checks": {"model.weight_digest", "model.graph_structure",
-                            "model.behavioural_fingerprint", "model.anomalous",
-                            "model.intrinsic_probes", "model.weight_statistics",
-                            "model.activation_statistics"}},
-    "deep":     {"checks": None, "nc_top_k": 3},      # None = everything registered
-    "forensic": {"checks": None, "nc_top_k": 999, "nc_steps": 200, "nes_steps": 120},
-}
 
 
 def scan(model, ctx: RunContext, profile_name: str = "deep") -> ScanResult:
