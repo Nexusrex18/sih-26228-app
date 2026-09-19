@@ -55,7 +55,9 @@ POLICIES: dict[str, dict[str, Any]] = {
     "blackbox": {"budget_tier": "standard",
                  "disabled_checks": ["model.weight_digest", "model.weight_statistics",
                                      "model.neural_cleanse", "model.activation_statistics"]},
-    "selftest": {"budget_tier": "deep", "nc_top_k": 1, "nc_steps": 10, "nes_steps": 10,
+    # standard, not triage: triage never loads the backbone, and that load is where an
+    # egress is most likely to hide (plan §5.6). nc_*/nes_* only bite if --budget-tier deep.
+    "selftest": {"budget_tier": "standard", "nc_top_k": 1, "nc_steps": 10, "nes_steps": 10,
                  "scan_id_from_seed": True, "pin_clock": True, "egress_guard": True},
 }
 

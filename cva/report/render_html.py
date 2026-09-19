@@ -349,8 +349,9 @@ def _reproduction_section(doc: _Doc, r, command: str | None) -> None:
             f"<div class=meta>profile <code>{_e(r.profile_name)}</code> "
             f"(tier <code>{_e(prof.get('budget_tier', '—'))}</code>) · "
             f"profile hash <code>{_e(r.profile_hash[:16])}</code> · "
-            f"commit <code>{_e(r.code_commit)}</code> · seed "
-            f"<code>{_e(rep['seeds']['scan'])}</code></div>"
+            f"commit <code>{_e(r.code_commit)}</code> · seeds "
+            + ", ".join(f"{_e(k)}=<code>{_e(v)}</code>" for k, v in rep["seeds"].items())
+            + "</div>"
             "<div class=lim><b>Fields expected to differ between runs:</b> "
             + ", ".join(f"<code>{_e(p)}</code>" for p in rep["volatile_paths"]) + "</div>"
             "<div class=lim><b>Environment:</b> "

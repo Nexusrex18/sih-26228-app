@@ -17,6 +17,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 
+from cva.core import determinism
 from cva.core.access_block import consequence
 from cva.core.capability import Capability
 from cva.core.scanid import VOLATILE_PATHS
@@ -72,12 +73,17 @@ def access_assumptions_of(result) -> dict[str, Any]:
 def reproduction_of(result, command: str | None = None) -> dict[str, Any]:
     prof = getattr(result, "profile", None) or {}
     pinned = bool(prof.get("pin_clock"))
+    armed = determinism.armed()
     notes = [
         "created_at_utc is pinned to a fixed instant by this profile." if pinned else
         "created_at_utc is the wall clock; it and scan_id differ between runs by design "
         "and are listed in volatile_paths.",
         "Per-check wall-clock timings are not recorded in this file: they differ on every "
         "run and would make the reproducibility diff fail on a correct scan.",
+        "Global RNG seeds, deterministic torch algorithms and single-threaded ONNX Runtime "
+        "were pinned for this run." if armed else
+        "Only the scan seed was recorded: global RNG seeds and thread counts were NOT pinned "
+        "for this run (run under a profile that pins the clock, e.g. selftest).",
         "The embedding extractor (DINOv2 vs the ResNet-18 fallback) depends on which "
         "weights are present on the machine and is recorded in each detector finding's "
         "access_assumptions; it is expected to differ between machines with different "
@@ -85,7 +91,7 @@ def reproduction_of(result, command: str | None = None) -> dict[str, Any]:
     ]
     return {"command": command or _NO_COMMAND,
             "volatile_paths": list(VOLATILE_PATHS),
-            "seeds": {"scan": getattr(result, "seed", 0)},
+            "seeds": determinism.recorded_seeds(getattr(result, "seed", 0)),
             "env": _env(),
             "determinism_notes": notes}
 
@@ -137,6 +143,8 @@ def _finding(f) -> dict[str, Any]:
 
 def _env() -> dict[str, str]:
     env = {"python": platform.python_version()}
+    if determinism.hashseed() is not None:
+        env["PYTHONHASHSEED"] = str(determinism.hashseed())
     for name in _ENV_PACKAGES:       # read metadata; never import torch just to print a version
         try:
             env[name] = metadata.version(name)

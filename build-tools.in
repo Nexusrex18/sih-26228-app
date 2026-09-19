@@ -1,0 +1,3 @@
+# Needed to install cva itself from the wheelhouse with --no-index --no-build-isolation.
+setuptools
+wheel

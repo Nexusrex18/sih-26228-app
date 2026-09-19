@@ -2,17 +2,22 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import shlex
 import subprocess
+import tempfile
 from pathlib import Path
 
 import numpy as np
 
+import cva.detectors.data.registry  # noqa: F401 — Module A's detectors; without this, no data.* check is planned
 import cva.detectors.model.registry  # noqa: F401 — registration happens at the entrypoint, never in core
 from attacklab.arch import ARCH_REGISTRY
+from cva.core import determinism
+from cva.core.egress import egress_guard, run_canaries
 from cva.core.model import Manifest, ModelBattery
-from cva.core.orchestrator import RunContext, scan
+from cva.core.orchestrator import RunContext, ScanResult, resolve_profile, scan
 from cva.core.scanid import scan_out_dir
 from cva.loaders.models import load_model
 from cva.report.coverage import write as write_coverage
@@ -111,25 +116,106 @@ def repro_command(a) -> str:
     return shlex.join(argv)
 
 
-def cmd_scan(a) -> int:
-    """V7: the plan prints BEFORE any work, and --dry-run stops right after it."""
-    model = load_model(Path(a.model), ARCH_REGISTRY) if a.model else None
-    ds = load_dataset(Path(a.dataset) if a.dataset else None)
-    ctx = RunContext(out_dir=Path(a.out), seed=a.seed, dataset=ds,
-                     code_commit=code_commit())
-    res = scan(model, ctx, a.profile, dry_run=a.dry_run, plan_sink=print,
-               budget_tier=a.budget_tier)
+def execute_scan(a, command: str | None = None) -> tuple[ScanResult, Path | None]:
+    """Everything `cva scan` does, minus the printing. Shared with `cva selftest`.
+
+    A profile that sets `egress_guard` arms the process-level guard around model loading
+    AND the scan, because the backbone load is where an egress is most likely to hide.
+    A profile that pins the clock also arms the reproducibility harness, and does so
+    BEFORE any model is loaded so the ONNX session options are pinned too.
+    """
+    prof = resolve_profile(a.profile, a.budget_tier)     # unknown profile: a load error, now
+    if prof.get("pin_clock"):
+        determinism.arm(a.seed)
+    guard = egress_guard() if prof.get("egress_guard") else contextlib.nullcontext()
+    with guard:
+        model = load_model(Path(a.model), ARCH_REGISTRY) if a.model else None
+        ds = load_dataset(Path(a.dataset) if a.dataset else None)
+        ctx = RunContext(out_dir=Path(a.out), seed=a.seed, dataset=ds,
+                         code_commit=code_commit())
+        res = scan(model, ctx, a.profile, dry_run=a.dry_run, plan_sink=print,
+                   budget_tier=a.budget_tier)
     if a.dry_run:
-        print(f"\nDRY RUN — nothing executed. scan_id would be {res.scan_id}")
-        return 0
+        return res, None
     out = scan_out_dir(Path(a.out), res.scan_id)
-    command = repro_command(a)
+    command = command or repro_command(a)
     write_report_json(res, out / "report.json", command)
     write_coverage(res, out / "coverage.md")
     # The report sits in <out>/<scan_id>/ and the shared evidence store in <out>/evidence/.
     render([res], out / "report.html", f"CV Assurance — {res.model_id}",
            evidence_root=Path(a.out) / "evidence", command=command)
+    return res, out
+
+
+def cmd_scan(a) -> int:
+    """V7: the plan prints BEFORE any work, and --dry-run stops right after it."""
+    res, out = execute_scan(a)
+    if out is None:
+        print(f"\nDRY RUN — nothing executed. scan_id would be {res.scan_id}")
+        return 0
     print(f"{res.model_id}: {res.verdict}  ->  {out}/report.json")
+    return 0
+
+
+def cmd_selftest(a) -> int:
+    """The product proving its own claims, offline: arm the process-level guard, fire one
+    canary of each kind (V13), then scan a generated corpus at `standard` tier so the
+    backbone load — where an egress would hide — really executes (§5.6).
+
+    Exit 0 only if every canary fired, the scan ran, its report validates against the
+    published schema, and the embedding index was actually built. `unshare -rn cva
+    selftest` (V11) adds the OS-level proof that no route existed at all.
+    """
+    determinism.ensure_hashseed(a.seed)          # may re-exec: the hash seed is read at start-up
+    out_root = Path(a.out) if a.out else Path(tempfile.mkdtemp(prefix="cva-selftest-"))
+    failures: list[str] = []
+
+    with egress_guard():
+        print("Egress guard armed (process level, loopback allowed).")
+        for c in run_canaries():
+            print(f"  canary {'PASS' if c.ok else 'FAIL'}  {c.name}: {c.detail}")
+            if not c.ok:
+                failures.append(f"canary '{c.name}'")
+        if failures:
+            print("\nselftest FAILED: the guard is not doing what the report would claim.")
+            return 1
+
+        from cva.fixtures import build as build_fixtures
+        fx = build_fixtures(out_root / "fixtures", a.seed)
+        args = argparse.Namespace(
+            model=str(fx.model), dataset=str(fx.dataset), out=str(out_root / "reports"),
+            profile="selftest", budget_tier=a.budget_tier, seed=a.seed, dry_run=False)
+        # The reproducing command is `cva selftest`, not a scan of temp-dir fixtures: those
+        # paths differ per run and would make V10's diff fail on a correct run.
+        res, out = execute_scan(args, shlex.join(
+            ["python", "-m", "cva.cli", "selftest", "--seed", str(a.seed)]
+            + (["--budget-tier", a.budget_tier] if a.budget_tier else [])))
+
+    assert out is not None
+    print(f"\n{res.model_id}: {res.verdict}  ->  {out}/report.json")
+    from jsonschema import Draft202012Validator
+    schema = json.loads((Path(__file__).resolve().parents[1] / "schemas"
+                         / "report.schema.json").read_text())
+    errs = list(Draft202012Validator(schema).iter_errors(
+        json.loads((out / "report.json").read_text())))
+    if errs:
+        failures.append(f"report.json fails its own schema ({len(errs)} errors, "
+                        f"first: {errs[0].message[:120]})")
+    if any("No embedding index was available" in lim
+           for f in res.findings for lim in f.limitations):
+        failures.append("the embedding backbone did not load, so the load most likely to "
+                        "egress was NOT exercised")
+    if not any(r.resolution.runnable and r.check_id.startswith("data.") for r in res.plan):
+        failures.append("no data.* check was runnable, so no embedding was ever requested")
+    errored = [f.detector_id for f in res.findings if f.availability.value == "ERROR"]
+    if errored:
+        failures.append(f"checks raised: {', '.join(sorted(set(errored)))}")
+
+    if failures:
+        print("\nselftest FAILED:\n" + "\n".join(f"  - {m}" for m in failures))
+        return 1
+    print("selftest PASSED — canaries fired, scan ran offline at "
+          f"'{res.profile.get('budget_tier')}' tier, report is schema-valid.")
     return 0
 
 
@@ -150,12 +236,19 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--reference", default=None)
     s.add_argument("--no-battery", action="store_true")
 
+    t = sub.add_parser("selftest")
+    t.add_argument("--out", default=None, help="default: a fresh temp dir")
+    t.add_argument("--seed", type=int, default=42)
+    t.add_argument("--budget-tier", default=None)
+
     b = sub.add_parser("bench")
     b.add_argument("--corpus", default="artifacts/corpus")
     b.add_argument("--out", default="artifacts/bench")
     b.add_argument("--profile", default="deep")
 
     a = ap.parse_args(argv)
+    if a.cmd == "selftest":
+        return cmd_selftest(a)
     if a.cmd == "bench":
         from cva.bench.run import run_bench
         run_bench(Path(a.corpus), Path(a.out), a.profile)

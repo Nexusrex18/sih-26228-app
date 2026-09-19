@@ -1,0 +1,5 @@
+# The CPU-only torch build (plan §5.7). On the default index the linux wheel drags in 14
+# nvidia-* packages plus triton: ~3.03 GB against ~176 MB. `+cpu` local versions exist only on
+# download.pytorch.org/whl/cpu, so pinning them here is what keeps CUDA out of the lock.
+torch==2.14.0+cpu
+torchvision==0.29.0+cpu

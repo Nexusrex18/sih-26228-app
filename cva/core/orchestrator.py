@@ -82,6 +82,8 @@ def _target_of(model: Any, ctx: RunContext) -> dict[str, Any]:
         t["model_id"] = getattr(model, "model_id", "-")
         t["model_format"] = getattr(model, "fmt", "-")
         opset = getattr(model, "opset", None)
+        if isinstance(opset, dict):           # ONNX: {domain: version}; the default domain
+            opset = opset.get("ai.onnx", opset.get(""))
         if isinstance(opset, int):
             t["model_opset"] = opset
         try:

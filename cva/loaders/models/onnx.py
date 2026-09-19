@@ -20,6 +20,7 @@ import onnxruntime as ort
 from onnx import numpy_helper
 
 from cva.core.capability import Capability, CapabilitySet
+from cva.core.determinism import ort_session_options
 
 from .base import ProbeLog, arch_hash_of, digest_weights, softmax
 
@@ -39,7 +40,8 @@ class OnnxHandle:
         self.source = path
         self.model_id = model_id or path.stem
         self._proto = onnx.load(str(path))
-        self._sess = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+        self._sess = ort.InferenceSession(str(path), sess_options=ort_session_options(),
+                                          providers=["CPUExecutionProvider"])
         i = self._sess.get_inputs()[0]
         self._iname = i.name
         shape = [d if isinstance(d, int) else 1 for d in i.shape]
@@ -82,7 +84,8 @@ class OnnxHandle:
             for name in wanted:
                 m.graph.output.append(onnx.ValueInfoProto(name=name))
             self._act_sess = ort.InferenceSession(
-                m.SerializeToString(), providers=["CPUExecutionProvider"]
+                m.SerializeToString(), sess_options=ort_session_options(),
+                providers=["CPUExecutionProvider"]
             )
             self._act_names = [o.name for o in self._act_sess.get_outputs()]
             return bool(wanted)

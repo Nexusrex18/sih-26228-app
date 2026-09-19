@@ -44,6 +44,26 @@ class InMemoryDataset:
     #: the report has to name what was missing.
     notes: list[tuple[Capability, str]] = field(default_factory=list)
 
+    def __len__(self) -> int:
+        # Module A's detectors take `len(dataset)`; the frozen `Dataset` protocol declares no
+        # `__len__`, so the protocol stays put and the concrete loader output supplies it.
+        return len(self.samples)
+
+    def sample(self, sample_id: str) -> Sample:
+        """Lookup by id, which Module A's cluster detectors need. Indexed on first use and
+        rebuilt if the sample list changed length, so a loader that appends stays correct."""
+        idx: dict[str, Sample] | None = self.__dict__.get("_by_id")
+        if idx is None or len(idx) != len(self.samples):
+            idx = {s.sample_id: s for s in self.samples}
+            self.__dict__["_by_id"] = idx
+        return idx[sample_id]
+
+    def category_name(self, category_id: int) -> str:
+        for c in self.categories:
+            if c.category_id == category_id:
+                return c.name
+        return str(category_id)
+
     def annotations(self) -> list[Annotation]:
         """DERIVED on every call, never stored.
 
