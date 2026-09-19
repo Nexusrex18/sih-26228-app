@@ -11,8 +11,13 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cva.bench.stats import (BOOTSTRAP_MIN_N, bootstrap_rate, mcnemar, required_n,
-                             separation, wilson)
+from cva.bench.stats import (
+    bootstrap_rate,
+    mcnemar,
+    required_n,
+    separation,
+    wilson,
+)
 
 
 @given(n=st.integers(1, 500), f=st.floats(0, 1))

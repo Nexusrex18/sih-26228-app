@@ -65,7 +65,7 @@ class CapabilitySet:
     notes: tuple[tuple[Capability, str], ...] = ()   # why a capability is absent
 
     @staticmethod
-    def union(*parts: "CapabilitySet") -> "CapabilitySet":
+    def union(*parts: CapabilitySet) -> CapabilitySet:
         caps: set[Capability] = set()
         notes: list[tuple[Capability, str]] = []
         for p in parts:

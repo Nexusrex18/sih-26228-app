@@ -88,8 +88,8 @@ def generate(out: Path, n_clean: int = 4000, n_train: int = 6000, seed: int = 20
         pt = out / "models" / f"{mid}.pt"
         T.save_pt(model, pt, arch, width)
 
-        from cva.loaders.models import load_model
         from cva.detectors.model.fingerprint import fingerprint
+        from cva.loaders.models import load_model
         h = load_model(pt, ARCH_REGISTRY, mid)
         man = ReferenceManifest(
             model_id=mid, arch=arch, weights_sha256=h.weight_digest(),

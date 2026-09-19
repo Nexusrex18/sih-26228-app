@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
@@ -78,7 +78,7 @@ class Finding:
     availability: Availability = Availability.OK
     produced_by: str = ""
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         for k in ("severity", "disposition", "nature", "availability"):
             d[k] = getattr(self, k).value

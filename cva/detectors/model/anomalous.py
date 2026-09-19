@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from cva.core.capability import Availability, Capability
-from cva.core.types import (Disposition, Evidence, Finding, Nature, Severity,
-                              unavailable_finding)
+from cva.core.capability import Capability
+from cva.core.types import Disposition, Evidence, Finding, Nature, Severity
 from cva.detectors.base import CheckContext, register
 
 

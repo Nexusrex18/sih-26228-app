@@ -21,8 +21,7 @@ from __future__ import annotations
 import numpy as np
 
 from cva.core.capability import Capability
-from cva.core.types import (Disposition, Evidence, Finding, Nature, Severity,
-                              unavailable_finding)
+from cva.core.types import Disposition, Evidence, Finding, Nature, Severity, unavailable_finding
 from cva.detectors.base import CheckContext, register
 
 
@@ -141,8 +140,9 @@ def _plot(ctx, mid, clean, pert) -> str | None:
     try:
         import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         from pathlib import Path
+
+        import matplotlib.pyplot as plt
         d = Path(ctx.out_dir) / "evidence"
         d.mkdir(parents=True, exist_ok=True)
         fig, ax = plt.subplots(figsize=(5.2, 2.8), dpi=130)

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -29,7 +28,7 @@ class Manifest:
 class ModelBattery:
     """Reference MODELS — not a Dataset. Two different references, two types."""
 
-    models: list["ModelHandle"] = field(default_factory=list)
+    models: list[ModelHandle] = field(default_factory=list)
     manifest: Manifest | None = None
 
 

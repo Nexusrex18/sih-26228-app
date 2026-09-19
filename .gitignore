@@ -2,5 +2,16 @@
 __pycache__/
 *.pyc
 artifacts/
+reports/
+.cache/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.egg-info/
+wheelhouse/
+cva-bundle.tar
+# Mode A fetches these; the bundle carries them. The SHA-256 pins are committed, the
+# bytes are not — an 88 MB checkpoint does not belong in git history.
+vendor/weights/*.pth
+vendor/dinov2/*
+!vendor/dinov2/.gitkeep

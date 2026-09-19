@@ -18,7 +18,7 @@ class CheckContext:
     probes_y: Any = None
     suspect_x: Any = None
     battery: ModelBattery | None = None     # REFERENCE_MODEL_BATTERY / REFERENCE_MANIFEST
-    profile: dict = field(default_factory=dict)
+    profile: dict[str, Any] = field(default_factory=dict)
     scan_id: str = ""
     out_dir: Any = None
     rng_seed: int = 0

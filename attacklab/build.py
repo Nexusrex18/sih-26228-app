@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -69,6 +68,7 @@ def build(out: Path, n_train: int = 6000, n_test: int = 1000, epochs: int = 30) 
 
     # --- post-training variants of clean_a ---------------------------------
     import torch
+
     from .arch import ARCH_REGISTRY
     blob = torch.load(out / "models" / "clean_a.pt", weights_only=True)
     base_model = ARCH_REGISTRY["SmallCNN"](**blob["arch_kwargs"])

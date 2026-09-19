@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -22,7 +23,7 @@ class RunContext:
     probes_y: np.ndarray | None = None
     suspect_x: np.ndarray | None = None
     battery: ModelBattery | None = None
-    profile: dict = field(default_factory=dict)
+    profile: dict[str, Any] = field(default_factory=dict)
     out_dir: Path | None = None
     seed: int = 0
 

@@ -12,8 +12,7 @@ from __future__ import annotations
 import numpy as np
 
 from cva.core.capability import Availability, Capability
-from cva.core.types import (Disposition, Evidence, Finding, Nature, Severity,
-                              unavailable_finding)
+from cva.core.types import Disposition, Evidence, Finding, Nature, Severity, unavailable_finding
 from cva.detectors.base import CheckContext, register
 
 
@@ -74,7 +73,7 @@ class FingerprintCheck:
                 "model_substitution", Availability.DEGRADED,
             )
             f.scan_id = ctx.scan_id
-            f.evidence.append(Evidence("json", "computed fingerprint (first 8 of %d)" % len(fp),
+            f.evidence.append(Evidence("json", f"computed fingerprint (first 8 of {len(fp)})",
                                        data=[round(v, 6) for v in fp[:8]]))
             return [f]
 

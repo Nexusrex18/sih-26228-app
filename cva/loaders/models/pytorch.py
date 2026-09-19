@@ -14,9 +14,9 @@ import torch
 import torch.nn as nn
 
 from cva.core.capability import Capability, CapabilitySet
-from .base import ProbeLog, digest_weights, softmax
-
 from cva.loaders.safety import check_torch_version as _check_torch_version
+
+from .base import ProbeLog, digest_weights, softmax
 
 
 class TorchModelHandle:
