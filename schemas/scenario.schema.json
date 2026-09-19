@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sih26228.local/schemas/scenario/1.0.0/scenario.schema.json",
+  "title": "CVA attack-lab scenario manifest",
+  "description": "The one schema that CROSSES THE SEAT BOUNDARY TO THE ADVERSARY. ML-1, ML-2 and Crypto write scenarios against it, and the benchmark reads ground truth from it — so the `expect` block is not documentation, it is the answer key the bench scores against. A scenario without `seed` and `expect` cannot participate in either the reproducibility gate (same manifest + seed -> byte-identical corpus, twice, on two machines) or the detection matrix.",
+
+  "type": "object",
+  "required": ["schema_version", "scenario_id", "module", "attack_class", "seed", "expect"],
+  "unevaluatedProperties": false,
+
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "scenario_id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+    "description": { "type": "string" },
+
+    "module": {
+      "enum": ["A", "B", "C", "D"],
+      "description": "Which module's detectors this scenario is an answer key for."
+    },
+    "attack_class": {
+      "type": "string",
+      "description": "MUST be declared in core/taxonomy.py. The bench groups on it, so an undeclared or drifted string scores against nothing and the coverage row silently vanishes."
+    },
+
+    "seed": {
+      "type": "integer",
+      "description": "The corpus is a function of this. backend_revised §2.9's gate is 'same manifest + seed -> byte-identical corpus, twice, on two machines' — which requires all three RNGs seeded, PYTHONHASHSEED set IN THE ENVIRONMENT (it is read at interpreter start, so setting it in-process is too late), and ORT threads pinned."
+    },
+
+    "base": {
+      "type": "object",
+      "description": "What the attack is applied TO. Held separate from the attack so a clean/attacked matched pair differs in exactly one thing.",
+      "unevaluatedProperties": false,
+      "properties": {
+        "dataset": { "type": ["string", "null"] },
+        "model": { "type": ["string", "null"] },
+        "architecture": { "type": ["string", "null"] },
+        "n_classes": { "type": ["integer", "null"] },
+        "n_train": { "type": ["integer", "null"] },
+        "n_test": { "type": ["integer", "null"] }
+      }
+    },
+
+    "attack": {
+      "type": "object",
+      "description": "Parameters of the manipulation itself.",
+      "properties": {
+        "kind": { "type": "string" },
+        "poison_rate": {
+          "type": ["number", "null"], "minimum": 0, "maximum": 1,
+          "description": "The sweep axis that turns 'may miss adaptive attacks' into 'detects patch triggers at poison rate >= X%'."
+        },
+        "trigger": { "type": ["object", "string", "null"] },
+        "target_class": { "type": ["integer", "string", "null"] }
+      }
+    },
+
+    "fitness_gate": {
+      "type": "object",
+      "description": "The lab REFUSES to emit an unfit corpus. A model that never learned and a 'backdoor' that never took are both worthless as test subjects — but so is a model at accuracy 1.000, which is why there is an UPPER bound too.",
+      "unevaluatedProperties": false,
+      "properties": {
+        "min_clean_acc": { "type": "number" },
+        "max_clean_acc": {
+          "type": "number",
+          "description": "A DIFFICULTY gate, not just a fitness gate. An easy corpus does not under-test a margin-based detector, it INVERTS it: at accuracy 1.000 decision boundaries are degenerate, a minimal universal trigger is small for every class, and Neural Cleanse's premise — that one class is unusually reachable — collapses."
+        },
+        "min_asr": { "type": "number", "description": "attack success rate; a backdoor that did not take is not a backdoor" },
+        "max_clean_asr": { "type": ["number", "null"] }
+      }
+    },
+
+    "expect": {
+      "type": "object",
+      "required": ["ground_truth"],
+      "unevaluatedProperties": false,
+      "description": "The answer key. Detection rate AND FALSE-ALARM RATE are scored separately: a detector tuned only against attacks has no measured false-alarm rate, and the false-alarm column is what decides whether an analyst keeps reading.",
+      "properties": {
+        "ground_truth": {
+          "enum": ["clean", "attacked"],
+          "description": "Clean scenarios are REQUIRED, not optional. Without them there is no false-alarm denominator and every reported detection rate is unfalsifiable."
+        },
+        "detected_by": {
+          "type": "array", "items": { "type": "string" },
+          "description": "Detectors expected to fire. An EXPECTED MISS belongs in `expected_misses` with a reason, not omitted quietly."
+        },
+        "expected_misses": {
+          "type": "array",
+          "description": "A declared blind spot, with the reason it is one BY CONSTRUCTION rather than by defect — e.g. Neural Cleanse optimises a small localised mask, so a SIG-family global sinusoidal overlay is outside its premise. That is a measured limitation for the coverage statement, and it is exactly the kind of declared blind spot the PS asks for three times.",
+          "items": {
+            "type": "object",
+            "required": ["detector_id", "reason"],
+            "unevaluatedProperties": false,
+            "properties": {
+              "detector_id": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "target_ref": { "type": ["string", "null"] },
+        "contributor": { "type": ["string", "null"], "description": "For the mixed-contributor rollup gate: the guilty contributor must rank FIRST." }
+      }
+    },
+
+    "holdout_family": {
+      "type": ["string", "null"],
+      "description": "Which family this belongs to for HELD-OUT-FAMILY calibration. A threshold fitted on the data it is reported against is not a result; the discipline is calibrate on one family, evaluate on another, and say which was which."
+    },
+
+    "outputs": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "corpus_dir": { "type": "string" },
+        "manifest": { "type": "string" },
+        "artefact_sha256": {
+          "type": ["string", "null"], "pattern": "^([0-9a-f]{64})?$",
+          "description": "Recorded after generation so the reproducibility claim is checkable rather than asserted."
+        }
+      }
+    }
+  }
+}
