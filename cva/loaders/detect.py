@@ -23,3 +23,16 @@ def detect_and_load(path, arch_registry=None, model_id=None, enforce_safety: boo
             handle.safety = report
             return handle
     raise ValueError(f"no loader supports {path.name}")
+
+
+DATASET_LOADERS = ("COCOLoader", "YOLOLoader")
+
+
+def load_dataset(path):
+    """Dataset-side auto-detection. Tier 1+2 loaders join this list at B2b."""
+    from .datasets import COCOLoader, YOLOLoader
+    path = Path(path)
+    for loader in (COCOLoader(), YOLOLoader()):
+        if loader.supports(path):
+            return loader.load(path)
+    raise ValueError(f"no dataset loader supports {path}")

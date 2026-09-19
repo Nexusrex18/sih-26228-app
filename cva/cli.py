@@ -1,7 +1,9 @@
 """CLI. `scan` for one model, `bench` for the whole corpus."""
 from __future__ import annotations
 
+import argparse
 import json
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +12,7 @@ import cva.detectors.model.registry  # noqa: F401 — registration happens at th
 from attacklab.arch import ARCH_REGISTRY
 from cva.core.model import Manifest, ModelBattery
 from cva.core.orchestrator import RunContext, scan
+from cva.core.scanid import scan_out_dir
 from cva.loaders.models import load_model
 from cva.report.coverage import write as write_coverage
 from cva.report.render_html import render
@@ -72,23 +75,76 @@ def run_scan(model_path: Path, corpus: Path, out_dir: Path, profile: str = "deep
     return res
 
 
-if __name__ == "__main__":
-    import argparse
+def code_commit() -> str:
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True, timeout=5,
+                              cwd=Path(__file__).resolve().parents[1]).stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def load_dataset(path: Path | None):
+    if path is None:
+        return None
+    from cva.loaders.detect import load_dataset as _load
+    return _load(Path(path))
+
+
+def cmd_scan(a) -> int:
+    """V7: the plan prints BEFORE any work, and --dry-run stops right after it."""
+    model = load_model(Path(a.model), ARCH_REGISTRY) if a.model else None
+    ds = load_dataset(Path(a.dataset) if a.dataset else None)
+    ctx = RunContext(out_dir=Path(a.out), seed=a.seed, dataset=ds,
+                     code_commit=code_commit())
+    res = scan(model, ctx, a.profile, dry_run=a.dry_run, plan_sink=print,
+               budget_tier=a.budget_tier)
+    if a.dry_run:
+        print(f"\nDRY RUN — nothing executed. scan_id would be {res.scan_id}")
+        return 0
+    out = scan_out_dir(Path(a.out), res.scan_id)
+    write_report_json(res, out / "report.json")
+    write_coverage(res, out / "coverage.md")
+    print(f"{res.model_id}: {res.verdict}  ->  {out}/report.json")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="cva")
     sub = ap.add_subparsers(dest="cmd", required=True)
+
     s = sub.add_parser("scan")
-    s.add_argument("model"); s.add_argument("--corpus", default="artifacts/corpus")
-    s.add_argument("--out", default="artifacts/reports"); s.add_argument("--profile", default="deep")
+    s.add_argument("model", nargs="?", default=None)
+    s.add_argument("--model", dest="model", default=None)
+    s.add_argument("--dataset", default=None)
+    s.add_argument("--corpus", default=None)
+    s.add_argument("--out", default="artifacts/reports")
+    s.add_argument("--profile", default="baseline")
+    s.add_argument("--budget-tier", default=None)
+    s.add_argument("--seed", type=int, default=7)
+    s.add_argument("--dry-run", action="store_true")
     s.add_argument("--reference", default=None)
     s.add_argument("--no-battery", action="store_true")
+
     b = sub.add_parser("bench")
     b.add_argument("--corpus", default="artifacts/corpus")
-    b.add_argument("--out", default="artifacts/bench"); b.add_argument("--profile", default="deep")
-    a = ap.parse_args()
-    if a.cmd == "scan":
+    b.add_argument("--out", default="artifacts/bench")
+    b.add_argument("--profile", default="deep")
+
+    a = ap.parse_args(argv)
+    if a.cmd == "bench":
+        from cva.bench.run import run_bench
+        run_bench(Path(a.corpus), Path(a.out), a.profile)
+        return 0
+
+    # The Module B path: a corpus supplies probes and a reference battery.
+    if a.corpus and not a.dry_run:
         r = run_scan(Path(a.model), Path(a.corpus), Path(a.out), a.profile,
                      Path(a.reference) if a.reference else None, not a.no_battery)
         print(f"{r.model_id}: {r.verdict}  ->  {a.out}/{r.model_id}.report.html")
-    else:
-        from cva.bench.run import run_bench
-        run_bench(Path(a.corpus), Path(a.out), a.profile)
+        return 0
+    return cmd_scan(a)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
