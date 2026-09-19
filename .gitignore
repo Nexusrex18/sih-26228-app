@@ -4,6 +4,7 @@ __pycache__/
 artifacts/
 reports/
 .cache/
+.scratch/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
