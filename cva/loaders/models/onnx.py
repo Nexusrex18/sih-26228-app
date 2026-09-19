@@ -21,7 +21,7 @@ from onnx import numpy_helper
 
 from cva.core.capability import Capability, CapabilitySet
 
-from .base import ProbeLog, digest_weights, softmax
+from .base import ProbeLog, arch_hash_of, digest_weights, softmax
 
 GRADIENT_NOTE = (
     "ONNX inference sessions expose no backward pass; the Gradient operator is not "
@@ -46,6 +46,12 @@ class OnnxHandle:
         self._input_shape = tuple(shape[1:]) if len(shape) > 1 else tuple(shape)
         o = self._sess.get_outputs()[0]
         self._num_classes = o.shape[-1] if isinstance(o.shape[-1], int) else 0
+        # §7.3: READ the opset and RECORD it; never gate on it. ONNX Runtime accepts opset
+        # 7 and up, so a minimum-version check would reject models it can actually run —
+        # and the seal needs the number recorded either way, because "which opset produced
+        # this graph" is part of what makes a re-export explainable as a benign conversion
+        # rather than a substitution.
+        self.opset = {o.domain or "ai.onnx": o.version for o in self._proto.opset_import}
         self._act_sess: ort.InferenceSession | None = None
         self._act_names: list[str] = []
         self._probe = self._run_probe()
@@ -96,6 +102,19 @@ class OnnxHandle:
 
     def get_graph(self) -> Any:
         return self._proto.graph
+
+    def arch_hash(self) -> str:
+        """Topology only: each node's op_type and domain, plus the arity of its inputs and
+        outputs, in graph order. Tensor NAMES are excluded deliberately — the exporter
+        rewrites them freely — and so are the initializers, which are the weights."""
+        toks: list[str] = []
+        for n in self._proto.graph.node:
+            toks.append(f"{n.domain or 'ai.onnx'}:{n.op_type}:{len(n.input)}:{len(n.output)}")
+        for vi in list(self._proto.graph.input) + list(self._proto.graph.output):
+            dims = [d.dim_value if d.HasField("dim_value") else "?"
+                    for d in vi.type.tensor_type.shape.dim]
+            toks.append(f"io:{vi.type.tensor_type.elem_type}:{dims}")
+        return arch_hash_of(toks)
 
     def op_inventory(self) -> dict[str, int]:
         inv: dict[str, int] = {}

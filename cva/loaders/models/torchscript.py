@@ -13,7 +13,7 @@ import torch
 
 from cva.core.capability import Capability, CapabilitySet
 
-from .base import ProbeLog, digest_weights, softmax
+from .base import ProbeLog, arch_hash_of, digest_weights, softmax
 
 
 class TorchScriptHandle:
@@ -73,6 +73,28 @@ class TorchScriptHandle:
         except Exception:
             return None
 
+    def arch_hash(self) -> str:
+        """The op sequence from the TorchScript graph, with constants stripped.
+
+        Stripping is load-bearing here and nowhere else: `torch.jit.freeze` inlines the
+        PARAMETERS into the graph as constants, so hashing the graph text verbatim would
+        fold the weights into the structure digest — and then a frozen model and its
+        retrained twin would differ in `arch_hash`, reporting an architecture change where
+        only training differs. That is precisely the false substitution signal §9.2's split
+        between the two digests exists to prevent.
+        """
+        toks: list[str] = []
+        try:
+            for node in self._m.graph.nodes():          # type: ignore[attr-defined]
+                kind = node.kind()
+                if kind in ("prim::Constant", "prim::GetAttr"):
+                    continue                            # the inlined weights live here
+                toks.append(f"{kind}:{node.inputsSize()}:{node.outputsSize()}")
+        except Exception:
+            return "unavailable"
+        toks.append(f"io:{self._input_shape}:{self._num_classes}")
+        return arch_hash_of(toks)
+
     def weight_digest(self) -> str:
         w = self.get_weights()
         return digest_weights(w) if w else "unavailable:frozen"
@@ -103,16 +125,43 @@ class TorchScriptHandle:
         if self.get_graph():
             p.ok(Capability.MODEL_ARCHITECTURE)
 
+        # The probe measures gradients W.R.T. THE PARAMETERS, not w.r.t. the input.
+        #
+        # This distinction is the whole capability. torch.jit.freeze inlines parameters as
+        # graph constants, so a frozen archive has ZERO entries in .parameters() and nothing
+        # to differentiate against — but the INPUT is still an ordinary leaf tensor, so
+        # `x.requires_grad_(True); m(x).sum().backward()` succeeds and fills x.grad on a
+        # frozen archive exactly as it does on a live one. Probing the input therefore
+        # reports MODEL_GRADIENTS for every TorchScript file ever saved, which is the one
+        # answer that cannot be wrong and is therefore worthless.
+        #
+        # §7.3 is explicit — "gradients if not frozen" — and Module B's Neural Cleanse
+        # already routes "every ONNX model, every frozen TorchScript archive" to its
+        # gradient-free NES tier. Reporting gradients here would silently take that detector
+        # down its full-confidence path on a model whose parameters it cannot reach.
+        #
+        # (Noted for Module B, not decided here: NC's tier-1 optimises a mask and pattern,
+        # which ARE inputs, so it could in principle run on a frozen archive. That is a
+        # change to NC's declared tiers and belongs with the seat that owns them.)
         try:
-            t = torch.zeros((1, *self._input_shape), requires_grad=True)
-            self._m(t).sum().backward()
-            if t.grad is not None and torch.any(t.grad != 0):
-                p.ok(Capability.MODEL_GRADIENTS)
-            else:
+            params = [q for q in self._m.parameters() if q.requires_grad]
+            if not params:
                 p.absent(Capability.MODEL_GRADIENTS,
-                         "backward produced a null input gradient — archive is frozen")
+                         "no differentiable parameters — torch.jit.freeze inlined them as "
+                         "graph constants; input gradients still flow but there is no "
+                         "parameter to take a gradient with respect to")
+            else:
+                for q in params:
+                    q.grad = None
+                self._m(torch.zeros((1, *self._input_shape))).sum().backward()
+                if any(q.grad is not None for q in params):
+                    p.ok(Capability.MODEL_GRADIENTS)
+                else:
+                    p.absent(Capability.MODEL_GRADIENTS,
+                             "backward ran but populated no parameter gradient")
         except Exception as exc:
-            p.absent(Capability.MODEL_GRADIENTS, f"backward failed ({type(exc).__name__}) — frozen archive")
+            p.absent(Capability.MODEL_GRADIENTS,
+                     f"backward failed ({type(exc).__name__}: {exc})")
         return p.result()
 
     def capabilities(self): return self._probe
@@ -134,20 +183,54 @@ class TorchScriptLoader:
         except Exception:
             return False
 
+    #: Read back by `torch.jit.load(_extra_files=...)`. An exporter that writes it gives
+    #: the loader the input shape, which is the one fact a TorchScript graph does not
+    #: reliably carry. `num_classes` is never trusted from here — it is probed.
+    META_FILE = "cva_meta.json"
+
     def load(self, path: Path, model_id: str | None = None,
-             input_shape=(3, 32, 32), num_classes=10) -> TorchScriptHandle:
-        m = torch.jit.load(str(path), map_location="cpu")
-        extra = {}
+             input_shape=(3, 32, 32), num_classes=None) -> TorchScriptHandle:
+        # The previous version read `m.extra_files`, which is not a TorchScript attribute —
+        # so the metadata path never ran and every model silently took the (3, 32, 32)/10
+        # defaults. A default num_classes is the worse of the two: it is a fabricated fact
+        # about the model under audit, and it reaches the report as though it were read.
+        extra: dict = {}
+        holder = {self.META_FILE: ""}
         try:
-            import json
-            raw = m.extra_files if hasattr(m, "extra_files") else None
+            m = torch.jit.load(str(path), map_location="cpu", _extra_files=holder)
+            raw = holder.get(self.META_FILE) or ""
             if raw:
-                extra = json.loads(raw)
+                import json
+                extra = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
         except Exception:
-            pass
+            m = torch.jit.load(str(path), map_location="cpu")
+
+        shape = tuple(extra.get("input_shape", input_shape))
+        declared = extra.get("num_classes", num_classes)
+        probed = _probe_num_classes(m, shape)
+        if probed is None and declared is None:
+            raise ValueError(
+                f"{path.name}: cannot determine num_classes — a forward pass at input "
+                f"shape {shape} did not yield a 2-D output. Export with "
+                f"_extra_files={{'{self.META_FILE}': ...}} carrying input_shape, or supply "
+                "input_shape to load().")
+        if probed is not None and declared is not None and int(declared) != probed:
+            raise ValueError(
+                f"{path.name}: declared num_classes={declared} but the model actually "
+                f"outputs {probed}. The declaration is metadata the supplier controls; the "
+                "forward pass is the model. They must agree or neither can be reported.")
         return TorchScriptHandle(
-            m, model_id or path.stem,
-            tuple(extra.get("input_shape", input_shape)),
-            int(extra.get("num_classes", num_classes)),
+            m, model_id or path.stem, shape,
+            probed if probed is not None else int(declared),
             source=path,
         )
+
+
+def _probe_num_classes(module, input_shape: tuple[int, ...]) -> int | None:
+    """Ask the model, rather than the file that ships alongside it."""
+    try:
+        with torch.no_grad():
+            out = module(torch.zeros((1, *input_shape)))
+        return int(out.shape[1]) if out.ndim == 2 else None
+    except Exception:
+        return None

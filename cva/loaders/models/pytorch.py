@@ -16,7 +16,7 @@ import torch.nn as nn
 from cva.core.capability import Capability, CapabilitySet
 from cva.loaders.safety import check_torch_version as _check_torch_version
 
-from .base import ProbeLog, digest_weights, softmax
+from .base import ProbeLog, arch_hash_of, digest_weights, softmax
 
 
 class TorchModelHandle:
@@ -47,6 +47,16 @@ class TorchModelHandle:
 
     def torch_module(self) -> nn.Module:
         return self._m
+
+    def arch_hash(self) -> str:
+        """The module tree plus every parameter's SHAPE — never its values. Two models
+        that differ only by training are the same architecture and must hash the same;
+        widening a layer must not."""
+        toks = [f"{name}:{type(mod).__name__}"
+                for name, mod in self._m.named_modules() if name]
+        toks += [f"p:{name}:{tuple(q.shape)}"
+                 for name, q in sorted(self._m.named_parameters())]
+        return arch_hash_of(toks)
 
     def activations(self, x: np.ndarray) -> dict[str, np.ndarray]:
         out: dict[str, np.ndarray] = {}
