@@ -33,6 +33,8 @@ from .base import (
     group_source,
     make_finding,
     register_detector,
+    sample_by_id,
+    category_name,
 )
 from .near_duplicate import (  # the SAME clustering parameters as near_dup
     DEFAULTS,
@@ -54,7 +56,7 @@ class DuplicateLabelConflict:
     attack_classes = {DUPLICATE_LABEL_CONFLICT}
 
     def _name(self, ds: Dataset, ls: frozenset[int]) -> str:
-        return "+".join(sorted(ds.category_name(c) for c in ls))
+        return "+".join(sorted(category_name(ds, c) for c in ls))
 
     def detect(self, dataset: Dataset, embeddings, model, ctx: CheckContext | None = None) -> list:
         self.p = Params.from_ctx(self.id, DEFAULTS, ctx)
@@ -65,7 +67,7 @@ class DuplicateLabelConflict:
     def _detect(self, dataset: Dataset, embeddings, model) -> list:
         findings = []
         for cl in find_clusters(dataset, embeddings, self.p):
-            members = [dataset.sample(m) for m in cl.members]
+            members = [sample_by_id(dataset, m) for m in cl.members]
             sets = {m.sample_id: _labelset(m) for m in members if _labelset(m) is not None}
             counts = Counter(sets.values())
             if len(counts) < 2:

@@ -16,7 +16,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageFilter
 
-from cva.detectors.data._stub_types import Dataset, Label, Sample, sha256_file
+from cva.detectors.data._stub_types import sha256_file
+
+from ._types import ContributorSource, Dataset, Label, Sample
 from cva.detectors.data.base import dominant_category
 
 _KINDS = ("recompress", "crop", "colour_shift", "brightness", "rescale")
@@ -49,15 +51,16 @@ def inject_near_duplicates(dataset: Dataset, out_dir: Path | str, seed: int, n_s
     rng = np.random.default_rng(seed)
     out = Path(out_dir) / "near_dup"
     out.mkdir(parents=True, exist_ok=True)
-    srcs = sorted(s.sample_id for s in dataset.samples)
+    by_id = {s.sample_id: s for s in dataset.samples}
+    srcs = sorted(by_id)
     picked = sorted(rng.choice(srcs, size=n_sources, replace=False).tolist())
     cats = [c.category_id for c in dataset.categories]
     src_c = next((s.contributor_source for s in dataset.samples if s.contributor == target_contributor),
-                 "sidecar" if target_contributor else None)
+                 ContributorSource.SIDECAR if target_contributor else None)
     added: list[Sample] = []
     injected: dict[str, dict] = {}
     for sid in picked:
-        src = dataset.sample(sid)
+        src = by_id[sid]
         with Image.open(src.path) as im:
             base = im.convert("RGB")
         for k in range(variants_per_source):
@@ -66,13 +69,13 @@ def inject_near_duplicates(dataset: Dataset, out_dir: Path | str, seed: int, n_s
             new_id = f"dup_{sid}_{k:02d}"
             path = out / f"{new_id}.jpg"
             v.save(path, "JPEG", quality=q)
-            labels = src.labels
+            labels = list(src.labels)
             conflicted = False
             if conflict_rate > 0 and rng.random() < conflict_rate:
                 old = dominant_category(src)
                 new_cat = int(rng.choice([c for c in cats if c != old]))
-                labels = tuple(dataclasses.replace(lb, category_id=new_cat) if lb.category_id == old
-                               else lb for lb in src.labels)
+                labels = [dataclasses.replace(lb, category_id=new_cat) if lb.category_id == old
+                          else lb for lb in src.labels]
                 conflicted = True
             added.append(Sample(new_id, sha256_file(path), path, v.size[0], v.size[1], labels,
                                 target_contributor, f"{target_contributor}-injected" if target_contributor else None,
@@ -107,7 +110,7 @@ def inject_ood(dataset: Dataset, out_dir: Path | str, seed: int, n: int = 30,
     out.mkdir(parents=True, exist_ok=True)
     cats = [c.category_id for c in dataset.categories]
     src_c = next((s.contributor_source for s in dataset.samples if s.contributor == target_contributor),
-                 "sidecar" if target_contributor else None)
+                 ContributorSource.SIDECAR if target_contributor else None)
     added: list[Sample] = []
     injected: dict[str, dict] = {}
     for i in range(n):
@@ -118,7 +121,7 @@ def inject_ood(dataset: Dataset, out_dir: Path | str, seed: int, n: int = 30,
         cat = int(rng.choice(cats))
         w, h = size
         lb = Label(cat, bbox=(w * 0.25, h * 0.25, w * 0.5, h * 0.5))
-        added.append(Sample(new_id, sha256_file(path), path, w, h, (lb,), target_contributor,
+        added.append(Sample(new_id, sha256_file(path), path, w, h, [lb], target_contributor,
                             f"{target_contributor}-injected" if target_contributor else None,
                             {"injected": "ood"}, src_c))
         injected[new_id] = {"kind": "ood", "declared_label": cat, "sha256": added[-1].content_sha256}

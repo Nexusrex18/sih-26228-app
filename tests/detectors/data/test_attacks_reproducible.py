@@ -16,6 +16,7 @@ from attacklab.negative_space_attack import drop_annotations
 from attacklab.script_batch_attack import script_generate_batch
 from attacklab.synth_dataset import make_clean_dataset
 from cva.detectors.data._stub_types import sha256_file
+from cva.detectors.data.base import sample_by_id
 
 
 def _dump(m) -> str:
@@ -77,11 +78,11 @@ def test_flip_manifest_matches_dataset(tmp_path):
     flipped, m = flip_labels(base, 3, 0.25, "class_pair", target_contributor="A", class_pair=(0, 1))
     assert m["flips"], "expected some flips"
     for sid, f in m["flips"].items():
-        assert base.sample(sid).contributor == "A"
+        assert sample_by_id(base, sid).contributor == "A"
         assert f["original_label"] == 0 and f["flipped_label"] == 1
-        assert flipped.sample(sid).labels[0].category_id == 1
+        assert sample_by_id(flipped, sid).labels[0].category_id == 1
     untouched = set(s.sample_id for s in base.samples) - set(m["flips"])
-    assert all(flipped.sample(s).labels == base.sample(s).labels for s in untouched)
+    assert all(sample_by_id(flipped, s).labels == sample_by_id(base, s).labels for s in untouched)
 
 
 def test_flip_rejects_bad_args(tmp_path):

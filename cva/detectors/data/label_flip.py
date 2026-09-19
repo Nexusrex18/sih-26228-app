@@ -43,6 +43,8 @@ from .base import (
     not_performed,
     register_detector,
     seed_of,
+    sample_by_id,
+    category_name,
 )
 from .taxonomy import LABEL_FLIPPING
 
@@ -125,16 +127,16 @@ class LabelConsistency:
             c_hit = cl_flag.get(sid, False)
             if not (k_hit or c_hit):
                 continue
-            s = dataset.sample(sid)
-            name = dataset.category_name(lab[sid])
+            s = sample_by_id(dataset, sid)
+            name = category_name(dataset, lab[sid])
             parts, sig = [], {}
             if sid in knn_agree:
                 maj = max(set(lab[j] for j in knn_nb[sid]), key=[lab[j] for j in knn_nb[sid]].count)
-                sig["knn"] = {"agreement": knn_agree[sid], "neighbour_majority": dataset.category_name(maj),
+                sig["knn"] = {"agreement": knn_agree[sid], "neighbour_majority": category_name(dataset, maj),
                               "flagged": k_hit, "neighbours": knn_nb[sid]}
                 if k_hit:
                     parts.append(f"only {knn_agree[sid]:.0%} of its {len(knn_nb[sid])} nearest neighbours "
-                                 f"share that label (they are mostly '{dataset.category_name(maj)}'; "
+                                 f"share that label (they are mostly '{category_name(dataset, maj)}'; "
                                  f"threshold {p['knn_agree_max']:.0%})")
             if sid in cl_flag:
                 sig["confident_learning"] = {"p_given_label": 1 - cl_score[sid], "flagged": c_hit}

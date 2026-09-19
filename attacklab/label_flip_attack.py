@@ -17,7 +17,9 @@ from typing import Literal
 
 import numpy as np
 
-from cva.detectors.data._stub_types import Dataset, Sample
+from cva.detectors.data.base import dominant_category
+
+from ._types import Dataset, Sample
 from cva.detectors.data.base import dominant_category
 
 
@@ -62,8 +64,8 @@ def flip_labels(dataset: Dataset, seed: int, flip_rate: float,
             new_cat = int(target_class)                       # type: ignore[arg-type]
         else:
             new_cat = int(class_pair[1])                      # type: ignore[index]
-        labels = tuple(dataclasses.replace(lb, category_id=new_cat) if lb.category_id == old else lb
-                       for lb in s.labels)
+        labels = [dataclasses.replace(lb, category_id=new_cat) if lb.category_id == old else lb
+                  for lb in s.labels]
         flips[s.sample_id] = {"original_label": int(old), "flipped_label": new_cat}
         new.append(dataclasses.replace(s, labels=labels))
     manifest = {"attack": "label_flip", "seed": seed, "mode": mode, "flip_rate": flip_rate,

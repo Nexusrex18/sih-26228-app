@@ -139,7 +139,7 @@ def test_ood_clean_near_zero(clean, clean_emb, reference):
     rds, remb = reference
     fs = detect(OutOfDistribution, clean, clean_emb, None,
                 profile={"reference_embeddings": reference_matrix(rds, remb)})
-    assert len(fs) <= 0.02 * len(clean), [f.reason for f in fs]        # stated tolerance: <= 2%
+    assert len(fs) <= 0.02 * len(clean.samples), [f.reason for f in fs]        # stated tolerance: <= 2%
 
 
 def test_ood_mechanism_with_explicit_vectors():
@@ -147,7 +147,8 @@ def test_ood_mechanism_with_explicit_vectors():
     fixture. A point on the reference manifold is not flagged; one orthogonal to it is."""
     from pathlib import Path
 
-    from cva.detectors.data._stub_types import ArrayEmbeddingIndex, Dataset, Sample
+    from attacklab._types import Dataset, Sample
+    from cva.detectors.data._stub_types import ArrayEmbeddingIndex
     rng = np.random.default_rng(0)
     d = 16
     axis = np.zeros(d); axis[0] = 1.0
@@ -175,7 +176,7 @@ def test_ood_insertion_found(clean, reference, workdir):
     fs = detect(OutOfDistribution, ds, stub_embeddings(ds), None,
                 profile={"reference_embeddings": reference_matrix(rds, remb)})
     flagged, inj = {f.target_ref for f in fs}, set(m["injected"])
-    assert len(flagged & inj) >= 0.8 * len(inj) and len(flagged - inj) <= 0.02 * len(clean)
+    assert len(flagged & inj) >= 0.8 * len(inj) and len(flagged - inj) <= 0.02 * len(clean.samples)
 
 
 def test_tiny_dataset_without_a_model_is_reported_not_silently_empty(clean):

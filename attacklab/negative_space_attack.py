@@ -8,7 +8,7 @@ import dataclasses
 
 import numpy as np
 
-from cva.detectors.data._stub_types import Dataset
+from ._types import Dataset
 
 
 def drop_annotations(dataset: Dataset, seed: int, target_contributor: str, fraction: float = 0.6

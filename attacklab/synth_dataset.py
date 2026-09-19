@@ -14,7 +14,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from cva.detectors.data._stub_types import Category, Dataset, Label, Sample, sha256_file
+from cva.detectors.data._stub_types import sha256_file
+
+from ._types import Category, Dataset, Label, Sample
 
 SHAPES = ("circle", "square", "triangle", "cross")
 PALETTE = ((220, 60, 60), (60, 200, 90), (70, 110, 230), (230, 200, 60),
@@ -102,6 +104,6 @@ def make_clean_dataset(out_dir: Path | str, seed: int = 0, n: int = 240, n_class
             os.utime(path, (t, t))
         samples.append(Sample(
             sample_id=f"img_{i:05d}", content_sha256=sha256_file(path), path=path, width=w, height=h,
-            labels=tuple(Label(c, bbox=tuple(float(v) for v in bb)) for c, bb in boxes),
+            labels=[Label(c, bbox=tuple(float(v) for v in bb)) for c, bb in boxes],
             source_meta={"camera": cam[1]}))
     return Dataset(samples, cats)

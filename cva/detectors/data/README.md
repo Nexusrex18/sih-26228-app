@@ -2,7 +2,8 @@
 
 Implements `sih26228-notes/Plan/Module-A-Data-Integrity-Plan.md` (PS §2.2.1): nine `Detector`
 plug-ins, registered in core's `DETECTOR_REGISTRY`, plus ground-truth attack scripts in `attacklab/`.
-Built against clearly-marked stand-ins for what Backend / other modules will supply.
+Built against the real core types (`cva/core/types.py`) and loaders; the one thing still faked is the
+embedding backbone (see below).
 
 ## Layout and conventions
 
@@ -13,7 +14,7 @@ Built against clearly-marked stand-ins for what Backend / other modules will sup
 | `data.trigger_artifact` · `data.ood` | `trigger_ood.py` (one file, two ids) |
 | `data.metadata_anomaly` · `data.annotation_geometry` · `data.negative_space` | one file each |
 | shared plumbing | `base.py` (Params, evidence store, `make_finding`, ctx helpers) |
-| stand-ins (replace wholesale when Backend's types land) | `_stub_types.py` |
+| real core types, re-exported in one place; plus the ONLY remaining stand-in (the fake embedding backbone) | `_stub_types.py` |
 | attack classes | names in `taxonomy.py`; **definitions live in `cva/core/types.py::ATTACK_CLASSES`** |
 
 * **Registration** is `@register_detector` (`cva.core.registry.DETECTOR_REGISTRY`), signature
@@ -22,6 +23,12 @@ Built against clearly-marked stand-ins for what Backend / other modules will sup
   (`CheckContext`): thresholds in `ctx.profile["<detector_id>"]` (unknown keys *inside that
   namespace* are an error; other plug-ins' keys are ignored), evidence dir = `ctx.out_dir`,
   `ctx.scan_id`, `ctx.rng_seed`. No constructor injection.
+* **Datasets are used through the frozen contract only** — `samples`, `categories`, `annotations()`,
+  `capabilities()`. The real `InMemoryDataset` has no `sample(id)`, `category_name(id)` or `len()`; detectors
+  use `base.sample_by_id` / `category_name` / `n_samples`, which derive them. Enforced by
+  `tests/detectors/data/test_real_types.py` (a static AST guard on detector source, plus every test
+  running on the real type and a round trip through the real `COCOLoader`). An earlier stand-in `Dataset`
+  with those conveniences let five of six detectors crash on a real dataset.
 * One `Finding` type (`cva.core.types.Finding`). `finding_id` = `sha256(detector_id‖version‖
   target_type‖target_ref‖attack_class)[:16]` with `\x1f` separators; never hashes `scan_id`.
   `disposition` is the placeholder `review` / `pending_risk_engine`; `confidence` is uncalibrated.

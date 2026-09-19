@@ -65,6 +65,9 @@ from .base import (
     register_detector,
     seed_of,
     to_model_input,
+    sample_by_id,
+    category_name,
+    n_samples,
 )
 from .taxonomy import OUT_OF_DISTRIBUTION, TRIGGER_INJECTION
 
@@ -99,7 +102,7 @@ def hf_energy_map(sample, grid: int, window: int = 3) -> np.ndarray:
 
 def frequency_residue(dataset: Dataset, p: Params) -> dict[str, dict]:
     """sample_id -> {block:(r,c), z, group_size}, only for anomalies repeating at one block."""
-    n = len(dataset)
+    n = n_samples(dataset)
     if n < p["min_baseline"]:
         return {}
     maps = np.stack([hf_energy_map(s, p["grid"], p["hp_window"]) for s in dataset.samples])
@@ -244,15 +247,15 @@ class TriggerArtifact:
         rec: dict[str, list[dict]] = defaultdict(list)
         notes: list[str] = []
 
-        if len(dataset) < p["min_baseline"]:
-            notes.append(f"frequency residue not run: {len(dataset)} images is fewer than the "
+        if n_samples(dataset) < p["min_baseline"]:
+            notes.append(f"frequency residue not run: {n_samples(dataset)} images is fewer than the "
                          f"{p['min_baseline']} needed for a per-block baseline")
             if not (self._has(model, Capability.MODEL_PREDICT) or self._has(model, Capability.MODEL_ACTIVATIONS)):
                 # nothing model-free could run and no model was available: say so, don't return []
                 return [not_performed(self.id, self.version, self.attack_classes, notes[0]
                                       + ", and no model was supplied for the model-based methods")]
         fr = frequency_residue(dataset, p)
-        if len(dataset) >= p["min_baseline"]:
+        if n_samples(dataset) >= p["min_baseline"]:
             self._ran.add("frequency_residue")
         self._by_block = {sid: v["block"] for sid, v in fr.items()}
         for sid, v in fr.items():
@@ -292,7 +295,7 @@ class TriggerArtifact:
         for region, ids in groups.items():
             ids = sorted(ids)[: p["max_group_samples"]]
             try:
-                X = np.stack([to_model_input(dataset.sample(i), model.input_shape) for i in ids])
+                X = np.stack([to_model_input(sample_by_id(dataset, i), model.input_shape) for i in ids])
                 res = occlusion_test(model, X, region, grid, _control_regions(region, grid, p["control_regions"], seed_of(p, self.ctx)))
             except Exception as e:                                       # a bad model output is not a crash
                 notes.append(f"patch saliency failed on region {region}: {type(e).__name__}: {e}")
@@ -311,7 +314,7 @@ class TriggerArtifact:
         p, w = self.p, self.p["sweep_window_cells"]
         votes: Counter = Counter()
         for sid in self.candidates[: p["sweep_max_candidates"]]:
-            x = to_model_input(dataset.sample(sid), model.input_shape)[None]
+            x = to_model_input(sample_by_id(dataset, sid), model.input_shape)[None]
             base = model.predict(x)[0]
             b = int(base.argmax())
             best, best_drop = None, 0.0
@@ -372,7 +375,7 @@ class TriggerArtifact:
 
     # ---- assemble
     def _finding(self, dataset, sid, ms, notes, grid, embeddings):
-        s = dataset.sample(sid)
+        s = sample_by_id(dataset, sid)
         methods = {m["method"]: m for m in ms}
         corr = len(_CORROBORATORS & set(methods))
         model_based = {"patch_saliency", "spectral_signature", "activation_clustering"} & set(methods)
@@ -391,8 +394,8 @@ class TriggerArtifact:
             f = methods["patch_saliency"]
             parts.append(f"occluding that region changes {f['flip_rate']:.0%} of the group's predictions "
                          f"(control regions: {f['control_flip_rate']:.0%}) away from class "
-                         f"{dataset.category_name(f['base_class'])!r}"
-                         + (f" toward {dataset.category_name(f['new_class'])!r}" if f["new_class"] is not None else ""))
+                         f"{category_name(dataset, f['base_class'])!r}"
+                         + (f" toward {category_name(dataset, f['new_class'])!r}" if f["new_class"] is not None else ""))
         if "spectral_signature" in methods:
             parts.append(f"a spectral-signature outlier within its class (z={methods['spectral_signature']['raw']:.1f})")
         if "activation_clustering" in methods:
@@ -490,7 +493,7 @@ class OutOfDistribution:
                 per_c[s.contributor] += s.sample_id in flagged
         out = []
         for sid, dv in sorted(flagged.items()):
-            s = dataset.sample(sid)
+            s = sample_by_id(dataset, sid)
             c = s.contributor
             heavy = c is not None and per_c[c] >= share_min and per_c[c] / tot_c[c] >= share
             who = ""

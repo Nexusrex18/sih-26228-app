@@ -9,7 +9,7 @@ import dataclasses
 
 import numpy as np
 
-from cva.detectors.data._stub_types import Dataset
+from ._types import Dataset
 
 
 def tamper_geometry(dataset: Dataset, seed: int, target_contributor: str, shrink: float = 0.5,
@@ -32,7 +32,7 @@ def tamper_geometry(dataset: Dataset, seed: int, target_contributor: str, shrink
             cx, cy = x + w / 2 + shift * w, y + h / 2
             nw, nh = w * shrink, h * shrink
             labels.append(dataclasses.replace(lb, bbox=(cx - nw / 2, cy - nh / 2, nw, nh)))
-        new.append(dataclasses.replace(s, labels=tuple(labels)))
+        new.append(dataclasses.replace(s, labels=labels))
         changed[s.sample_id] = {"shrink": shrink, "shift": shift}
     return Dataset(new, dataset.categories), {
         "attack": "annotation_geometry_tamper", "seed": seed, "target_contributor": target_contributor,

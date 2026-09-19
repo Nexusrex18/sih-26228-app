@@ -10,7 +10,8 @@ import numpy as np
 from PIL import Image
 
 from cva.core.capability import Capability, CapabilitySet
-from cva.detectors.data._stub_types import Dataset, Sample, sha256_file
+from attacklab._types import ContributorSource, Dataset, Sample
+from cva.detectors.data._stub_types import sha256_file
 
 
 def checker_patch(size: int) -> np.ndarray:
@@ -35,21 +36,22 @@ def inject_trigger(dataset: Dataset, out_dir: Path, seed: int, n: int, target_cl
     rng = np.random.default_rng(seed)
     out_dir.mkdir(parents=True, exist_ok=True)
     from cva.detectors.data.base import dominant_category
+    by_id = {s.sample_id: s for s in dataset.samples}
     pool = sorted(s.sample_id for s in dataset.samples if dominant_category(s) != target_class and
                   (source_contributors is None or s.contributor in source_contributors))
     picks = rng.choice(pool, size=n, replace=False)
     added, ids = [], set()
     for i, sid in enumerate(picks):
-        src = dataset.sample(str(sid))
+        src = by_id[str(sid)]
         with Image.open(src.path) as im:
             img = paste_trigger(im.convert("RGB"), size, corner)
         nid = f"trig_{i:04d}"
         path = out_dir / f"{nid}.png"
         img.save(path)
-        labels = tuple(dataclasses.replace(lb, category_id=target_class) for lb in src.labels) \
-            if relabel else src.labels
+        labels = [dataclasses.replace(lb, category_id=target_class) for lb in src.labels] \
+            if relabel else list(src.labels)
         added.append(Sample(nid, sha256_file(path), path, img.size[0], img.size[1], labels,
-                            contributor, f"{contributor}-inj", {"injected": "trigger"}, "sidecar"))
+                            contributor, f"{contributor}-inj", {"injected": "trigger"}, ContributorSource.SIDECAR))
         ids.add(nid)
     return Dataset(list(dataset.samples) + added, dataset.categories), ids
 

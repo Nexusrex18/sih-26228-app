@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import weakref
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -100,6 +101,57 @@ def sentence_case(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
+
+# --- Dataset access using ONLY the frozen contract -----------------------------------------------
+# core's ``Dataset`` Protocol is ``samples``, ``categories``, ``annotations()``, ``capabilities()`` —
+# nothing else. A stand-in that also offered ``sample(id)``, ``category_name(id)`` and ``len()`` let
+# detectors lean on conveniences the real ``InMemoryDataset`` does not have (five of six crashed on a
+# real dataset the moment they built a finding). These helpers derive them from the contract, and
+# ``tests/detectors/data/test_real_types.py`` statically forbids anything else.
+
+class _PerDatasetCache:
+    """Memoise derived data per dataset OBJECT. Keyed by ``id`` and validated through a weak
+    reference, because real datasets are (unhashable) dataclasses that cannot key a
+    ``WeakKeyDictionary``. Entries vanish with the dataset."""
+
+    def __init__(self) -> None:
+        self._d: dict[int, tuple[weakref.ref, dict]] = {}
+
+    def get(self, dataset, key, build):
+        slot = self._d.get(id(dataset))
+        if slot is None or slot[0]() is not dataset:
+            k = id(dataset)
+            try:
+                ref = weakref.ref(dataset, lambda _r, k=k: self._d.pop(k, None))
+            except TypeError:                     # not weak-referenceable: no memo, still correct
+                return build()
+            slot = (ref, {})
+            self._d[k] = slot
+        store = slot[1]
+        if key not in store:
+            store[key] = build()
+        return store[key]
+
+
+DATASET_CACHE = _PerDatasetCache()
+
+
+def n_samples(dataset) -> int:
+    return len(dataset.samples)
+
+
+def sample_by_id(dataset, sample_id: str) -> Sample:
+    ix = DATASET_CACHE.get(dataset, ("by_id", len(dataset.samples)),
+                           lambda: {s.sample_id: s for s in dataset.samples})
+    return ix[sample_id]
+
+
+def category_name(dataset, category_id: int) -> str:
+    names = DATASET_CACHE.get(dataset, ("cat_names", len(dataset.categories)),
+                              lambda: {c.category_id: c.name for c in dataset.categories})
+    return names.get(category_id, str(category_id))
+
+
 class EvidenceStore:
     """Writes evidence artefacts content-addressed: ``evidence/<sha256>.<ext>``. With no
     directory it degrades to inline payloads (or no image), never to a scan-id-prefixed path."""
@@ -167,7 +219,7 @@ def contact_sheet(dataset: Dataset, sample_ids: Sequence[str], tile: int = 96, c
     rows = max(1, -(-len(ids) // cols))
     sheet = Image.new("RGB", (cols * tile, rows * tile), (24, 24, 24))
     for i, sid in enumerate(ids):
-        with Image.open(dataset.sample(sid).path) as im:
+        with Image.open(sample_by_id(dataset, sid).path) as im:
             t = im.convert("RGB").resize((tile - 4, tile - 4))
         sheet.paste(t, ((i % cols) * tile + 2, (i // cols) * tile + 2))
     return sheet

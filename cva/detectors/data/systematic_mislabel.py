@@ -50,6 +50,7 @@ from .base import (
     not_performed,
     register_detector,
     sentence_case,
+    category_name,
 )
 from .taxonomy import SYSTEMATIC_MISLABELLING
 
@@ -141,8 +142,8 @@ class SystematicMislabel:
             cells.sort(key=lambda d: -d["rate"])
             top = cells[0]
             lines = "; ".join(
-                f"of {d['n']} images declared '{dataset.category_name(d['declared'])}', an independent "
-                f"probe reads {d['k']} ({d['rate']:.0%}) as '{dataset.category_name(d['probe_reads'])}' "
+                f"of {d['n']} images declared '{category_name(dataset, d['declared'])}', an independent "
+                f"probe reads {d['k']} ({d['rate']:.0%}) as '{category_name(dataset, d['probe_reads'])}' "
                 f"(rest of cohort: {d['cohort_rate']:.0%}, worst peer {d['worst_peer_rate']:.0%}; "
                 f"p={d['p_adj']:.1e} after correcting for {d['family']} tests)" for d in cells[:3])
             findings.append(make_finding(

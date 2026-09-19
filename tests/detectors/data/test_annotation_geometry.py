@@ -24,7 +24,7 @@ def test_registry_row():
 def test_clean_near_zero(det_ds):
     assert resolve(AnnotationGeometry, det_ds).runnable
     fs = detect(AnnotationGeometry, det_ds, None, None)
-    assert len(fs) <= 0.01 * len(det_ds), [f.reason for f in fs]
+    assert len(fs) <= 0.01 * len(det_ds.samples), [f.reason for f in fs]
 
 
 def test_shrunk_boxes_found(det_ds):

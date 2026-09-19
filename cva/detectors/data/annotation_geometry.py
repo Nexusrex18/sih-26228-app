@@ -44,6 +44,8 @@ from .base import (
     make_finding,
     not_performed,
     register_detector,
+    sample_by_id,
+    category_name,
 )
 from .taxonomy import ANNOTATION_GEOMETRY_TAMPER
 
@@ -139,11 +141,11 @@ class AnnotationGeometry:
                                               "n": len(mine), "peers": len(peers)})
         findings = []
         for sid, hs in sorted(hits.items()):
-            s = dataset.sample(sid)
+            s = sample_by_id(dataset, sid)
             feats = {h["feature"]: h for h in hs}
             top = max(hs, key=lambda h: h["z"])
             lines = "; ".join(
-                f"{_TEXT[f]} for '{dataset.category_name(h['category'])}' is {abs(h['group_shift_mads']):.1f} "
+                f"{_TEXT[f]} for '{category_name(dataset, h['category'])}' is {abs(h['group_shift_mads']):.1f} "
                 f"cohort-MADs {'above' if h['group_shift_mads'] > 0 else 'below'} the other contributors' "
                 f"(KS p={h['ks_p_adj']:.0e} after correcting for {h['family']} tests, n={h['n']})" for f, h in feats.items())
             findings.append(make_finding(

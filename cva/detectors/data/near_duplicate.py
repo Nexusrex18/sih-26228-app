@@ -48,6 +48,9 @@ from .base import (
     load_rgb,
     make_finding,
     register_detector,
+    DATASET_CACHE,
+    sample_by_id,
+    n_samples,
 )
 from .taxonomy import NEAR_DUPLICATE_FLOODING
 
@@ -112,33 +115,26 @@ def candidate_pairs(h: np.ndarray, cut: int) -> dict[tuple[int, int], int]:
 
 
 # Clusters computed for a dataset, so ``near_dup`` and ``duplicate_label_conflict`` — which cluster
-# with the same parameters — hash and compare the images ONCE per scan, not twice. Weak-keyed on the
-# dataset (nothing outlives it) and validated against the embedding object by identity.
-_CLUSTER_CACHE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
-
-
+# with the same parameters — hash and compare the images ONCE per scan, not twice. Memoised per
+# dataset object (see ``base.DATASET_CACHE``) and validated against the embedding object by identity.
 def find_clusters(dataset: Dataset, embeddings: EmbeddingIndex | None,
                   params: Params | dict | None = None) -> list[DupCluster]:
     """Shared with ``data.duplicate_label_conflict`` — the one place clustering is defined.
     Memoised per (dataset, embeddings, parameters)."""
     p = params if isinstance(params, Params) else Params(DEFAULTS, params)
-    key = tuple(sorted(p.as_dict().items()))
-    try:
-        slot = _CLUSTER_CACHE.setdefault(dataset, {})
-    except TypeError:                                     # a Dataset that is not weak-referenceable
-        return _find_clusters(dataset, embeddings, p)
-    hit = slot.get(key)
-    if hit is not None:
-        ref, clusters = hit
-        if (ref() if ref is not None else None) is embeddings:
-            return list(clusters)
-    clusters = _find_clusters(dataset, embeddings, p)
-    slot[key] = (weakref.ref(embeddings) if embeddings is not None else None, tuple(clusters))
-    return list(clusters)
+    key = ("clusters", tuple(sorted(p.as_dict().items())), id(embeddings))
+    ref, clusters = DATASET_CACHE.get(
+        dataset, key,
+        lambda: (weakref.ref(embeddings) if embeddings is not None else None,
+                 tuple(_find_clusters(dataset, embeddings, p))))
+    if (ref() if ref is not None else None) is embeddings:
+        return list(clusters)
+    # id() collision with a dead embedding object: recompute rather than trust a stale entry
+    return _find_clusters(dataset, embeddings, p)
 
 
 def _find_clusters(dataset: Dataset, embeddings: EmbeddingIndex | None, p: Params) -> list[DupCluster]:
-    n = len(dataset)
+    n = n_samples(dataset)
     if n < 2:
         return []
     ids = [s.sample_id for s in dataset.samples]
@@ -201,7 +197,7 @@ class NearDuplicate:
         clusters = find_clusters(dataset, embeddings, self.p)
         findings = []
         for cl in clusters:
-            members = [dataset.sample(m) for m in cl.members]
+            members = [sample_by_id(dataset, m) for m in cl.members]
             contribs = Counter(m.contributor for m in members)
             top_c, top_n = contribs.most_common(1)[0]
             who = ""

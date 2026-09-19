@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from attacklab._types import ContributorSource
+
 from attacklab.script_batch_attack import script_generate_batch
 from cva.core.capability import Availability
 from cva.detectors.data.metadata_anomaly import MetadataAnomaly
@@ -36,7 +38,7 @@ def test_script_generated_batch_is_found(clean, workdir):
 def test_exif_cluster_attribution_reads_as_hypothesis(clean, workdir):
     import dataclasses
     ds, _ = script_generate_batch(clean, workdir / "sb2", seed=4, target_contributor="B")
-    ds = type(ds)([dataclasses.replace(s, contributor_source="exif_cluster") if s.contributor == "B"
+    ds = type(ds)([dataclasses.replace(s, contributor_source=ContributorSource.EXIF_CLUSTER) if s.contributor == "B"
                    else s for s in ds.samples], ds.categories)
     f = detect(MetadataAnomaly, ds, None, None)[0]
     assert "HYPOTHESIS" in f.reason

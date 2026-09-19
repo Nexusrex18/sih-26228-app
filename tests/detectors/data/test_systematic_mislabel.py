@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from attacklab._types import ContributorSource
+
 import pytest
 
 from attacklab.label_flip_attack import flip_labels
@@ -48,7 +50,7 @@ def test_reason_preserves_the_contributor_id_and_the_hypothesis_flag(clean):
     import dataclasses
     bad, _ = flip_labels(clean, seed=51, flip_rate=0.9, mode="class_pair",
                          target_contributor="A", class_pair=(0, 1))
-    bad = type(bad)([dataclasses.replace(s, contributor_source="exif_cluster") if s.contributor == "A"
+    bad = type(bad)([dataclasses.replace(s, contributor_source=ContributorSource.EXIF_CLUSTER) if s.contributor == "A"
                      else s for s in bad.samples], bad.categories)
     f = detect(SystematicMislabel, bad, stub_embeddings(bad))[0]
     assert f.reason.startswith("Contributor 'A' (attribution from EXIF")   # id keeps its case; EXIF too

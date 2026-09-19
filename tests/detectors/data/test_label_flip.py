@@ -17,7 +17,7 @@ def test_registry_row_has_no_optional_capability():
 def test_clean_near_zero(clean, clean_emb):
     assert resolve(LabelConsistency, clean).runnable
     fs = detect(LabelConsistency, clean, clean_emb, None)
-    assert len(fs) <= 0.01 * len(clean), [f.reason for f in fs]     # stated tolerance: <= 1%
+    assert len(fs) <= 0.01 * len(clean.samples), [f.reason for f in fs]     # stated tolerance: <= 1%
 
 
 @pytest.mark.parametrize("rate", [0.05, 0.10, 0.20])

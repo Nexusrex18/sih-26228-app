@@ -1,8 +1,9 @@
 """§8.3 — invent contributor + batch metadata (COCO has no native contributor field).
 
 Partitions a dataset into synthetic contributors (default 4 at 40/30/20/10), assigns each
-contributor two batches, and writes a ``contributors.yaml`` sidecar — tier 1 of the resolution
-precedence, so the returned samples carry ``contributor_source="sidecar"``.
+contributor two batches, and writes a ``contributors.yaml`` sidecar IN THE FORMAT THE REAL LOADERS
+READ (flat ``file-stem: contributor``) — tier 1 of the resolution precedence, so the returned samples
+carry ``contributor_source=ContributorSource.SIDECAR``. Batches are recorded in the manifest.
 
 Must run BEFORE any attack script that takes a ``target_contributor``.
 """
@@ -15,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from cva.detectors.data._stub_types import Dataset
+from ._types import ContributorSource, Dataset
 
 
 def assign_contributors(dataset: Dataset, out_dir: Path | str, seed: int,
@@ -28,7 +29,7 @@ def assign_contributors(dataset: Dataset, out_dir: Path | str, seed: int,
     if len(names) != len(split):
         raise ValueError("names and split differ in length")
     rng = np.random.default_rng(seed)
-    n = len(dataset)
+    n = len(dataset.samples)
     order = rng.permutation(n)
     counts = [int(np.floor(f * n)) for f in split]
     for i in range(n - sum(counts)):                  # largest-remainder, deterministic
@@ -42,15 +43,16 @@ def assign_contributors(dataset: Dataset, out_dir: Path | str, seed: int,
                            "batch": f"{name}-b{int(rng.integers(0, batches_per_contributor))}"}
         pos += c
     new = [dataclasses.replace(s, contributor=assign[s.sample_id]["contributor"],
-                               batch=assign[s.sample_id]["batch"], contributor_source="sidecar")
+                               batch=assign[s.sample_id]["batch"], contributor_source=ContributorSource.SIDECAR)
            for s in dataset.samples]
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    by_c: dict[str, dict[str, list[str]]] = {}
-    for sid, a in sorted(assign.items()):
-        by_c.setdefault(a["contributor"], {}).setdefault(a["batch"], []).append(sid)
-    (out / "contributors.yaml").write_text(
-        yaml.safe_dump({"contributors": by_c}, sort_keys=True), encoding="utf-8")
+    # contributors.yaml in the format the REAL loaders read (cva/loaders/datasets/base.py:
+    # `_load_sidecar` — a flat `name-or-stem: contributor` mapping). An earlier, nested layout was
+    # silently ignored by the loader, so a dataset built here lost every contributor on load.
+    flat = {Path(sm.path).stem: assign[sm.sample_id]["contributor"] for sm in dataset.samples}
+    (out / "contributors.yaml").write_text(yaml.safe_dump(dict(sorted(flat.items())), sort_keys=True),
+                                           encoding="utf-8")
     manifest = {"attack": "contributor_metadata", "seed": seed, "split": list(split),
                 "names": list(names), "assignments": dict(sorted(assign.items()))}
     (out / "contributors.manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=1))
@@ -58,11 +60,13 @@ def assign_contributors(dataset: Dataset, out_dir: Path | str, seed: int,
 
 
 def read_sidecar(path: Path | str) -> dict[str, tuple[str, str]]:
-    """sample_id -> (contributor, batch) from a ``contributors.yaml`` (what a loader would do)."""
-    doc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    """sample_id -> (contributor, batch). Contributors come from ``contributors.yaml`` exactly as the
+    real loader reads it (flat ``stem: contributor``); the loader has no batch concept, so batches
+    come from the sibling ``contributors.manifest.json``."""
+    path = Path(path)
+    flat = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    manifest = json.loads((path.parent / "contributors.manifest.json").read_text())
     out: dict[str, tuple[str, str]] = {}
-    for c, batches in doc["contributors"].items():
-        for b, ids in batches.items():
-            for sid in ids:
-                out[sid] = (c, b)
+    for sid, a in manifest["assignments"].items():
+        out[sid] = (flat.get(sid, a["contributor"]), a["batch"])
     return out

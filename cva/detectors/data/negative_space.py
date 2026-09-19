@@ -46,6 +46,7 @@ from .base import (
     not_performed,
     register_detector,
     to_model_input,
+    category_name,
 )
 from .taxonomy import NEGATIVE_SPACE_POISONING
 
@@ -157,7 +158,7 @@ class NegativeSpace:
                     confidence=float(min(0.75, 0.3 + 0.5 * min(1.0, rate))),
                     score_raw=rate, threshold=p["rate_min"],
                     reason=(f"The contributed model confidently detects an object "
-                            f"(score {d0['score']:.2f}, class {dataset.category_name(d0['class'])!r}) at "
+                            f"(score {d0['score']:.2f}, class {category_name(dataset, d0['class'])!r}) at "
                             f"{[round(v) for v in d0['bbox_xyxy']]} in {s.sample_id} where no annotation "
                             f"exists. {k} of {n} images from {attribution(src, c)} show this ({rate:.0%}; "
                             f"rest of cohort {cohort:.0%}, worst peer {worst_peer:.0%}; p={pv:.1e} after correcting for "

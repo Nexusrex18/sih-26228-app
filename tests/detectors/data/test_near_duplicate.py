@@ -42,7 +42,7 @@ def test_embedding_confirmation_rejects_phash_false_candidates(clean, workdir):
     ds, m = inject_near_duplicates(clean, workdir / "nd2", seed=22, n_sources=3, variants_per_source=4)
     rng = np.random.default_rng(0)
     orthogonal = ArrayEmbeddingIndex([s.sample_id for s in ds.samples],
-                                     np.eye(len(ds), 64 * 4)[:, :256] + rng.normal(0, 1e-3, (len(ds), 256)))
+                                     np.eye(len(ds.samples), 64 * 4)[:, :256] + rng.normal(0, 1e-3, (len(ds.samples), 256)))
     assert detect(NearDuplicate, ds, orthogonal, None) == []
 
 
@@ -109,10 +109,10 @@ def test_clusters_are_computed_once_and_shared(clean, workdir, monkeypatch):
     a = detect(NearDuplicate, ds, emb)
     first = calls["n"]
     b = detect(DuplicateLabelConflict, ds, emb)
-    assert first == len(ds) and calls["n"] == first, "second detector must reuse the clusters"
+    assert first == len(ds.samples) and calls["n"] == first, "second detector must reuse the clusters"
     assert a and b
     # a different parameter set, or different embeddings, must NOT reuse a stale result
     detect(NearDuplicate, ds, emb, params={"cosine": 0.99})
-    assert calls["n"] == 2 * len(ds)
+    assert calls["n"] == 2 * len(ds.samples)
     detect(NearDuplicate, ds, None)
-    assert calls["n"] == 3 * len(ds)
+    assert calls["n"] == 3 * len(ds.samples)

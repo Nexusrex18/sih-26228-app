@@ -25,7 +25,7 @@ def detect(cls, dataset, embeddings=None, model=None, params=None, out_dir=None,
 
 def resolve(detector_cls, dataset, extra=()):
     """The (Backend-owned) capability resolution done before ``detect()``. Test-only."""
-    caps = CapabilitySet(frozenset(dataset.capabilities()) | frozenset(extra))
+    caps = CapabilitySet.union(dataset.capabilities(), CapabilitySet(frozenset(extra)))
     return caps.resolve(set(detector_cls.requires), set(detector_cls.optional))
 
 

@@ -14,7 +14,9 @@ from pathlib import Path
 
 from PIL import Image
 
-from cva.detectors.data._stub_types import Dataset, Sample, sha256_file
+from cva.detectors.data._stub_types import sha256_file
+
+from ._types import Dataset, Sample
 
 from .synth_dataset import EPOCH0
 
@@ -40,9 +42,9 @@ def script_generate_batch(dataset: Dataset, out_dir: Path | str, seed: int, targ
         t += 0.002                                         # 2 ms apart: a script, not a collection
         os.utime(path, (t, t))
         sx, sy = fw / s.width, fh / s.height
-        labels = tuple(dataclasses.replace(lb, bbox=(lb.bbox[0] * sx, lb.bbox[1] * sy,
-                                                     lb.bbox[2] * sx, lb.bbox[3] * sy))
-                       if lb.bbox else lb for lb in s.labels)
+        labels = [dataclasses.replace(lb, bbox=(lb.bbox[0] * sx, lb.bbox[1] * sy,
+                                                lb.bbox[2] * sx, lb.bbox[3] * sy))
+                  if lb.bbox else lb for lb in s.labels]
         new.append(dataclasses.replace(s, path=path, content_sha256=sha256_file(path),
                                        width=fw, height=fh, labels=labels))
         changed[s.sample_id] = {"sha256": new[-1].content_sha256}

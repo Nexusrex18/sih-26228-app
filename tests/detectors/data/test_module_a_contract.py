@@ -135,8 +135,8 @@ def test_orchestrator_style_run_of_every_runnable_detector(clean, clean_emb, poi
     ref_emb = stub_embeddings(ref)
     ctx = make_ctx(scan_id="scan-xyz", seed=7,
                    profile={"reference_embeddings": reference_matrix(ref, ref_emb)})
-    caps = CapabilitySet(frozenset(clean.capabilities()) | poisoned_model.capabilities().caps
-                         | {Capability.REFERENCE_CLEAN_SET})
+    caps = CapabilitySet.union(clean.capabilities(), poisoned_model.capabilities(),
+                               CapabilitySet(frozenset({Capability.REFERENCE_CLEAN_SET})))
     ran = []
     for cid in MODULE_A_DETECTORS:
         cls = DETECTOR_REGISTRY[cid]

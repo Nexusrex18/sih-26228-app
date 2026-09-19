@@ -1,131 +1,33 @@
-"""STAND-IN dataset-side types for Module A.
+"""What is STILL a stand-in for Module A — and the real types it now re-exports.
 
-These mirror the frozen contracts in ``Plan/backend_plan.md`` §7.2 / §7.7b and
-``Architecture/Plugin-Interfaces.md`` (Sample, Dataset, Label, Category, EmbeddingIndex,
-Detector). Backend owns the real ones (``cva/core/types.py``, loaders, feature cache).
+The dataset-side contract types are real now: ``Category``, ``Label``, ``Annotation``, ``Sample``,
+``Dataset`` (a Protocol) and ``EmbeddingIndex`` live in ``cva/core/types.py`` and are re-exported
+here unchanged, so detectors import them from one place. There is no stand-in ``Dataset`` any more:
+the earlier one offered ``sample(id)``, ``category_name(id)`` and ``len()``, conveniences the real
+``InMemoryDataset`` does not have, and five of six detectors crashed on a real dataset because of it.
+Detectors reach for datasets only through ``base.sample_by_id`` / ``category_name`` / ``n_samples``.
 
-**Replace this module wholesale when Backend's types land.** Every Module A file imports these
-names from here and nowhere else, so the swap is a change to this one file's contents (or to a
-re-export), not a change to any detector.
-
-``Finding``, ``Evidence`` and ``Capability`` are NOT redefined here — they come from
-``cva.core``, so there is exactly one ``Finding`` type in the system.
+What remains a stand-in, to be replaced by Backend's feature cache + the vendored DINOv2 backbone:
+``ArrayEmbeddingIndex`` and ``stub_embeddings`` (a fixed function of the image — NOT evidence about a
+real backbone). ``sha256_file`` is a plain utility.
 """
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, Protocol, runtime_checkable
 
 import numpy as np
 
-from cva.core.capability import Capability
-
-ContributorSource = Literal["sidecar", "directory", "format_field", "exif_cluster", "none"]
-
-
-@dataclass(frozen=True)
-class Category:
-    category_id: int            # dense, 0-based, assigned by the loader
-    name: str
-    source_id: int | str        # the id as it appeared in the source file
-
-
-@dataclass(frozen=True)
-class Label:
-    category_id: int
-    bbox: tuple[float, float, float, float] | None = None   # COCO (x_min, y_min, w, h), ABSOLUTE px
-    iscrowd: bool = False
-    segmentation: tuple[tuple[float, ...], ...] | None = None
-    label_id: str | None = None
-
-
-@dataclass(frozen=True)
-class Sample:
-    sample_id: str
-    content_sha256: str
-    path: Path
-    width: int
-    height: int
-    labels: tuple[Label, ...] = ()
-    contributor: str | None = None           # None = genuinely unknown. NEVER default this.
-    batch: str | None = None
-    source_meta: Mapping[str, str] = field(default_factory=dict)
-    contributor_source: ContributorSource | None = None
-
-
-@dataclass(frozen=True)
-class Annotation:
-    sample_id: str
-    label: Label
-
-
-class Dataset:
-    """Canonical dataset. ``Sample.labels`` is the only stored label representation;
-    ``annotations()`` is a derived view."""
-
-    def __init__(self, samples: Sequence[Sample], categories: Sequence[Category]):
-        self.samples: list[Sample] = list(samples)
-        self.categories: list[Category] = list(categories)
-        self._by_id = {s.sample_id: s for s in self.samples}
-        if len(self._by_id) != len(self.samples):
-            raise ValueError("duplicate sample_id in Dataset")
-        self._caps: set[Capability] | None = None
-
-    def __len__(self) -> int:
-        return len(self.samples)
-
-    def sample(self, sample_id: str) -> Sample:
-        return self._by_id[sample_id]
-
-    def category_name(self, category_id: int) -> str:
-        for c in self.categories:
-            if c.category_id == category_id:
-                return c.name
-        return str(category_id)
-
-    def annotations(self) -> list[Annotation]:
-        return [Annotation(s.sample_id, lb) for s in self.samples for lb in s.labels]
-
-    def capabilities(self) -> set[Capability]:
-        """DATASET_* only, PROBED not assumed."""
-        if self._caps is not None:
-            return set(self._caps)
-        from PIL import Image
-
-        caps: set[Capability] = set()
-        step = max(1, len(self.samples) // 64)          # deterministic spread, not just the head
-        probe = self.samples[::step]
-        ok = bool(probe)
-        for s in probe:
-            try:
-                with Image.open(s.path) as im:
-                    im.load()
-            except Exception:
-                ok = False
-                break
-        if ok:
-            caps.add(Capability.DATASET_IMAGES)
-        if any(s.labels for s in self.samples):
-            caps.add(Capability.DATASET_LABELS)
-        if any(s.contributor is not None for s in self.samples):
-            caps.add(Capability.DATASET_CONTRIBUTOR_META)
-        self._caps = caps
-        return set(caps)
-
-
-@runtime_checkable
-class EmbeddingIndex(Protocol):
-    extractor_id: str
-    extractor_version: str
-    dim: int
-
-    def vector(self, sample_id: str) -> np.ndarray | None: ...
-    def vectors(self, sample_ids: Sequence[str]) -> np.ndarray: ...
-    def knn(self, sample_id: str, k: int) -> list[tuple[str, float]]: ...     # (sample_id, cosine)
-    def patch_tokens(self, sample_id: str) -> np.ndarray | None: ...
+from cva.core.types import (  # noqa: F401  — re-exported: the one import point for Module A
+    Annotation,
+    Category,
+    ContributorSource,
+    Dataset,
+    EmbeddingIndex,
+    Label,
+    Sample,
+)
 
 
 class ArrayEmbeddingIndex:
@@ -219,21 +121,6 @@ def stub_embeddings(dataset: Dataset, dim: int = 64, size: int = 16, seed: int =
     return ArrayEmbeddingIndex([s.sample_id for s in dataset.samples],
                                np.concatenate([Xc, semantic_weight * Sc], axis=1),
                                extractor_id="stub-semantic+pixel", extractor_version="4")
-
-
-@runtime_checkable
-class DataDetector(Protocol):
-    """Module A's ``Detector`` contract (Plugin-Interfaces.md). Deliberately NOT the same
-    protocol as ``cva.detectors.base.ModelCheck`` — different signature, different registry."""
-
-    id: str
-    version: str
-    requires: set[Capability]
-    optional: set[Capability]
-    attack_classes: set[str]
-
-    def detect(self, dataset: Dataset, embeddings: EmbeddingIndex | None,
-               model: object | None) -> list: ...
 
 
 def sha256_file(path: Path) -> str:
