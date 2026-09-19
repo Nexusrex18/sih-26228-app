@@ -45,7 +45,10 @@ def render_markdown(result) -> str:
     out += ["", "## Operational reports (not counted as coverage)", ""]
     out += [f"- `{ac}`" for ac in cov["operational_reports"]] or ["- none"]
     out += ["", "## Standing limitations", ""]
-    out += [f"- {l}" for l in STANDING_LIMITATIONS]
+    # Same source as report.json's coverage.standing_limitations, so the two never disagree
+    # (S3 sandbox and model-format limitations included). Lazy: report_json imports this module.
+    from .report_json import standing_limitations
+    out += [f"- {lim}" for lim in standing_limitations(getattr(result, "target", None) or {})]
     return "\n".join(out) + "\n"
 
 

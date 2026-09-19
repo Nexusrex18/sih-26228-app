@@ -20,7 +20,12 @@ from typing import Any
 
 from cva.core.access_block import consequence
 from cva.core.capability import Availability, Capability
-from cva.report.report_json import coverage_of, reproduction_of, standing_limitations
+from cva.report.report_json import (
+    coverage_of,
+    provenance_summary_of,
+    reproduction_of,
+    standing_limitations,
+)
 
 CSS = """
 :root{--bg:#fbfbfd;--fg:#1a1d23;--mut:#666c78;--line:#e2e5ea;--card:#fff;
@@ -71,6 +76,11 @@ background:#fff}
 ul{margin:6px 0;padding-left:20px}li{margin:3px 0}
 .lim{color:var(--mut);font-size:12.5px}
 .scroll{overflow-x:auto}
+.rd{max-width:360px;width:100%;height:auto;display:block;margin:8px 0}
+.rd .frame{fill:var(--card);stroke:var(--line)}
+.rd .diag{stroke:var(--mut);stroke-dasharray:4 3;fill:none}
+.rd .pt{fill:var(--low);fill-opacity:.65;stroke:var(--low)}
+.rd text{fill:var(--mut);font-size:11px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
 .stat b{display:block;font-size:20px}.stat span{color:var(--mut);font-size:12px}
@@ -122,7 +132,14 @@ def _mime(blob: bytes) -> str | None:
 
 
 def _blob(root: Path, ref: str) -> bytes | None:
-    """`ref` is a bare hash; anything shaped like a path is refused, not resolved."""
+    """`root` is the evidence directory itself; `ref` names a file directly inside it.
+
+    The schema says the ref is a bare hash, but Module A's EvidenceStore returns
+    `evidence/<sha256>.<ext>` (a documented Module A contract deviation), so exactly one
+    leading `evidence/` prefix is stripped. Anything still shaped like a path is refused,
+    not resolved."""
+    if ref.startswith("evidence/"):
+        ref = ref[len("evidence/"):]
     if not ref or "/" in ref or "\\" in ref or ref.startswith("."):
         return None
     try:
@@ -165,6 +182,9 @@ def _evidence(f, root: Path, doc: _Doc, max_images: int, stats: dict[str, int]) 
         if text is not None:
             out.append(f"<details><summary>{cap}</summary>"
                        f"<pre>{_e(text[:4000])}</pre></details>")
+        elif ev.path:
+            # A referenced artefact that cannot be read must be visible, not silently absent.
+            out.append(f"<div class=meta>{cap} — evidence file not found: {_e(ev.path)}</div>")
     return "".join(out)
 
 
@@ -289,9 +309,25 @@ def _provenance_section(doc: _Doc, r) -> None:
     else:
         doc.add("<div class=note>An inference ledger was supplied, but the provenance "
                 "summary is not computed in this build.</div>")
+    # The same object report.json carries; a field absent there is unknown, not zero.
+    summ = provenance_summary_of(r) or {}
+    labels = (("records_verified", "records verified"), ("anchors_checked", "anchors checked"),
+              ("declared_degraded_intervals", "declared degraded intervals"),
+              ("records_after_last_anchor", "records after last anchor"),
+              ("custody_type", "custody type"), ("durability_window", "durability window"))
+    stats = [f"<div class=stat><b>{_e(summ[k])}</b><span>{lab}</span></div>"
+             for k, lab in labels if k in summ]
+    if stats:
+        doc.add("<div class=grid>" + "".join(stats) + "</div>")
+    # ledger_state is omitted from the JSON when a signing key exists (the scan record is
+    # appended after report.json is hashed); the sequence number is known by render time.
     seq = getattr(r, "ledger_seq", None)
-    state = (f"sealed, seq {_e(seq)}" if seq
-             else "not sealed — no audit ledger with a signing key")
+    if seq:
+        state = f"sealed, seq {_e(seq)}"
+    elif summ.get("ledger_state") == "not_sealed":
+        state = "not sealed — no audit ledger with a signing key"
+    else:
+        state = "not sealed — no scan record was appended to the audit ledger"
     doc.add(f"<div class=lim>Scan record: {state}.</div>")
 
 
@@ -321,6 +357,57 @@ def _plan_section(doc: _Doc, r) -> None:
     doc.add("</table></div>")
 
 
+def _brier(cal: dict[str, Any]) -> str:
+    b = cal.get("brier")
+    return f"{b:.4f}" if isinstance(b, (int, float)) else "not computed"
+
+
+def _reliability_svg(bins: list[dict[str, Any]]) -> str:
+    """Inline SVG: predicted probability (x) against observed frequency (y), the y=x
+    diagonal, marker area scaled by bin count. No xmlns (HTML needs none, and the report
+    carries no URL at all) and colours come from the CSS variables, so dark mode works."""
+    pts: list[tuple[float, float, int]] = []
+    for b in bins:
+        try:
+            pts.append((min(max(float(b["p_mean"]), 0.0), 1.0),
+                        min(max(float(b["empirical"]), 0.0), 1.0), max(int(b["n"]), 0)))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not pts:
+        return "<div class=lim>No reliability bins were recorded, so no diagram is drawn.</div>"
+    size, pad = 320, 40
+    span = size - 2 * pad
+
+    def px(v: float) -> str:
+        return f"{pad + v * span:.1f}"
+
+    def py(v: float) -> str:
+        return f"{size - pad - v * span:.1f}"
+
+    nmax = max(n for _, _, n in pts) or 1
+    parts = [f'<svg class=rd viewBox="0 0 {size} {size}" role="img" '
+             f'aria-label="Reliability diagram: predicted probability against observed '
+             f'frequency">',
+             f'<rect class=frame x="{pad}" y="{pad}" width="{span}" height="{span}"/>']
+    for t in (0.0, 0.5, 1.0):
+        parts.append(f'<text x="{px(t)}" y="{size - pad + 16}" text-anchor="middle">{t:g}</text>')
+        parts.append(f'<text x="{pad - 6}" y="{float(py(t)) + 4:.1f}" '
+                     f'text-anchor="end">{t:g}</text>')
+    parts.append(f'<line class=diag x1="{px(0)}" y1="{py(0)}" x2="{px(1)}" y2="{py(1)}"/>')
+    for p, e, n in pts:
+        rad = 3.0 + 9.0 * (n / nmax) ** 0.5
+        parts.append(f'<circle class=pt cx="{px(p)}" cy="{py(e)}" r="{rad:.1f}">'
+                     f'<title>predicted {p:.3f}, observed {e:.3f}, n = {n}</title></circle>')
+    parts.append(f'<text x="{size / 2:.0f}" y="{size - 6}" text-anchor="middle">'
+                 f'predicted probability (bin mean)</text>')
+    parts.append(f'<text x="12" y="{size / 2:.0f}" text-anchor="middle" '
+                 f'transform="rotate(-90 12 {size / 2:.0f})">observed frequency</text>')
+    parts.append("</svg>")
+    return ("<div class=meta>Reliability diagram: points on the dashed diagonal are "
+            "perfectly calibrated; marker size scales with bin count n.</div>"
+            + "".join(parts))
+
+
 def _coverage_section(doc: _Doc, r) -> None:
     cov = coverage_of(r)
     doc.add("<h2>Coverage — generated, not written</h2>"
@@ -341,10 +428,13 @@ def _coverage_section(doc: _Doc, r) -> None:
                 + "</div>")
     cal = getattr(r, "calibration", None)
     doc.add("<div class=note>" + (
-        f"Calibration: {_e(cal['method'])}, Brier {_e(cal['brier'])}; excluded detectors "
-        f"{_e(', '.join(cal['excluded_detectors']) or 'none')}." if cal else
+        f"Calibration: {_e(cal.get('method', 'unknown'))}, Brier {_e(_brier(cal))}; "
+        f"excluded detectors {_e(', '.join(cal.get('excluded_detectors') or []) or 'none')}."
+        if cal else
         "Calibration: not applied. No labelled benchmark was supplied, so every confidence "
         "shown is the detector's own and has not been checked against outcomes.") + "</div>")
+    if cal:
+        doc.add(_reliability_svg(cal.get("reliability_bins") or []))
     doc.add("<h3 style='margin-top:20px'>Standing limitations</h3><ul class=lim>"
             + "".join(f"<li>{_e(s)}</li>"
                       for s in standing_limitations(getattr(r, "target", None) or {}))
@@ -370,6 +460,10 @@ def _reproduction_section(doc: _Doc, r, command: str | None) -> None:
             + "</ul>")
 
 
+def _caps_of(r) -> dict[str, int]:
+    return {**DEFAULT_CAPS, **((getattr(r, "profile", None) or {}).get("evidence") or {})}
+
+
 def render(results, out_path: Path, title: str = "CV Assurance — Module B",
            evidence_root: Path | None = None, command: str | None = None) -> Path:
     """Evidence is resolved against `evidence_root` — the shared `<out>/evidence/` store —
@@ -378,15 +472,16 @@ def render(results, out_path: Path, title: str = "CV Assurance — Module B",
     root = evidence_root if evidence_root is not None else out_path.parent / "evidence"
     if not isinstance(results, list):
         results = [results]
-    caps = {**DEFAULT_CAPS, **((getattr(results[0], "profile", None) or {}).get("evidence")
-                               or {})} if results else dict(DEFAULT_CAPS)
+    # One page holds every result, so the tightest tier among them sets the byte budget.
+    budget = min((_caps_of(r)["max_report_bytes"] for r in results),
+                 default=DEFAULT_CAPS["max_report_bytes"])
 
-    doc = _Doc(caps["max_report_bytes"])
+    doc = _Doc(budget)
     doc.add(f"<!doctype html><meta charset=utf-8><title>{_e(title)}</title>"
             f"<style>{CSS}</style><div class=wrap><h1>{_e(title)}</h1>")
 
     for r in results:
-        r_caps = {**DEFAULT_CAPS, **((getattr(r, "profile", None) or {}).get("evidence") or {})}
+        r_caps = _caps_of(r)
         doc.add(f'<div class="sub">model <code>{_e(r.model_id)}</code> · '
                 f'format <code>{_e(r.model_fmt)}</code> · scan <code>{_e(r.scan_id)}</code></div>')
         _verdict_section(doc, r)

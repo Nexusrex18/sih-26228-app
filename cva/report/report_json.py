@@ -50,7 +50,7 @@ def build(result, command: str | None = None) -> dict:
         # Empty / null means "not computed", never "nothing found".
         "contributor_risk": list(getattr(result, "contributor_risk", None) or []),
         "permutation_test": getattr(result, "permutation_test", None),
-        "provenance_summary": None,
+        "provenance_summary": provenance_summary_of(result),
         "drift_summary": None,
         "calibration": getattr(result, "calibration", None),
         "coverage": {**coverage_of(result),
@@ -68,6 +68,25 @@ def access_assumptions_of(result) -> dict[str, Any]:
               for c in Capability if c not in result.capabilities]
     return {"capabilities_present": present, "capabilities_absent": absent,
             "consequence": consequence(result.plan)}
+
+
+def provenance_summary_of(result) -> dict[str, Any] | None:
+    """The always-present provenance section (plan §7.9): state only what is TRUE.
+
+    No INFERENCE_LEDGER means nothing was verified and no anchor was checked, so 0 and 0
+    are facts. With a ledger supplied this build still computes nothing, so those counts,
+    the unwitnessed window, custody type and durability window stay absent (unknown, not
+    zero). `ledger_state` is `not_sealed` only when no signing key exists; with a key the
+    scan record is appended AFTER this file is hashed, so its state (and seq) is not knowable
+    here and must not be written into report.json. Returns None when nothing is known.
+    """
+    out: dict[str, Any] = {}
+    if Capability.INFERENCE_LEDGER not in result.capabilities:
+        out["records_verified"] = 0
+        out["anchors_checked"] = 0
+    if Capability.SIGNING_KEY not in result.capabilities:
+        out["ledger_state"] = "not_sealed"
+    return out or None
 
 
 def reproduction_of(result, command: str | None = None) -> dict[str, Any]:
@@ -100,10 +119,21 @@ def standing_limitations(target: dict[str, Any]) -> list[str]:
     from cva.loaders.safety import S3_SANDBOX_LIMITATION  # lazy: keeps the report import light
     out = [*STANDING_LIMITATIONS, str(S3_SANDBOX_LIMITATION)]
     if "model_format" in target and "model_sha256" not in target:
-        out.append(
-            "No weight digest could be computed for this model artefact (a frozen "
-            "TorchScript archive exposes none): weight-substitution detection is degraded "
-            "and no model_sha256 is recorded.")
+        fmt = str(target["model_format"])
+        if fmt == "torchscript":
+            out.append(
+                "No weight digest could be computed for this model artefact (a frozen "
+                "TorchScript archive exposes none): weight-substitution detection is "
+                "degraded and no model_sha256 is recorded.")
+        elif fmt in ("callable", "http", "subprocess"):
+            out.append(
+                "This model is query-only (black-box) and exposes no weights, so no weight "
+                "digest exists and no model_sha256 is recorded: substitution detection "
+                "needs a registered manifest plus the behavioural fingerprint.")
+        else:
+            out.append(
+                "No weight digest could be computed for this model artefact, so no "
+                "model_sha256 is recorded and weight-substitution detection is degraded.")
     return out
 
 
