@@ -77,13 +77,20 @@ def test_still_detects_at_six_classes(tmp_path):
     assert [f.target_ref for f in fs] == ["A"]
 
 
-def test_a_poisoned_peer_cannot_hide_a_second_poisoned_contributor(clean):
-    """Cohort contamination: with A AND B both mislabelling the same pair, pooled cohort statistics
-    would normalise it. Each must still be judged against the WORST single peer... which is the other
-    poisoned one — so with two poisoned of four, both stay visible only if the clean peers anchor it."""
+def test_KNOWN_LIMITATION_two_contributors_sharing_a_mislabelling_mask_each_other(clean):
+    """PINNED, not celebrated. Each contributor must beat the WORST peer, so when A and B apply the
+    SAME wrong mapping each is the other's worst peer and NEITHER is flagged (a lone poisoned
+    contributor IS found — test_consistent_class_pair_is_found_at_contributor_level). A collusion /
+    shared-SOP case therefore evades this detector. Asserted exactly so that fixing it (e.g. a
+    median-of-peers gate) makes this test fail and forces the limitation text to be revisited."""
     bad, _ = flip_labels(clean, seed=61, flip_rate=0.9, mode="class_pair", target_contributor="A", class_pair=(0, 1))
     bad, _ = flip_labels(bad, seed=62, flip_rate=0.9, mode="class_pair", target_contributor="B", class_pair=(0, 1))
     refs = {f.target_ref for f in detect(SystematicMislabel, bad, stub_embeddings(bad))}
-    # documented limitation, asserted honestly: with a poisoned peer the worst-peer gate can suppress
-    # the second poisoned contributor; what MUST hold is that clean contributors are never accused.
-    assert refs <= {"A", "B"}
+    assert refs == set(), f"behaviour changed: now flags {sorted(refs)} — update the limitation text"
+    assert not refs & {"C", "D"}                     # and the clean contributors are never accused
+
+
+def test_the_masking_limitation_is_stamped_on_the_finding(clean):
+    bad, _ = flip_labels(clean, seed=51, flip_rate=0.9, mode="class_pair", target_contributor="A", class_pair=(0, 1))
+    f = detect(SystematicMislabel, bad, stub_embeddings(bad))[0]
+    assert any("SAME wrong mapping" in l and "neither is flagged" in l for l in f.limitations)

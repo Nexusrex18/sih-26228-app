@@ -24,7 +24,9 @@ normalises it; the contributed model is not consulted (circularity, ADR-009).
 Multiplicity policy: one hypothesis test per (contributor, declared class, read-as class) cell;
 family-wise Bonferroni correction over all such cells; two-sample Fisher test against the pooled
 peers (the cohort rate is estimated, not known); and a cell must also exceed the WORST single peer
-by ``gap_min``, so a poisoned peer cannot hide inside the pooled cohort.
+by ``gap_min``, so a poisoned peer cannot pull the yardstick toward itself. The price: two
+contributors sharing the SAME mapping each become the other's worst peer, and neither is flagged
+(pinned by a test; a median-of-peers gate would trade this for less protection with few peers).
 """
 from __future__ import annotations
 
@@ -158,7 +160,9 @@ class SystematicMislabel:
                                     f"embeddings: {embeddings.extractor_id}@{embeddings.extractor_version}",
                                     "probe trained leaving this contributor out; contributed model NOT used"],
                 limitations=["Depends on a proxy classifier: a class it cannot separate cannot be judged.",
-                             "If most contributors share the mapping the cohort normalises it.",
+                             "If most contributors share the mapping the cohort normalises it. Worse, each "
+                             "contributor must beat the WORST peer: if two contributors apply the SAME wrong "
+                             "mapping, each is the other's worst peer and neither is flagged.",
                              "A bad SOP and a deliberate steer are indistinguishable from this table.",
                              "An image's label is its dominant category; multi-object images are approximated.",
                              f"Bonferroni-corrected over {family} (contributor, class, class) tests: power "

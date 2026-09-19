@@ -34,8 +34,9 @@
 ``data.ood``  (attack_class ``out_of_distribution``, nature ``quality``)
     requires DATASET_IMAGES, REFERENCE_CLEAN_SET. Mean cosine distance to the k nearest
     reference embeddings, thresholded at the reference set's own leave-one-out distribution.
-    ``Detector.detect()`` cannot receive the reference set, so it is constructor-injected
-    (``reference_set`` + ``reference_embeddings``) — a contract question logged for Backend.
+    The reference set cannot travel through ``detect()``'s arguments, so it arrives as
+    ``ctx.profile["reference_embeddings"]`` (an ``(M, d)`` array in the embedding space) — see the
+    ``OutOfDistribution`` docstring and the module README for why ``ctx.probes_x`` cannot serve.
 """
 from __future__ import annotations
 
@@ -169,7 +170,9 @@ def spectral_flags(F: np.ndarray, z_thr: float) -> tuple[np.ndarray, np.ndarray]
     """ART's spectral-signature scores on one class's centred activations -> (flags, robust z)."""
     from art.defences.detector.poison import SpectralSignatureDefense
 
-    sc = SpectralSignatureDefense.spectral_signature_scores(F - F.mean(axis=0))
+    # ART returns a 2-D column; flatten so per-sample scores are scalars (z[j] used to raise
+    # TypeError the first time a sample was ever flagged)
+    sc = np.asarray(SpectralSignatureDefense.spectral_signature_scores(F - F.mean(axis=0))).reshape(-1)
     med = np.median(sc)
     z = (sc - med) / (1.4826 * np.median(np.abs(sc - med)) + 1e-12)
     return z >= z_thr, z
@@ -207,16 +210,22 @@ class TriggerArtifact:
     requires = {Capability.DATASET_IMAGES}
     optional = {Capability.MODEL_ACTIVATIONS, Capability.MODEL_PREDICT}
     attack_classes = {TRIGGER_INJECTION}
-    _layer_used = None
-    _by_block: dict = {}
+
+    def __init__(self):
+        # Per-scan state, reset by detect(). Instance attributes on purpose: a class-level dict is
+        # shared by every instance.
+        self.p = Params(DEFAULTS)
+        self.ev = EvidenceStore(None)
+        self.ctx = CheckContext()
+        self.candidates = None
+        self._layer_used = None
+        self._by_block: dict = {}
+        self._ran: set[str] = set()
 
     def _has(self, model, cap: Capability) -> bool:
-        if model is None:
-            return False
-        try:
-            return cap in model.capabilities()
-        except Exception:
-            return False
+        """A model whose ``capabilities()`` RAISES is a defect, not an absent capability: let it
+        surface (the orchestrator reports ERROR) instead of turning it into a quiet "not run"."""
+        return model is not None and cap in model.capabilities()
 
     def detect(self, dataset: Dataset, embeddings, model, ctx: CheckContext | None = None) -> list:
         self.p = Params.from_ctx(self.id, DEFAULTS, ctx)
@@ -225,6 +234,8 @@ class TriggerArtifact:
         cs = self.p["candidate_samples"]
         self.candidates = list(cs) if cs else None
         self._layer_used = None
+        self._by_block = {}
+        self._ran = set()
         return finalise(self._detect(dataset, embeddings, model), ctx)
 
     def _detect(self, dataset: Dataset, embeddings, model) -> list:
@@ -241,6 +252,8 @@ class TriggerArtifact:
                 return [not_performed(self.id, self.version, self.attack_classes, notes[0]
                                       + ", and no model was supplied for the model-based methods")]
         fr = frequency_residue(dataset, p)
+        if len(dataset) >= p["min_baseline"]:
+            self._ran.add("frequency_residue")
         self._by_block = {sid: v["block"] for sid, v in fr.items()}
         for sid, v in fr.items():
             rec[sid].append({"method": "frequency_residue", "raw": v["z"], "thr": p["z_thr"], **v})
@@ -254,6 +267,11 @@ class TriggerArtifact:
         else:
             notes.append("spectral signatures / activation clustering not run: MODEL_ACTIVATIONS absent")
 
+        if not self._ran:
+            # No sub-method had the data or the capability to run. [] would read as "checked, nothing
+            # wrong" — say what was missing instead.
+            return [not_performed(self.id, self.version, self.attack_classes,
+                                  "no sub-method could run: " + "; ".join(notes or ["nothing to test"]))]
         return [self._finding(dataset, sid, ms, notes, grid, embeddings) for sid, ms in sorted(rec.items())]
 
     # ---- (d)
@@ -268,6 +286,9 @@ class TriggerArtifact:
             if region is not None:
                 have = set(groups[region])                        # NOT the list being appended to
                 groups[region].extend(x for x in self.candidates if x not in have)
+        if not groups:
+            notes.append("patch saliency had no region to test (no frequency-residue group and no "
+                         "candidate_samples)")
         for region, ids in groups.items():
             ids = sorted(ids)[: p["max_group_samples"]]
             try:
@@ -277,6 +298,7 @@ class TriggerArtifact:
                 notes.append(f"patch saliency failed on region {region}: {type(e).__name__}: {e}")
                 continue
             res["region"] = region
+            self._ran.add("patch_saliency")
             if (res["flip_rate"] >= p["flip_min"] and res["flip_rate"] - res["control_flip_rate"] >= p["flip_gap_min"]
                     and res["base_class_share"] >= p["target_conc_min"]):
                 for i in ids:
@@ -332,12 +354,17 @@ class TriggerArtifact:
             idx = np.nonzero(y == cls)[0]
             F = acts[idx]
             if len(idx) >= p["ss_min_class"]:
+                self._ran.add("spectral_signature")
                 flags, z = spectral_flags(F, p["ss_z"])
                 for j in np.nonzero(flags)[0]:
                     rec[keep[idx[j]][0].sample_id].append(
                         {"method": "spectral_signature", "raw": float(z[j]), "thr": p["ss_z"], "class": int(cls)})
             if len(idx) >= p["ac_min_class"]:
-                flags, info = cluster_flags(F, p["ac_size_max"], p["ac_silhouette_min"], p["ac_dims"], p["seed"])
+                self._ran.add("activation_clustering")
+                # seed from ctx.rng_seed like every other random draw — passing p["seed"] (None by
+                # default) straight through seeded from OS entropy: a different silhouette per scan
+                flags, info = cluster_flags(F, p["ac_size_max"], p["ac_silhouette_min"], p["ac_dims"],
+                                            seed_of(p, self.ctx))
                 for j in np.nonzero(flags)[0]:
                     rec[keep[idx[j]][0].sample_id].append(
                         {"method": "activation_clustering", "raw": info["silhouette"],
