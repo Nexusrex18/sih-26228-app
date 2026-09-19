@@ -258,17 +258,6 @@ def test_tiny_dataset_WITH_a_model_is_reported_not_silently_empty(clean):
     assert "no sub-method could run" in fs[0].reason and "baseline" in fs[0].reason
 
 
-def test_a_model_whose_capabilities_raise_is_an_error_not_a_quiet_skip(clean):
-    """Defects must surface (the orchestrator turns a raise into ERROR); a blanket except that turned
-    them into 'capability absent' once hid a NameError in a test fixture."""
-    class Broken:
-        model_id, fmt, num_classes, input_shape = "broken", "callable", 4, (3, 64, 64)
-        def capabilities(self):
-            raise RuntimeError("probe blew up")
-    with pytest.raises(RuntimeError, match="probe blew up"):
-        detect(TriggerArtifact, clean, None, Broken())
-
-
 def test_per_scan_state_is_per_instance_not_shared(clean):
     a, b = TriggerArtifact(), TriggerArtifact()
     assert a._by_block is not b._by_block and a._ran is not b._ran

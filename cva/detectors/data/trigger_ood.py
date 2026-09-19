@@ -46,7 +46,7 @@ from typing import Any
 
 import numpy as np
 
-from cva.core.capability import Capability
+from cva.core.capability import Availability, Capability
 from cva.core.types import Nature, Severity
 
 from ._stub_types import Dataset, EmbeddingIndex
@@ -224,11 +224,23 @@ class TriggerArtifact:
         self._layer_used = None
         self._by_block: dict = {}
         self._ran: set[str] = set()
+        self._problems: list[str] = []      # model-side / configuration faults, reported not raised
+
+    def _note_problem(self, text: str) -> None:
+        if text not in self._problems:
+            self._problems.append(text)
 
     def _has(self, model, cap: Capability) -> bool:
-        """A model whose ``capabilities()`` RAISES is a defect, not an absent capability: let it
-        surface (the orchestrator reports ERROR) instead of turning it into a quiet "not run"."""
-        return model is not None and cap in model.capabilities()
+        """A model whose ``capabilities()`` fails is another module's defect (a loader/adapter). This
+        detector does not crash on it and does not treat it as a quiet 'absent': it records the fault,
+        skips the model-based methods, and reports it as a degraded finding."""
+        if model is None:
+            return False
+        try:
+            return cap in model.capabilities()
+        except Exception as e:
+            self._note_problem(f"model.capabilities() failed: {type(e).__name__}: {e}")
+            return False
 
     def detect(self, dataset: Dataset, embeddings, model, ctx: CheckContext | None = None) -> list:
         self.p = Params.from_ctx(self.id, DEFAULTS, ctx)
@@ -239,6 +251,7 @@ class TriggerArtifact:
         self._layer_used = None
         self._by_block = {}
         self._ran = set()
+        self._problems = []
         return finalise(self._detect(dataset, embeddings, model), ctx)
 
     def _detect(self, dataset: Dataset, embeddings, model) -> list:
@@ -270,12 +283,19 @@ class TriggerArtifact:
         else:
             notes.append("spectral signatures / activation clustering not run: MODEL_ACTIVATIONS absent")
 
+        notes.extend(x for x in self._problems if x not in notes)
         if not self._ran:
             # No sub-method had the data or the capability to run. [] would read as "checked, nothing
             # wrong" — say what was missing instead.
             return [not_performed(self.id, self.version, self.attack_classes,
                                   "no sub-method could run: " + "; ".join(notes or ["nothing to test"]))]
-        return [self._finding(dataset, sid, ms, notes, grid, embeddings) for sid, ms in sorted(rec.items())]
+        out = [self._finding(dataset, sid, ms, notes, grid, embeddings) for sid, ms in sorted(rec.items())]
+        if self._problems:
+            out.append(not_performed(
+                self.id, self.version, self.attack_classes,
+                "some model-based sub-methods did not complete: " + "; ".join(self._problems),
+                Availability.DEGRADED))
+        return out
 
     # ---- (d)
     def _saliency(self, dataset, model, fr, rec, notes, grid):
@@ -296,9 +316,13 @@ class TriggerArtifact:
             ids = sorted(ids)[: p["max_group_samples"]]
             try:
                 X = np.stack([to_model_input(sample_by_id(dataset, i), model.input_shape) for i in ids])
-                res = occlusion_test(model, X, region, grid, _control_regions(region, grid, p["control_regions"], seed_of(p, self.ctx)))
-            except Exception as e:                                       # a bad model output is not a crash
-                notes.append(f"patch saliency failed on region {region}: {type(e).__name__}: {e}")
+                res = occlusion_test(model, X, region, grid,
+                                     _control_regions(region, grid, p["control_regions"], seed_of(p, self.ctx)))
+            except Exception as e:
+                # A model that cannot be queried is another module's problem: record it (it becomes a
+                # visible degraded finding) and carry on with the other sub-methods.
+                self._note_problem(f"patch saliency could not query the model on region {region}: "
+                                   f"{type(e).__name__}: {e}")
                 continue
             res["region"] = region
             self._ran.add("patch_saliency")
@@ -313,18 +337,22 @@ class TriggerArtifact:
     def _sweep(self, dataset, model, grid):
         p, w = self.p, self.p["sweep_window_cells"]
         votes: Counter = Counter()
-        for sid in self.candidates[: p["sweep_max_candidates"]]:
-            x = to_model_input(sample_by_id(dataset, sid), model.input_shape)[None]
-            base = model.predict(x)[0]
-            b = int(base.argmax())
-            best, best_drop = None, 0.0
-            for r in range(grid - w + 1):
-                for c in range(grid - w + 1):
-                    pr = model.predict(_occlude(x, (r, c, r + w, c + w), grid))[0]
-                    if int(pr.argmax()) != b and base[b] - pr[b] > best_drop:
-                        best, best_drop = (r, c, r + w, c + w), float(base[b] - pr[b])
-            if best:
-                votes[best] += 1
+        try:
+            for sid in self.candidates[: p["sweep_max_candidates"]]:
+                x = to_model_input(sample_by_id(dataset, sid), model.input_shape)[None]
+                base = model.predict(x)[0]
+                b = int(base.argmax())
+                best, best_drop = None, 0.0
+                for r in range(grid - w + 1):
+                    for c in range(grid - w + 1):
+                        pr = model.predict(_occlude(x, (r, c, r + w, c + w), grid))[0]
+                        if int(pr.argmax()) != b and base[b] - pr[b] > best_drop:
+                            best, best_drop = (r, c, r + w, c + w), float(base[b] - pr[b])
+                if best:
+                    votes[best] += 1
+        except Exception as e:
+            self._note_problem(f"patch-saliency sweep could not query the model: {type(e).__name__}: {e}")
+            return None
         return votes.most_common(1)[0][0] if votes else None
 
     # ---- (b)/(c)
@@ -342,13 +370,16 @@ class TriggerArtifact:
             Xb = np.stack([to_model_input(s, model.input_shape) for s, _ in keep[i:i + 64]])
             a = model.activations(Xb)
             if not a:
-                notes.append("activations not extractable: spectral/clustering not run")
+                # The capability set said MODEL_ACTIVATIONS is present but the adapter returned nothing:
+                # that is the adapter's inconsistency, not ours. Record it; do not crash.
+                self._note_problem("the model declares MODEL_ACTIVATIONS but activations() returned nothing")
                 return
             if layer is None:
                 names = list(a.keys())
                 layer = p["activation_layer"] or (names[-2] if len(names) >= 2 else names[-1])
                 if layer not in a:
-                    notes.append(f"activation layer {layer!r} not in the model's activations {names}")
+                    self._note_problem(f"activation_layer {layer!r} is not one of the model's "
+                                       f"activations {names}")
                     return
                 self._layer_used = layer
             chunks.append(np.asarray(a[layer]).reshape(len(Xb), -1))

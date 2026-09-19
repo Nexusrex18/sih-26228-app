@@ -31,7 +31,7 @@ from typing import Any
 
 from PIL import Image
 
-from cva.core.capability import Capability
+from cva.core.capability import Availability, Capability
 from cva.core.types import Nature, Severity
 
 from ._stub_types import Dataset, Sample
@@ -69,7 +69,7 @@ _ENCODERS = ("pillow", "imagemagick", "ffmpeg", "libjpeg", "opencv", "gimp")
 
 
 def _meta(s: Sample) -> dict[str, Any]:
-    out: dict[str, Any] = {"dims": (s.width, s.height), "mtime": None, "exif": False,
+    out: dict[str, Any] = {"dims": (s.width, s.height), "mtime": None, "exif": False, "unreadable": False,
                            "camera": None, "quant": None, "software": ""}
     try:
         out["mtime"] = os.stat(s.path).st_mtime
@@ -89,7 +89,9 @@ def _meta(s: Sample) -> dict[str, Any]:
                 out["quant"] = hashlib.sha1(repr(sorted((k, tuple(v)) for k, v in q.items())).encode()
                                             ).hexdigest()[:10]
     except Exception:
-        pass                                     # unreadable metadata == no signal, never a crash
+        # A file we cannot read contributes no signal and must not crash the scan — but it is COUNTED, so
+        # the count reaches the findings' limitations (and, if most files are unreadable, a not-performed).
+        out["unreadable"] = True
     return out
 
 
@@ -121,11 +123,17 @@ class MetadataAnomaly:
         self.p = Params.from_ctx(self.id, DEFAULTS, ctx)
         self.ev = EvidenceStore(as_ctx(ctx).out_dir)
         self.ctx = as_ctx(ctx)
+        self._unreadable = 0
         return finalise(self._detect(dataset, embeddings, model), ctx)
 
     def _detect(self, dataset: Dataset, embeddings, model) -> list:
         p = self.p
         meta = {s.sample_id: _meta(s) for s in dataset.samples}
+        self._unreadable = sum(m["unreadable"] for m in meta.values())
+        if 2 * self._unreadable > len(meta):
+            return [not_performed(self.id, self.version, self.attack_classes,
+                                  f"the metadata of {self._unreadable} of {len(meta)} files could not be read "
+                                  "(corrupt, truncated or unsupported images), so there is too little to compare")]
         groups: dict[tuple[str, str], list[Sample]] = {}
         for s in dataset.samples:
             if s.contributor is not None:
@@ -145,15 +153,26 @@ class MetadataAnomaly:
         cams_of = {k: {meta[m.sample_id]["camera"] for m in v if meta[m.sample_id]["camera"]}
                    for k, v in big.items()}
         findings = []
+        with_cohort = 0
         for (ttype, gid), members in sorted(big.items()):
             ids = {m.sample_id for m in members}
             cohort = [meta[s.sample_id] for s in dataset.samples if s.sample_id not in ids]
+            with_cohort += len(cohort) >= p["min_group"]
             g = [meta[m.sample_id] for m in members]
             peer_cams = [c for k, c in cams_of.items() if k != (ttype, gid)]
             sig = self._signals(g, cohort, peer_cams)
             if not sig:
                 continue
             findings.append(self._finding(dataset, ttype, gid, members, sig, len(cohort)))
+        if not findings and with_cohort == 0:
+            # One group and no cohort: every cohort-relative signal (EXIF, camera, quantisation table,
+            # size, timing) was structurally impossible and only the encoder-string check ran.
+            # [] would read as "checked, nothing wrong".
+            return [not_performed(
+                self.id, self.version, self.attack_classes,
+                f"no group has a cohort of at least {p['min_group']} other files to be compared with, so "
+                "only the encoder-string check could run (and found nothing); the cohort-relative signals "
+                "need at least two groups", Availability.DEGRADED)]
         return findings
 
     def _signals(self, g: list[dict], cohort: list[dict],
@@ -240,4 +259,6 @@ class MetadataAnomaly:
                 "carelessness and pipeline artefacts, NOT a motivated adversary.",
                 "Cohort-relative: a whole submission produced by one pipeline is not flagged.",
                 "Groups smaller than min_group are not assessed (and if NO group is large enough the "
-                "detector says so instead of returning nothing)."])
+                "detector says so instead of returning nothing).",
+                *([f"{self._unreadable} file(s) had unreadable metadata and contributed no signal."]
+                  if getattr(self, "_unreadable", 0) else [])])

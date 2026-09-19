@@ -93,6 +93,10 @@ class LabelConsistency:
                                   f"only {len(rows)} labelled samples with embeddings (< {2 * p['k']})")]
         ids = [s.sample_id for s, _ in rows]
         cats = sorted({d for _, d in rows})
+        if len(cats) < 2:
+            return [not_performed(self.id, self.version, self.attack_classes,
+                                  "only one class is present, so agreement with neighbours is vacuous "
+                                  "(every label trivially agrees with every other)")]
         y = np.array([cats.index(d) for _, d in rows])
         lab = dict(zip(ids, (d for _, d in rows), strict=False))
         X = embeddings.vectors(ids)

@@ -110,6 +110,12 @@ class SystematicMislabel:
         # positives per contributor by construction.
         family = sum(1 for c in contribs for a in classes
                      if counts[c][a] >= p["min_n"] and peers(c, a) for b in classes if b != a)
+        if family == 0:
+            biggest = max((counts[c][a] for c in contribs for a in classes), default=0)
+            return [not_performed(self.id, self.version, self.attack_classes,
+                                  f"no (contributor, class) has at least {p['min_n']} images together with a "
+                                  f"peer to compare against ({len(contribs)} contributors, largest cell "
+                                  f"has {biggest} images)")]
         findings = []
         for c in contribs:
             cells = []

@@ -35,6 +35,10 @@ embedding backbone (see below).
 * **Never a silent skip.** Input a detector cannot test (too few files, no cohort, no peers, no
   embeddings/reference) yields a `not_performed` finding naming what was missing — never `[]`, which
   would read as "checked, nothing wrong". `[]` means the check ran and found nothing.
+* **Other modules' faults are reported, never raised.** A model adapter that misreports its capabilities or
+  cannot be queried, or a bad setting, does not crash Module A and is not swallowed: it is recorded and
+  surfaced as a `DEGRADED` finding while the rest of the detector still runs. Unreadable files are counted
+  and disclosed on findings (and, if most are unreadable, reported as `not_performed`).
 * Findings that name a contributor state the resolution tier; `exif_cluster` reads as `HYPOTHESIS`.
 
 Run: `pip install -e '.[data]'` then `python -m pytest tests/detectors/data`.
