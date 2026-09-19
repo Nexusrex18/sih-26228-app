@@ -25,6 +25,10 @@
       "items": { "type": "string" },
       "description": "null = every registered check. An explicit list is how a budget tier excludes; the excluded checks still appear in the plan and the coverage statement, stating why."
     },
+    "except_checks": {
+      "type": "array", "items": { "type": "string" },
+      "description": "A tier that means 'every registered check except these'. Resolved against the registry at plan time, so the tier cannot drift from it: a hand-typed inclusion list named ids that were not in the registry and made real checks read as budget-excluded."
+    },
     "disabled_checks": {
       "type": "array", "items": { "type": "string" },
       "description": "The blackbox policy's mechanism: white-box detectors disabled UP FRONT, so the report says 'not asked to' rather than 'could not' — two different facts about the scan."
@@ -33,6 +37,12 @@
     "embedding_max_images": {
       "type": "integer", "minimum": 0,
       "description": "Largest dataset the tier will embed. 0 = the backbone is never loaded. Derived from the measured CPU img/s at B4 times the tier's time budget; a larger dataset is reported as not embedded with this reason, never silently subsampled."
+    },
+
+    "estimated_cost": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "check_id -> what lifting a budget exclusion would cost at THIS dataset's size. Filled by the orchestrator from the measured CPU throughput; printed beside the exclusion, never used to decide anything."
     },
 
     "cost_ceiling_s": {

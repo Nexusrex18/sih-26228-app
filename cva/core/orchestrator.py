@@ -22,7 +22,7 @@ from cva.core.access_block import render_access_block
 from cva.core.capability import Availability, CapabilitySet, Resolution, budget_excluded
 from cva.core.context import CheckContext
 from cva.core.ledger import scan_record
-from cva.core.profile import POLICIES, PROFILES, TIERS
+from cva.core.profile import CALIBRATION, EMBED_IMG_PER_S, POLICIES, PROFILES, TIERS
 from cva.core.registry import DETECTOR_REGISTRY, REGISTRY
 from cva.core.runcontext import RunContext
 from cva.core.scanid import (
@@ -33,6 +33,8 @@ from cva.core.scanid import (
     selftest_scan_id,
 )
 from cva.core.types import Disposition, Evidence, Finding, Severity
+from cva.risk.disposition import default_policy
+from cva.risk.engine import RiskOutcome, assess
 
 
 @dataclass
@@ -63,6 +65,10 @@ class ScanResult:
     profile: dict[str, Any] = field(default_factory=dict)
     seed: int = 0
     target: dict[str, Any] = field(default_factory=dict)
+    # Filled by the risk engine (B7); empty means "not computed", never "nothing found".
+    contributor_risk: list[dict[str, Any]] = field(default_factory=list)
+    permutation_test: dict[str, Any] | None = None
+    calibration: dict[str, Any] | None = None
 
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -73,6 +79,23 @@ def _created_at(prof: dict[str, Any]) -> str:
     if prof.get("pin_clock"):
         return SELFTEST_EPOCH.isoformat()
     return datetime.now(UTC).isoformat()
+
+
+def _estimated_costs(ctx: RunContext, registries: Registries | None) -> dict[str, str]:
+    """What a budget exclusion costs to lift, at THIS dataset's size.
+
+    The dominant cost of a `data.*` check is the shared embedding pass, so that is what is
+    priced: n images at the measured CPU throughput. It is an estimate of the pass, shared
+    across the data.* checks, not a per-check timing, and the string says so.
+    """
+    if ctx.dataset is None:
+        return {}
+    n = len(ctx.dataset.samples)
+    secs = n / EMBED_IMG_PER_S
+    span = f"{secs:.0f} s" if secs < 120 else f"{secs / 60:.1f} min"
+    cost = f"~{span} for the shared embedding pass over {n} images (CPU, {EMBED_IMG_PER_S} img/s)"
+    return {cid: cost for reg in (registries or default_registries()) for cid in reg
+            if cid.startswith("data.")}
 
 
 def _target_of(model: Any, ctx: RunContext) -> dict[str, Any]:
@@ -135,6 +158,7 @@ def build_plan(caps: CapabilitySet, prof: dict[str, Any], profile_name: str,
     minute zero. Budget exclusion is a SECOND axis, not a fifth Availability state."""
     registries = default_registries() if registries is None else registries
     enabled = prof.get("checks")
+    except_checks = set(prof.get("except_checks") or ())
     disabled = set(prof.get("disabled_checks") or ())
     rows: list[PlanRow] = []
     for reg in registries:
@@ -156,7 +180,7 @@ def build_plan(caps: CapabilitySet, prof: dict[str, Any], profile_name: str,
                 # reported for checks that would otherwise have been runnable.
                 if res.state is Availability.UNAVAILABLE:
                     rows.append(PlanRow(cid, res, classes))
-                elif enabled is not None and cid not in enabled:
+                elif (enabled is not None and cid not in enabled) or cid in except_checks:
                     rows.append(PlanRow(cid, budget_excluded(
                         prof.get("budget_tier", profile_name),
                         prof.get("estimated_cost", {}).get(cid)), classes))
@@ -200,6 +224,10 @@ def resolve_profile(profile_name: str, budget_tier: str | None = None) -> dict[s
     prof: dict[str, Any] = dict(TIERS[tier_name])
     prof.update(policy)
     prof["budget_tier"] = tier_name
+    # The disposition table and calibration policy live in the profile (plan §7.9), so an
+    # organisation changes them without touching code. A caller's own block wins.
+    prof.setdefault("disposition", default_policy())
+    prof.setdefault("calibration", dict(CALIBRATION))
     if policy.get("disabled_checks") and prof.get("checks") is None:
         prof["checks"] = None      # resolved against the registry in build_plan
     return prof
@@ -211,6 +239,7 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
          budget_tier: str | None = None) -> ScanResult:
     prof: dict[str, Any] = resolve_profile(profile_name, budget_tier)
     prof.update(ctx.profile)
+    prof.setdefault("estimated_cost", _estimated_costs(ctx, registries))
 
     # Keyed on the PROFILE'S OWN FLAG, not on `profile_name == "selftest"`. The string
     # compare works today only because `selftest` happens to be the one profile that sets
@@ -312,11 +341,13 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
     if ctx.out_dir is not None:
         materialise_evidence(findings, EvidenceStore(ctx.out_dir))
 
+    risk: RiskOutcome = assess(findings, ctx.dataset, prof, ctx.seed, ctx.calibration)
     result = ScanResult(scan_id, model_id, getattr(model, "fmt", "-"), caps, plan,
                         findings, timings,
-                        _verdict(findings), profile_name, phash, ctx.code_commit, access,
+                        _verdict(findings, risk), profile_name, phash, ctx.code_commit, access,
                         created_at_utc=_created_at(prof), profile=prof, seed=ctx.seed,
-                        target=_target_of(model, ctx))
+                        target=_target_of(model, ctx), contributor_risk=risk.contributor_risk,
+                        permutation_test=risk.permutation_test, calibration=risk.calibration)
     result.ledger_seq = append_scan_record(result, ctx)
     return result
 
@@ -388,9 +419,11 @@ def _plan_finding(row: PlanRow, scan_id: str, model_id: str, profile: str) -> Fi
         availability=row.resolution.state)
 
 
-def _verdict(findings: list[Finding]) -> str:
+def _verdict(findings: list[Finding], risk: RiskOutcome | None = None) -> str:
     real = [f for f in findings if f.availability in (Availability.OK, Availability.DEGRADED)]
-    if any(f.disposition == Disposition.QUARANTINE for f in real):
+    # D4: a contributor whose posterior clears the cohort is a QUARANTINE of the contribution.
+    if any(f.disposition == Disposition.QUARANTINE for f in real) or (
+            risk is not None and risk.quarantined_contributors):
         return "QUARANTINE"
     if any(f.disposition == Disposition.REVIEW and f.severity.rank >= Severity.MEDIUM.rank
            for f in real):

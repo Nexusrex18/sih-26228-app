@@ -230,6 +230,10 @@ def _contributor_section(doc: _Doc, r) -> None:
                 f"<td>{c['posterior_mean']:.3f}</td>"
                 f"<td>{c['ci_low']:.3f}–{c['ci_high']:.3f}</td></tr>")
     doc.add("</table></div>")
+    perm = getattr(r, "permutation_test", None)
+    if perm:
+        doc.add(f"<div class=note>Permutation test ({perm['n_permutations']} permutations, "
+                f"p = {perm['p_value']:.4f}): {_e(perm['conclusion'])}</div>")
 
 
 def _findings_section(doc: _Doc, r, root: Path, caps: dict[str, int]) -> None:
@@ -335,6 +339,12 @@ def _coverage_section(doc: _Doc, r) -> None:
         doc.add("<div class=lim><b>Operational reports (not counted as coverage):</b> "
                 + ", ".join(f"<code>{_e(c)}</code>" for c in cov["operational_reports"])
                 + "</div>")
+    cal = getattr(r, "calibration", None)
+    doc.add("<div class=note>" + (
+        f"Calibration: {_e(cal['method'])}, Brier {_e(cal['brier'])}; excluded detectors "
+        f"{_e(', '.join(cal['excluded_detectors']) or 'none')}." if cal else
+        "Calibration: not applied. No labelled benchmark was supplied, so every confidence "
+        "shown is the detector's own and has not been checked against outcomes.") + "</div>")
     doc.add("<h3 style='margin-top:20px'>Standing limitations</h3><ul class=lim>"
             + "".join(f"<li>{_e(s)}</li>"
                       for s in standing_limitations(getattr(r, "target", None) or {}))

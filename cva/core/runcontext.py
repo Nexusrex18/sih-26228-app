@@ -41,6 +41,9 @@ class RunContext:
     inference_ledger: InferenceLedgerSource = field(default_factory=NullInferenceLedger)
     code_commit: str = "unknown"
     dataset: Any = None
+    # A fitted `CalibrationSet` from the benchmark, or None. A scan has no labels of its own,
+    # so with None the report says `calibration: null` rather than inventing a curve.
+    calibration: Any = None
 
     def capabilities(self) -> CapabilitySet:
         caps, notes = set(), []

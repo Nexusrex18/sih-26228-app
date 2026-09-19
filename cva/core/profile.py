@@ -26,14 +26,14 @@ TIERS: dict[str, dict[str, Any]] = {
                  "embedding_max_images": 0,
                  "evidence": {"max_images_per_finding": 2, "max_findings_rendered": 50,
                               "max_report_bytes": 5_000_000}},
-    "standard": {"checks": {"model.weight_digest", "model.graph_structure",
-                            "model.behavioural_fingerprint", "model.anomalous",
-                            "model.intrinsic_probes", "model.weight_statistics",
-                            "model.activation_statistics",
-                            "data.annotation_geometry", "data.duplicate_label_conflict",
-                            "data.label_consistency", "data.metadata_anomaly",
-                            "data.near_dup", "data.negative_space", "data.ood",
-                            "data.systematic_mislabel", "data.trigger_artifact"},
+    # standard = every registered check EXCEPT the expensive ones named here. It was a
+    # hand-typed inclusion list, which drifted: it named ids that are not in the registry
+    # (behavioural_fingerprint, weight_statistics, activation_statistics), so real checks read
+    # as budget-excluded. Walking the registry cannot drift (V17); `except_checks` is resolved
+    # against it in build_plan.
+    "standard": {"checks": None,
+                 "except_checks": {"model.neural_cleanse", "model.strip",
+                                   "model.universal_margin", "model.data_consistency"},
                  "embedding_max_images": 5000,
                  "evidence": {"max_images_per_finding": 4, "max_findings_rendered": 200,
                               "max_report_bytes": 15_000_000}},
@@ -60,6 +60,14 @@ POLICIES: dict[str, dict[str, Any]] = {
     "selftest": {"budget_tier": "standard", "nc_top_k": 1, "nc_steps": 10, "nes_steps": 10,
                  "scan_id_from_seed": True, "pin_clock": True, "egress_guard": True},
 }
+
+#: Measured DINOv2 ViT-S/14 CPU throughput (224 px, batch 16, 6 threads) — the same figure the
+#: tiers' `embedding_max_images` are derived from. Used to price a budget exclusion.
+EMBED_IMG_PER_S = 16.84
+
+#: Calibration defaults. `prov.*` is excluded always: a hash mismatch is arithmetic, not a belief.
+CALIBRATION: dict[str, Any] = {"method": "isotonic", "exclude_detector_prefixes": ["prov."],
+                               "min_points": 30}
 
 #: Legacy/back-compat: a bare tier name is a valid --profile.
 PROFILES: dict[str, dict[str, Any]] = {**TIERS, **POLICIES}

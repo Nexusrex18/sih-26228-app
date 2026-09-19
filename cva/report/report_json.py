@@ -47,12 +47,12 @@ def build(result, command: str | None = None) -> dict:
         "access_assumptions": access_assumptions_of(result),
         "plan": [_plan_row(r) for r in sorted(result.plan, key=lambda x: x.check_id)],
         "findings": [_finding(f) for f in result.findings],
-        # B7 fills the three below; until then they say "not computed", they do not vanish.
-        "contributor_risk": [],
-        "permutation_test": None,
+        # Empty / null means "not computed", never "nothing found".
+        "contributor_risk": list(getattr(result, "contributor_risk", None) or []),
+        "permutation_test": getattr(result, "permutation_test", None),
         "provenance_summary": None,
         "drift_summary": None,
-        "calibration": None,
+        "calibration": getattr(result, "calibration", None),
         "coverage": {**coverage_of(result),
                      "standing_limitations": standing_limitations(target)},
         "reproduction": reproduction_of(result, command),
@@ -157,10 +157,14 @@ def coverage_of(result) -> dict:
     """GENERATED, never written by hand — and it counts `attack` classes only."""
     from cva.core.taxonomy import CLAIMABLE
 
+    # A check that was planned to run and then RAISED did not assess anything: counting it
+    # as assessed would overstate coverage in exactly the case where the tool itself failed.
+    errored = {f.detector_id for f in result.findings if f.availability.value == "ERROR"}
     assessed: dict[str, list[str]] = {}
     not_assessed: dict[str, list[str]] = {}
     for row in result.plan:
-        tgt = assessed if row.resolution.runnable else not_assessed
+        ok = row.resolution.runnable and row.check_id not in errored
+        tgt = assessed if ok else not_assessed
         for ac in row.attack_classes:
             tgt.setdefault(ac, []).append(row.check_id)
 
