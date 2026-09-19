@@ -307,3 +307,122 @@ def test_the_c_core_also_refuses_an_override_without_a_justification_and_its_ana
     fold = fold_analyst_events(led.records())
     led.close()
     assert fold.clean and fold.findings[("S-1", "F-1")].approved == {seq: "lead.rao"}
+
+
+# --- review finding 1: a checkpoint that lands right after the event must not shift the seq we report -----------------------
+
+@pytest.mark.parametrize("every", [2, 3, 4])
+def test_the_daemon_reports_the_events_own_seq_when_a_checkpoint_follows_it_and_live_and_replayed_folds_agree(tmp_path, every):
+    key = provider(SEED_A)
+    led = SealedLedger.init_ledger(tmp_path / "l.db", key, {**MANIFEST, "checkpoint_every": every}, clock=clock(), rng=rng())
+    d = Ledgerd(led, Policy({UID: frozenset({"analyst_event", "scan_record"})}))
+    try:
+        scan = d.handle({"type": "scan_record", "body": SCAN}, UID)
+        assert scan["ok"]
+        ack = ok(d.handle({"type": "analyst_event", "body": analyst("acknowledge")}, UID))
+        ov = ok(d.handle({"type": "analyst_event", "body": override(ack)}, UID))
+        ap = ok(d.handle({"type": "analyst_event", "body": analyst("approve", actor="lead.rao", refs_seq=ov, expected_prev_seq=ov)}, UID))
+        records = list(led.records())
+        by_seq = {r["seq"]: r for r in records}
+        assert by_seq[scan["seq"]]["type"] == "scan_record"
+        for seq, action in ((ack, "acknowledge"), (ov, "override"), (ap, "approve")):
+            assert by_seq[seq]["type"] == "analyst_event" and by_seq[seq]["analyst"]["action"] == action, (every, seq)
+        assert any(r["type"] == "checkpoint" for r in records)             # the cadence really did fire
+        replayed = fold_analyst_events(records)
+        assert replayed.clean, [(v.code, v.seq) for v in replayed.violations]
+        live = d.fold
+        assert live.scans == replayed.scans == [scan["seq"]]
+        a, b = live.findings[("S-1", "F-1")], replayed.findings[("S-1", "F-1")]
+        assert (a.last_seq, a.timeline, a.overrides, a.approved) == (b.last_seq, b.timeline, b.overrides, b.approved)
+        # a restarted daemon (which replays the chain) agrees with the one that never stopped
+        d2 = Ledgerd(led, Policy({UID: frozenset({"analyst_event"})}))
+        again = d2.handle({"type": "analyst_event", "body": analyst("acknowledge", finding="F-7")}, UID)
+        assert again["ok"] and by_seq.get(again["seq"]) is None
+    finally:
+        led.close()
+
+
+# --- review finding 6: the daemon holds the signing key, so it must not be a resource sink -----------------------------------------
+
+def _connect(sock):
+    import socket as _s
+    c = _s.socket(_s.AF_UNIX)
+    c.settimeout(5)
+    c.connect(sock)
+    return c
+
+
+def test_an_endless_line_is_cut_off_with_an_error_and_the_daemon_keeps_serving(led, tmp_path):
+    from cva.provenance.seal.ledgerd import MAX_LINE
+    sock = str(tmp_path / "big.sock")
+    srv = serve(sock, Ledgerd(led, Policy({UID: frozenset({"analyst_event"})})))
+    try:
+        c = _connect(sock)
+        sent = 0
+        try:
+            while sent < MAX_LINE * 8:                                   # never a newline
+                c.sendall(b"x" * 4096)
+                sent += 4096
+        except OSError:
+            pass                                                         # the server hung up on us: exactly the point
+        reply = b""
+        try:
+            reply = c.recv(4096)
+        except OSError:
+            pass
+        assert b"request_too_large" in reply or sent < MAX_LINE * 8 + 1
+        c.close()
+        assert request(sock, {"type": "analyst_event", "body": analyst()})["ok"]        # still serving
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_connections_beyond_the_cap_are_told_busy_and_a_freed_slot_is_reusable(led, tmp_path):
+    sock = str(tmp_path / "cap.sock")
+    srv = serve(sock, Ledgerd(led, Policy({UID: frozenset({"analyst_event"})})), max_connections=2, idle_timeout=30)
+    try:
+        held = [_connect(sock), _connect(sock)]
+        held[0].sendall(b"{}\n")
+        assert b"bad_request" in held[0].recv(4096)                             # both slots are now occupied
+        import time
+        time.sleep(0.2)
+        third = _connect(sock)
+        assert b'"error":"busy"' in third.recv(4096)
+        third.close()
+        held[0].close()
+        time.sleep(0.3)                                                         # the slot is released when its thread ends
+        assert request(sock, {"type": "analyst_event", "body": analyst()})["ok"]
+        held[1].close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_an_idle_connection_is_dropped_after_the_timeout(led, tmp_path):
+    import time
+    sock = str(tmp_path / "idle.sock")
+    srv = serve(sock, Ledgerd(led, Policy({UID: frozenset({"analyst_event"})})), idle_timeout=0.3)
+    try:
+        c = _connect(sock)
+        time.sleep(0.8)
+        assert c.recv(10) == b""                                                # the server closed it
+        c.close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_the_socket_is_created_0660_and_the_processs_umask_is_restored(led, tmp_path):
+    before = os.umask(0o022)
+    os.umask(before)
+    sock = str(tmp_path / "mode.sock")
+    srv = serve(sock, Ledgerd(led, Policy({})))
+    try:
+        assert (os.stat(sock).st_mode & 0o777) == 0o660
+        now = os.umask(0o022)
+        os.umask(now)
+        assert now == before
+    finally:
+        srv.shutdown()
+        srv.server_close()

@@ -42,7 +42,8 @@ def test_the_plugin_declares_the_registry_fields_and_only_registered_classes():
     assert LedgerVerify.optional == {Capability.REFERENCE_MANIFEST}
     assert set(LedgerVerify.attack_classes) <= set(TAXONOMY)
     assert_taxonomy_ok()
-    assert PROV_CHECKS == {"prov.ledger_verify": LedgerVerify}
+    from cva.provenance.checks.recompute import Recompute
+    assert PROV_CHECKS == {"prov.ledger_verify": LedgerVerify, "prov.recompute": Recompute}
 
 
 def test_it_does_not_declare_a_signing_key_it_never_uses():
@@ -208,8 +209,26 @@ def test_anchors_flow_through_and_the_summary_reports_the_verified_window(tmp_pa
     s = summary(out)
     d = s.evidence[0].data
     assert d["anchors_verified"] == 1 and d["records_fixed_by_anchor"] == a["checkpoint"]["seq"] + 1
-    assert "records after the newest verified EXTERNAL anchor" in d["unwitnessed_window"]
-    assert any("1 external anchor(s) verified" in x for x in s.access_assumptions)
+    assert d["anchors_witnessed"] == 0 and d["anchor_custody"] == [
+        {"tree_size": a["checkpoint"]["seq"], "medium": "file", "cosigners": 0, "attestations": 0, "witnessed": False}]
+    assert "no cosignature or attestation backs it" in d["unwitnessed_window"]
+    assert any("1 anchor(s) consistent with the ledger, 0 of them backed" in x and "NOT established" in x for x in s.access_assumptions)
+
+
+def test_a_cosigned_and_attested_anchor_is_reported_as_witnessed_with_its_backers_counted(tmp_path):
+    from cva.provenance.seal.anchor import attest, cosign
+
+    from ._anchor_helpers import AnchorEnv
+    e = AnchorEnv(tmp_path)
+    for i in range(4):
+        e.seal(i)
+    a = attest(cosign(e.anchor(), e.witness), e.boundary, "2026-09-19T03:00:00.000000Z")
+    e.close()
+    s = summary(CHECK.verify(e.ledger_path, e.trust, scan_id="s", produced_by="t", anchors=[a]))
+    d = s.evidence[0].data
+    assert d["anchors_witnessed"] == 1 and d["anchor_custody"][0]["cosigners"] == 1 and d["anchor_custody"][0]["attestations"] == 1
+    assert "a witness cosigned or attested" in d["unwitnessed_window"]
+    assert any("1 of them backed by a witness" in x and "NOT established" not in x for x in s.access_assumptions)
 
 
 def test_truncation_against_an_anchor_quarantines_and_an_unusable_anchor_only_asks_for_review(tmp_path):

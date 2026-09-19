@@ -398,3 +398,30 @@ def test_the_rust_binding_builds_tests_and_its_ledger_verifies_in_python(cvseal,
     db = tmp_path / "rust.db"
     rep = verify_ledger(db, trust_root=_trust(db))
     assert rep.clean and rep.rotations == 1, rep.classes()
+
+
+# --- review finding 8: a signing seed must not have to live in argv ------------------------------------------------------------------
+
+def test_the_seed_can_come_from_a_file_or_the_environment_and_a_bare_argv_seed_is_warned_about(cvseal, tmp_path):
+    import os
+    man = json.dumps({"device_id": "s", "unit": "u", "profile_hash": "0" * 64, "checkpoint_every": 1000})
+    (tmp_path / "seed").write_text(seed_hex(SEED_A) + "\n")
+    quiet = run(cvseal, "init", tmp_path / "a.db", "@" + str(tmp_path / "seed"), man)
+    assert quiet.stderr == b""                                                     # no warning: nothing on the command line
+    r = subprocess.run([str(cvseal), "append", str(tmp_path / "a.db"), "env:CVSEAL_TEST_SEED", "scan_record",
+                        json.dumps({"scan": {"scan_id": "s", "report_sha256": "b" * 64, "profile_hash": "c" * 64,
+                                             "code_commit": "0" * 40, "finding_counts": {"info": 1}}})],
+                       capture_output=True, env={**os.environ, "CVSEAL_TEST_SEED": seed_hex(SEED_A)})
+    assert r.returncode == 0 and r.stderr == b""
+    bare = run(cvseal, "keyid", seed_hex(SEED_A))
+    assert b"visible in ps" in bare.stderr and bare.stdout.split()[0].decode() == provider(SEED_A).key_id
+
+
+@pytest.mark.parametrize("bad", ["A" * 64, "+" + "1" * 63, " " + "1" * 63, "1" * 63, "1" * 65, "0x" + "1" * 62, "g" * 64, ""])
+def test_a_malformed_seed_is_refused_not_forgiven(cvseal, bad):
+    assert run(cvseal, "keyid", bad, check=False).returncode != 0
+
+
+def test_a_missing_seed_file_or_variable_is_refused(cvseal, tmp_path):
+    assert run(cvseal, "keyid", "@" + str(tmp_path / "nope"), check=False).returncode != 0
+    assert run(cvseal, "keyid", "env:CVSEAL_DOES_NOT_EXIST", check=False).returncode != 0

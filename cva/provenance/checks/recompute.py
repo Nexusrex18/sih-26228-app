@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import secrets
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -60,7 +61,11 @@ LIMITATIONS = (
 )
 
 _SEVERITY = {"output_mismatch": ("critical", "indeterminate"), "boundary_flip": ("medium", "indeterminate"),
-             "input_swap": ("critical", "indeterminate"), "model_swap": ("critical", "indeterminate")}
+             "input_swap": ("critical", "indeterminate"),
+             # A scanner-side digest mismatch is two possible facts: the ledger names a model the auditor did not load
+             # (a routine model update on the scanner) or the record was altered — and the second is `prov.ledger_verify`'s
+             # to decide, from the ledger's own registrations. Here it only means "cannot re-derive with this model".
+             "model_swap": ("medium", "indeterminate")}
 
 
 @dataclass
@@ -94,7 +99,7 @@ class Recompute:
 
     def recompute(self, source: Any, trust_root: TrustRoot | str, *, model: Any, pipeline: Pipeline,
                   input_resolver: Callable[[Mapping[str, Any]], bytes | None],
-                  scope: str = "flagged+sample", sample: int = 50, seed: int = 0,
+                  scope: str = "flagged+sample", sample: int = 50, seed: int | None = None,
                   payloads: Mapping[str, bytes] | None = None, weights_digest: str | None = None,
                   eps_conf: float = DEFAULT_EPS_CONF, eps_px: float = DEFAULT_EPS_PX, eps_iou: float = DEFAULT_EPS_IOU,
                   on_nonfinite: str = "seal_marker", scan_id: str = "", produced_by: str = "") -> list[Finding]:
@@ -107,6 +112,8 @@ class Recompute:
             flagged = {f.seq for f in report.findings if f.severity != "info" and f.seq is not None}
             priority = sorted(s for s in records if s in flagged)
             rest = sorted(s for s in records if s not in flagged)
+            if seed is None:
+                seed = secrets.randbits(63)          # unpredictable by default: a fixed default seed tells an adversary which
             chosen = list(rest) if scope == "all" else random.Random(seed).sample(rest, min(sample, len(rest)))
             todo = sorted(set(priority) | set(chosen))
             digest = weights_digest if weights_digest is not None else _safe_digest(model)
@@ -210,7 +217,9 @@ class Recompute:
         if cls == "model_swap":
             reason = (f"Inference seq {seq} names model '{rec['model']['id']}' with weights "
                       f"{info['sealed'][:12]}…, but the model loaded for recompute has weights {info['loaded'][:12]}…: "
-                      "the recompute was not run on the model the record names. Certain.")
+                      "so this record was NOT re-derived. Either the auditor loaded a different model (for example after a legitimate "
+                      "update) or the record names the wrong one; which of the two is the ledger check's to decide from the "
+                      "ledger's own model registrations — this check only reports that it could not re-derive.")
             ev = [Evidence("hash", "weights digest", data={**info, "affected_seqs": seqs or [seq]})]
         elif cls == "input_swap":
             reason = (f"The input supplied for inference seq {seq} does not match the hash sealed with the record "
@@ -250,8 +259,12 @@ class Recompute:
                  "input_swap": c["input_swap"], "model_swap": c["model_swap"], "could_not_be_rederived": skipped,
                  "why_not": dict(tally.unavailable), "examples": tally.examples,
                  "recompute_runtime": pipe.runtime, "loaded_weights_digest": digest}
-        reason = (f"Recompute: {len(todo)} of {eligible} sealed inference(s) selected ({len(priority)} already flagged, "
-                  f"the rest a seeded sample, seed {seed}); {c['verified_exact']} re-derived bit-exact, "
+        frac = (len(todo) / eligible) if eligible else 0.0
+        stats["sampled_fraction"] = round(frac, 6)
+        reason = (f"Recompute: {len(todo)} of {eligible} sealed inference(s) selected ({frac:.1%}; {len(priority)} already "
+                  f"flagged, the rest a random sample, seed {seed}"
+                  + ("" if scope == "all" or len(todo) >= eligible else
+                     " — a SAMPLE, so the unselected records are unassessed, not cleared") + "); {c['verified_exact']} re-derived bit-exact, "
                   f"{c['verified_decision']} re-derived at decision level, {c['boundary_flip']} boundary flip(s), "
                   f"{c['output_mismatch']} mismatch(es), {skipped} could not be re-derived"
                   + (f" ({'; '.join(f'{n}× {w}' for w, n in tally.unavailable.items())})" if skipped else "") + ".")

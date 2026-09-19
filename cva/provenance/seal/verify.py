@@ -131,6 +131,8 @@ class VerifyReport:
     anchors_verified: int = 0                   # external anchor artefacts that verified AND match this ledger
     anchors_invalid: int = 0                    # supplied anchors that could not be used (bad signature, malformed)
     anchor_results: list[AnchorResult] = field(default_factory=list)
+    anchor_custody: list[dict[str, Any]] = field(default_factory=list)   # per verified anchor: who vouches for it
+    witnessed_anchors: int = 0                  # verified anchors backed by >= 1 witness cosignature or boundary attestation
     anchored_records: int = 0                   # leading records fixed by the strongest verified anchor
     attested_not_after: str | None = None       # witness-bounded time for those records (boundary clock, not host)
     rotations: int = 0
@@ -769,6 +771,10 @@ class _Verifier:
                               "anchor_checkpoint", primary=False, nature="adversarial")
                 continue
             rep.anchors_verified += 1
+            witnessed = bool(res.cosigners or res.attestations)
+            rep.witnessed_anchors += witnessed
+            rep.anchor_custody.append({"tree_size": t, "medium": res.medium, "cosigners": len(res.cosigners),
+                                       "attestations": len(res.attestations), "witnessed": witnessed})
             if res.records_covered > rep.anchored_records:
                 rep.anchored_records = res.records_covered
                 rep.attested_not_after = res.time_bound_utc

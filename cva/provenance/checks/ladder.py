@@ -152,9 +152,10 @@ def _classify_boundary(sealed_fine: Mapping[str, Any], re_filtered: Mapping[str,
 
 
 def _detect_boundary(sealed_fine: Mapping[str, Any], re_filtered: Mapping[str, Any], eps_conf: float, eps_px: float,
-                     eps_iou: float) -> tuple[bool, list[str]]:
+                     eps_iou: float, re_raw: Mapping[str, Any] | None = None) -> tuple[bool, list[str]]:
     thr, nms = _filter_thresholds(sealed_fine, re_filtered)
     S, R = _sealed_dets(sealed_fine), _re_dets(re_filtered)
+    RAW = _re_dets(re_raw) if re_raw is not None else []
     why: list[str] = []
     ok = True
     used: set[int] = set()
@@ -185,8 +186,32 @@ def _detect_boundary(sealed_fine: Mapping[str, Any], re_filtered: Mapping[str, A
                 why.append(f"class {s['cls']} box coordinate {k} moved {abs(x - y):.4f} px "
                            f"({_round_half_up(x)} -> {_round_half_up(y)}): a real change, not a rounding flip")
 
+    def candidate(d: dict[str, Any]) -> dict[str, Any] | None:
+        """The re-derived PRE-FILTER detection the same class and (within 1 px) box as `d`, or None."""
+        best, best_d = None, 1.0 + 2 * Q64
+        for c in RAW:
+            if c["cls"] != d["cls"]:
+                continue
+            dist = max(abs(a - b) for a, b in zip(d["box"], c["box"], strict=True))
+            if dist <= best_d:
+                best, best_d = c, dist
+        return best
+
     def presence(d: dict[str, Any], side: str, other_kept: list[dict[str, Any]]) -> None:
         nonlocal ok
+        if side == "sealed":
+            # A detection ONLY the sealer claims. Its own confidence is whatever the sealer chose, so it can never be
+            # what excuses it: the recomputation must independently have produced that candidate before the filter,
+            # and it is THAT confidence that is compared with the threshold (plan §7.9; the fabricated near-threshold
+            # detection is otherwise a certain tamper downgraded to "review").
+            cand = candidate(d)
+            if cand is None:
+                ok = False
+                why.append(f"class {d['cls']} detection only in the sealed output (confidence {d['conf']:.6f}) has no "
+                           "counterpart, at any confidence, in the re-derived pre-filter output: the pipeline never "
+                           "produced it")
+                return
+            d = {**d, "conf": cand["conf"]}
         if thr is not None and abs(d["conf"] - thr) <= eps_conf:
             why.append(f"class {d['cls']} detection only in the {side} output has confidence {d['conf']:.6f}, "
                        f"within {eps_conf:g} of the threshold {thr:.6f}")
@@ -216,14 +241,16 @@ def _detect_boundary(sealed_fine: Mapping[str, Any], re_filtered: Mapping[str, A
 
 
 def analyse_boundary(sealed_fine: Mapping[str, Any], re_filtered: Mapping[str, Any], *, eps_conf: float = DEFAULT_EPS_CONF,
-                     eps_px: float = DEFAULT_EPS_PX, eps_iou: float = DEFAULT_EPS_IOU) -> tuple[bool, list[str]]:
-    """(explained_by_jitter, one explanation per difference)."""
+                     eps_px: float = DEFAULT_EPS_PX, eps_iou: float = DEFAULT_EPS_IOU,
+                     re_raw: Mapping[str, Any] | None = None) -> tuple[bool, list[str]]:
+    """(explained_by_jitter, one explanation per difference). `re_raw` is the re-derived PRE-FILTER output: without
+    it a detection that only the sealed output holds can never be explained as jitter."""
     if sealed_fine.get("task") != re_filtered.get("task"):
         return False, [f"the task differs ({sealed_fine.get('task')!r} sealed, {re_filtered.get('task')!r} recomputed)"]
     if sealed_fine.get("task") == "classify":
         return _classify_boundary(sealed_fine, re_filtered, eps_conf)
     if sealed_fine.get("task") == "detect":
-        return _detect_boundary(sealed_fine, re_filtered, eps_conf, eps_px, eps_iou)
+        return _detect_boundary(sealed_fine, re_filtered, eps_conf, eps_px, eps_iou, re_raw)
     return False, ["the sealed output is not a classification or detection result"]
 
 
@@ -259,7 +286,7 @@ def climb(sealed: Mapping[str, Any], sealed_fine: Mapping[str, Any] | None, re: 
                             "the decision-level hash does not match and the sealed payload is unavailable, so the "
                             "difference cannot be explained as float jitter", r0, diag,
                             ["the sealed decision payload is missing"])
-    explained, why_list = analyse_boundary(sealed_fine, re.filtered_floats, eps_conf=eps_conf, eps_px=eps_px,
+    explained, why_list = analyse_boundary(sealed_fine, re.filtered_floats, re_raw=re.raw_floats, eps_conf=eps_conf, eps_px=eps_px,
                                            eps_iou=eps_iou)
     if explained:
         return LadderResult("boundary_flip", "R2",

@@ -11,7 +11,7 @@ from cva.core.capability import Availability, Capability, CapabilitySet  # noqa:
 from cva.core.taxonomy import TAXONOMY  # noqa: E402
 from cva.core.types import Disposition, Severity  # noqa: E402
 from cva.provenance.checks.recompute import LIMITATIONS, Recompute  # noqa: E402
-from cva.provenance.checks.registry import assert_taxonomy_ok  # noqa: E402
+from cva.provenance.checks.registry import PROV_CHECKS, assert_taxonomy_ok  # noqa: E402
 
 from ._recompute_helpers import (  # noqa: E402
     WEIGHTS,
@@ -51,8 +51,7 @@ def test_the_plugin_declares_the_registry_fields_and_only_registered_classes():
     assert Recompute.requires == {Capability.INFERENCE_LEDGER, Capability.MODEL_PREDICT}
     assert Recompute.optional == frozenset()
     assert set(Recompute.attack_classes) <= set(TAXONOMY)
-    from cva.provenance.checks.registry import PROV_CHECKS
-    assert "prov.recompute" not in PROV_CHECKS or True
+    assert PROV_CHECKS["prov.recompute"] is Recompute                      # covered by assert_taxonomy_ok too
     assert_taxonomy_ok()
 
 
@@ -180,7 +179,8 @@ def test_a_model_that_is_not_the_one_the_records_name_is_reported_once_not_per_r
     run = seal_run(tmp_path, p, make_frames(8))
     out = rc(run, p, scope="all", model=ToyModel(digest="9" * 64))
     swaps = [f for f in out if f.attack_class == "model_swap"]
-    assert len(swaps) == 1 and swaps[0].severity == Severity.CRITICAL
+    assert len(swaps) == 1 and swaps[0].severity == Severity.MEDIUM and swaps[0].disposition == Disposition.REVIEW
+    assert "NOT re-derived" in swaps[0].reason and "ledger check" in swaps[0].reason      # a scanner-side mismatch is not an accusation
     assert "9" * 12 in swaps[0].reason and stats(out)["model_swap"] == 8
     assert stats(out)["verified_exact"] == 0
 
@@ -367,3 +367,28 @@ def test_recompute_accepts_an_export_plus_a_payload_mapping(tmp_path):
                                   input_resolver=resolver_for(run), scope="all")
     assert stats(no_payloads)["verified_exact"] == 0 and stats(no_payloads)["could_not_be_rederived"] == 4
     assert WEIGHTS
+
+
+# --- review findings 5 and 7 ---------------------------------------------------------------------------------------------------
+
+def test_the_default_sample_is_unpredictable_but_recorded_so_it_can_be_reproduced(tmp_path):
+    p = toy_pipeline()
+    run = seal_run(tmp_path, p, make_frames(60, seed=13))
+    seeds, picks = set(), set()
+    for _ in range(6):
+        st = stats(rc(run, p, sample=5))
+        seeds.add(st["seed"])
+        picks.add(tuple(st["sampled_seqs"]))
+    assert len(seeds) > 1 and len(picks) > 1                        # a fixed default would make every run pick the same records
+    again = stats(rc(run, p, sample=5, seed=st["seed"]))            # ... yet any run can be reproduced from its recorded seed
+    assert again["sampled_seqs"] == st["sampled_seqs"]
+
+
+def test_a_sample_says_how_much_it_covered_so_it_cannot_read_as_a_clean_bill_of_health(tmp_path):
+    p = toy_pipeline()
+    run = seal_run(tmp_path, p, make_frames(40, seed=14))
+    out = rc(run, p, sample=4, seed=1)
+    s = summary(out)
+    assert stats(out)["sampled_fraction"] == 0.1 and "10.0%" in s.reason and "unassessed, not cleared" in s.reason
+    full = summary(rc(run, p, scope="all"))
+    assert "100.0%" in full.reason and "unassessed, not cleared" not in full.reason

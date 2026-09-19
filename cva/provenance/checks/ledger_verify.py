@@ -85,8 +85,11 @@ class LedgerVerify:
     def _access(self, report: VerifyReport) -> list[str]:
         return [f"INFERENCE_LEDGER read from a {report.source_kind} source",
                 "trust root supplied out of band (not self-signed)",
-                (f"{report.anchors_verified} external anchor(s) verified; {report.unwitnessed_records} record(s) sit "
-                 "after the newest one, in the unwitnessed window" if report.anchors_verified else
+                (f"{report.anchors_verified} anchor(s) consistent with the ledger, {report.witnessed_anchors} of them backed by a "
+                 f"witness cosignature or attestation; {report.unwitnessed_records} record(s) sit after the newest one"
+                 + ("" if report.witnessed_anchors else " (custody of an uncosigned, unattested anchor is NOT established: it "
+                    "shows the ledger matches that file, not that the key holder could not have rewritten the file)")
+                 if report.anchors_verified else
                  f"no external anchor verified: {report.unwitnessed_records} record(s) sit in the unwitnessed window")]
 
     def _map(self, f: VerifyFinding, report: VerifyReport, scan_id: str, produced_by: str) -> Finding:
@@ -113,7 +116,12 @@ class LedgerVerify:
             "sealed_not_after_utc": report.attested_not_after, "key_rotations": report.rotations,
             "declared_degraded_intervals": report.declared_gaps,
             "records_after_last_anchor": report.unwitnessed_records,
-            "unwitnessed_window": ("records after the newest verified EXTERNAL anchor" if report.anchors_verified
+            "anchors_witnessed": report.witnessed_anchors, "anchor_custody": report.anchor_custody,
+            "unwitnessed_window": (("records after the newest anchor, which a witness cosigned or attested"
+                                    if report.witnessed_anchors else
+                                    "records after the newest anchor FILE — no cosignature or attestation backs it, so who held "
+                                    "it is not established (consistent with the anchor; no protection against its custodian)")
+                                   if report.anchors_verified
                                    else "no external anchor was verified: records after the last in-chain anchor "
                                         "event, which the key holder wrote itself"),
             "payloads_checked": report.payloads_checked, "payloads_missing": report.payloads_missing,
@@ -125,7 +133,8 @@ class LedgerVerify:
         head = ("Ledger verified" if not problems else f"Ledger checked, {len(problems)} problem(s) found")
         reason = (f"{head}: {report.records_checked} record(s) checked, {report.checkpoints_verified} Merkle "
                   f"checkpoint(s) recomputed, {report.declared_gaps} declared degraded interval(s), "
-                  f"{report.anchors_verified} external anchor(s) verified. {report.unwitnessed_records} record(s) "
+                  f"{report.anchors_verified} anchor(s) consistent with the ledger ({report.witnessed_anchors} witnessed). "
+                  f"{report.unwitnessed_records} record(s) "
                   "lie after the last anchor — that window still trusts the key holder. Durability: "
                   f"{stats['durability']} (loss window {stats['loss_window']}).")
         limits = list(LIMITATIONS)

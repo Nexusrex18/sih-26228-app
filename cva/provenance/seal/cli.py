@@ -109,7 +109,10 @@ def _verify(a: argparse.Namespace) -> int:
               f"checkpoint(s) recomputed, {r.rotations} key rotation(s), {r.anchors_verified} anchor(s) verified"
               + (f", {r.anchors_invalid} unusable" if r.anchors_invalid else ""))
         if r.anchors_verified:
-            print(f"  anchored: the first {r.anchored_records} records are fixed by an external anchor"
+            custody = (f"{r.witnessed_anchors} cosigned/attested" if r.witnessed_anchors else
+                       "NONE cosigned or attested — custody of the anchor file is not established")
+            print(f"  anchor custody: {custody}")
+            print(f"  anchored: the first {r.anchored_records} records match an anchor file"
                   + (f"; they existed by {r.attested_not_after} (witness clock)" if r.attested_not_after else ""))
         print(f"  {r.unwitnessed_records} record(s) lie in the unwitnessed window — "
               + ("after the newest verified anchor." if r.anchors_verified else

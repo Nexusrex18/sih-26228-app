@@ -91,7 +91,7 @@ def explain_record(source: Any, trust_root: TrustRoot | str | os.PathLike[str], 
         lines.append(f"  covers the first {body['tree_size']} records, root {body['root_hash'][:16]}…")
     covered = rep.anchored_records
     if rep.anchors_verified:
-        lines.append(f"  anchor: {'COVERED — this record is fixed by an external anchor' if seq < covered else 'NOT covered — it was written after the newest verified anchor'}"
+        lines.append(f"  anchor: {'COVERED — this record matches an anchor file (see the report for whether anyone cosigned or attested it)' if seq < covered else 'NOT covered — it was written after the newest verified anchor'}"
                      + (f"; existed by {rep.attested_not_after} (witness clock)" if seq < covered and rep.attested_not_after else ""))
     else:
         lines.append("  anchor: none supplied — nothing outside the ledger vouches for this record's presence")

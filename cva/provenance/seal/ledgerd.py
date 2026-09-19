@@ -105,14 +105,17 @@ class Ledgerd:
                 if bad:
                     return self._err(bad[0].code, bad[0].detail)
             try:
-                rh = self._ledger.append(record)
+                # `append_typed` reports every record the call wrote — including a checkpoint the cadence triggers AFTER
+                # ours — so the seq we hand back (and fold into workflow state) is the event's own, never size()-1.
+                written = self._ledger.append_typed(rtype, {k: v for k, v in record.items() if k != "type"})
             except (InvalidRecord, NonCanonical, ValueError) as e:
                 return self._err("invalid", str(e))
             except LedgerUnavailable as e:
                 return self._err("ledger_unavailable", str(e))
             except SealError as e:
                 return self._err("refused", str(e))
-            seq = self._ledger.size() - 1
+            mine = next(w for w in written if w.type == rtype)
+            seq, rh = mine.seq, mine.record_hash
             reply: dict[str, Any] = {"ok": True, "seq": seq, "record_hash": rh}
             if rtype == "analyst_event":
                 apply_event(self.fold, seq, record["analyst"])
@@ -143,17 +146,39 @@ def peer_uid(sock: socket.socket) -> int | None:
         return None
 
 
+MAX_LINE = 64 * 1024            # one request; the largest legitimate one (a justification) is ~8 KiB
+MAX_CONNECTIONS = 64            # concurrent clients; more are told "busy" and dropped, not queued without bound
+IDLE_TIMEOUT = 10.0             # seconds a client may hold a connection without completing a request
+
+
 class _Handler(socketserver.StreamRequestHandler):
+    def setup(self) -> None:
+        self.timeout = self.server.idle_timeout              # type: ignore[attr-defined,misc]
+        super().setup()
+
     def handle(self) -> None:
         daemon: Ledgerd = self.server.daemon               # type: ignore[attr-defined]
         uid = peer_uid(self.request)
-        for line in self.rfile:
-            try:
-                req = json.loads(line)
-                reply = daemon.handle(req, uid) if isinstance(req, dict) else Ledgerd._err("bad_request", "not an object")
-            except ValueError:
-                reply = Ledgerd._err("bad_request", "not JSON")
-            self.wfile.write(json.dumps(reply, separators=(",", ":")).encode("ascii") + b"\n")
+        try:
+            while True:
+                # bounded read: a client that streams bytes and never sends a newline cannot grow this process's memory
+                line = self.rfile.readline(MAX_LINE + 1)
+                if not line:
+                    return
+                if len(line) > MAX_LINE and not line.endswith(b"\n"):
+                    self._send(Ledgerd._err("request_too_large", f"a request is at most {MAX_LINE} bytes"))
+                    return
+                try:
+                    req = json.loads(line)
+                    reply = daemon.handle(req, uid) if isinstance(req, dict) else Ledgerd._err("bad_request", "not an object")
+                except ValueError:
+                    reply = Ledgerd._err("bad_request", "not JSON")
+                self._send(reply)
+        except (TimeoutError, OSError):
+            return                                             # idle or vanished client: drop it, say nothing
+
+    def _send(self, reply: Mapping[str, Any]) -> None:
+        self.wfile.write(json.dumps(reply, separators=(",", ":")).encode("ascii") + b"\n")
 
 
 class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
@@ -161,18 +186,41 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     allow_reuse_address = True
     request_queue_size = 128          # the default of 5 refuses (EAGAIN) a burst of analysts on a Unix socket
 
-    def __init__(self, path: str, daemon: Ledgerd) -> None:
+    def __init__(self, path: str, daemon: Ledgerd, *, max_connections: int = MAX_CONNECTIONS,
+                 idle_timeout: float = IDLE_TIMEOUT) -> None:
         if os.path.exists(path):
             os.unlink(path)
-        super().__init__(path, _Handler)
-        os.chmod(path, 0o660)                                # the allowlist, not the file mode, is the policy — but no world access
+        self._slots = threading.BoundedSemaphore(max_connections)
+        self.idle_timeout = idle_timeout
+        old = os.umask(0o117)                                # the socket is CREATED 0660, never briefly world-accessible
+        try:
+            super().__init__(path, _Handler)
+        finally:
+            os.umask(old)
         self.daemon = daemon
         self.socket_path = path
 
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.sendall(b'{"ok":false,"error":"busy","detail":"too many concurrent connections"}\n')
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
 
-def serve(path: str, daemon: Ledgerd) -> Server:
-    """Start serving in a background thread; returns the server (`shutdown()` + `server_close()` to stop)."""
-    srv = Server(path, daemon)
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
+def serve(path: str, daemon: Ledgerd, **limits: Any) -> Server:
+    """Start serving in a background thread; returns the server (`shutdown()` + `server_close()` to stop).
+    `limits`: `max_connections`, `idle_timeout`."""
+    srv = Server(path, daemon, **limits)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 

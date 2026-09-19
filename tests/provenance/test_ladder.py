@@ -37,9 +37,12 @@ def sealed(raw, filtered):
 BASE = [det(3, 0.871204, (18.8125, 13.75, 51.875, 37.671875)), det(1, 0.60, (100.0, 100.0, 140.0, 160.0))]
 
 
-def run(sealed_dets, re_dets, *, sealed_rt="ort 1 / CPU", re_rt="ort 1 / CPU", **kw):
+def run(sealed_dets, re_dets, *, sealed_rt="ort 1 / CPU", re_rt="ort 1 / CPU", re_raw_extra=(), **kw):
+    """`re_raw_extra`: candidates the RE-DERIVATION produced before filtering but did not keep (an honest pipeline's raw
+    output holds every candidate; a sealed-only detection is only excusable if it is among them)."""
     section, fine = sealed(*detect(sealed_dets))
-    return climb(section, fine, recompute_objects(*detect(re_dets)), sealed_runtime=sealed_rt, recompute_runtime=re_rt, **kw)
+    return climb(section, fine, recompute_objects(*detect(re_dets, re_raw_extra)), sealed_runtime=sealed_rt,
+                 recompute_runtime=re_rt, **kw)
 
 
 # --- R0 / R1 -------------------------------------------------------------------------------------------------
@@ -85,7 +88,8 @@ def test_the_order_of_detections_does_not_change_the_decision_claim():
 
 def test_a_detection_that_dropped_out_just_below_the_confidence_threshold_is_a_boundary_flip():
     edge = det(2, THR + 5e-5, (40.0, 40.0, 60.0, 60.0))
-    r = run([*BASE, edge], BASE)                                       # sealed above the threshold, recomputed just below
+    below = det(2, THR - 5e-5, (40.0, 40.0, 60.0, 60.0))               # what the re-derivation produced, pre-filter
+    r = run([*BASE, edge], BASE, re_raw_extra=[below])                 # sealed above the threshold, recomputed just below
     assert (r.verdict, r.rung) == ("boundary_flip", "R2")
     assert "within 0.0001 of the threshold" in " ".join(r.explanations)
 
@@ -98,7 +102,7 @@ def test_a_detection_that_appears_just_above_the_threshold_on_recompute_is_a_bou
 def test_a_confident_detection_that_vanished_is_a_mismatch_not_a_flip():
     r = run(BASE, BASE[:1])                                            # the 0.60 detection is gone
     assert (r.verdict, r.rung) == ("output_mismatch", "R2")
-    assert "not explained by float jitter" in " ".join(r.explanations)
+    assert "never produced it" in " ".join(r.explanations)      # (a real 0.60 detection cannot vanish and be excused)
 
 
 def test_a_confident_detection_that_appeared_from_nowhere_is_a_mismatch():
@@ -113,7 +117,8 @@ def test_a_detection_just_outside_the_epsilon_of_the_threshold_is_a_mismatch():
 
 def test_the_epsilon_is_a_profile_setting_not_a_constant():
     edge = det(2, THR + 5e-4, (40.0, 40.0, 60.0, 60.0))
-    assert run([*BASE, edge], BASE, eps_conf=1e-3).verdict == "boundary_flip"
+    below = det(2, THR - 2e-4, (40.0, 40.0, 60.0, 60.0))
+    assert run([*BASE, edge], BASE, eps_conf=1e-3, re_raw_extra=[below]).verdict == "boundary_flip"
 
 
 def test_a_box_edge_that_straddles_a_whole_pixel_boundary_is_a_boundary_flip():
@@ -153,7 +158,7 @@ def test_an_nms_suppression_that_flipped_on_iou_jitter_is_a_boundary_flip():
 
 def test_the_reverse_nms_flip_is_also_a_boundary_flip():
     a, b = _iou_pair(4.8e-4)
-    assert run([a, b(+1)], [a]).verdict == "boundary_flip"
+    assert run([a, b(+1)], [a], re_raw_extra=[b(+1)]).verdict == "boundary_flip"
 
 
 def test_a_box_kept_despite_a_large_overlap_is_a_mismatch_not_an_nms_flip():
@@ -164,16 +169,38 @@ def test_a_box_kept_despite_a_large_overlap_is_a_mismatch_not_an_nms_flip():
 
 def test_every_difference_must_be_explained_one_real_change_among_flips_is_a_mismatch():
     edge = det(2, THR + 5e-5, (40.0, 40.0, 60.0, 60.0))
-    r = run([*BASE, edge], [BASE[0]])                                  # the edge flip AND a confident detection gone
+    r = run([*BASE, edge], [BASE[0]], re_raw_extra=[det(2, THR - 5e-5, (40.0, 40.0, 60.0, 60.0))])   # the edge flip AND a confident detection gone
     assert r.verdict == "output_mismatch" and len(r.explanations) == 2
 
 
 def test_without_a_threshold_in_the_sealed_payload_a_presence_flip_cannot_be_excused():
     section, fine = sealed(*detect([*BASE, det(2, THR + 5e-5, (40.0, 40.0, 60.0, 60.0))]))
     fine = {k: v for k, v in fine.items() if k != "filter"}
-    re = recompute_objects({"task": "detect", "detections": BASE}, {"task": "detect", "detections": BASE})
+    cand = det(2, THR - 5e-5, (40.0, 40.0, 60.0, 60.0))
+    re = recompute_objects({"task": "detect", "detections": [*BASE, cand]}, {"task": "detect", "detections": BASE})
     r = climb(section, fine, re, sealed_runtime="a", recompute_runtime="a")
     assert r.verdict == "output_mismatch" and "unknown threshold" in " ".join(r.explanations)
+
+
+def test_a_fabricated_detection_just_above_the_threshold_is_a_mismatch_not_a_boundary_flip():
+    """Review finding 2. The sealed confidence is whatever the sealer chose, so it cannot be what excuses the detection:
+    the honest pipeline never produced this candidate, not even before the filter."""
+    fake = det(2, THR + 5e-6, (40.0, 40.0, 60.0, 60.0))
+    r = run([*BASE, fake], BASE)                                       # nothing like it in the re-derived raw output
+    assert (r.verdict, r.rung) == ("output_mismatch", "R2")
+    assert "the pipeline never produced it" in " ".join(r.explanations)
+    # the same detection, but the honest pipeline DID have a candidate there just under the threshold: genuine jitter
+    honest = run([*BASE, fake], BASE, re_raw_extra=[det(2, THR - 5e-6, (40.0, 40.0, 60.0, 60.0))])
+    assert honest.verdict == "boundary_flip"
+    # a candidate of the right class but somewhere else entirely does not excuse it
+    elsewhere = run([*BASE, fake], BASE, re_raw_extra=[det(2, THR - 5e-6, (90.0, 90.0, 110.0, 110.0))])
+    assert elsewhere.verdict == "output_mismatch"
+    # ... nor does one of a different class
+    other_cls = run([*BASE, fake], BASE, re_raw_extra=[det(4, THR - 5e-6, (40.0, 40.0, 60.0, 60.0))])
+    assert other_cls.verdict == "output_mismatch"
+    # ... nor one whose recomputed confidence is nowhere near the threshold
+    far = run([*BASE, fake], BASE, re_raw_extra=[det(2, 0.05, (40.0, 40.0, 60.0, 60.0))])
+    assert far.verdict == "output_mismatch"
 
 
 def test_an_unavailable_sealed_payload_means_a_mismatch_cannot_be_excused():
