@@ -1,7 +1,7 @@
 """`cva-seal` — the operator's command line for the seal (plan §7.11).
 
 Implemented so far: `keygen`, `init`, `bench-durability` (C4); `verify`, `export` (C5); `rotate`, `trust add`,
-`anchor export|cosign|attest|verify|print`, `proof inclusion|verify` (C7). `selftest` and `explain` arrive with C8.
+`anchor export|cosign|attest|verify|print`, `proof inclusion|verify` (C7). `selftest`, `explain` (C8).
 
 Exit codes: 0 = done / nothing above `info` found; 1 = the command could not run; 2 = it ran and found problems
 (a verify with findings above `info`, an anchor or proof that does not verify).
@@ -28,6 +28,7 @@ from .anchor import (
 )
 from .bench import measure_durability
 from .errors import SealError
+from .explain import explain_record, selftest
 from .keys import (
     TRUST_ROLES,
     FileKeyProvider,
@@ -204,6 +205,21 @@ def _proof_verify(a: argparse.Namespace) -> int:
     return 0 if r.valid else 2
 
 
+def _explain(a: argparse.Namespace) -> int:
+    anchors: list[object] = [Path(x) for x in a.anchor or []]
+    print(explain_record(a.records, a.trust, a.seq, anchors=anchors))
+    return 0
+
+
+def _selftest(a: argparse.Namespace) -> int:
+    rows = selftest(a.records)
+    for name, ok, detail in rows:
+        print(f"  {'ok  ' if ok else 'FAIL'} {name}" + (f"  ({detail})" if detail else ""))
+    bad = [r for r in rows if not r[1]]
+    print("selftest: " + ("all checks passed" if not bad else f"{len(bad)} check(s) FAILED — do not trust this installation"))
+    return 0 if not bad else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cva-seal", description="Inference provenance seal (Module C)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -305,6 +321,17 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--anchor", required=True)
     pv.add_argument("--trust", required=True)
     pv.set_defaults(fn=_proof_verify)
+
+    x = sub.add_parser("explain", help="a human-readable account of one record")
+    x.add_argument("--records", required=True)
+    x.add_argument("--trust", required=True)
+    x.add_argument("--seq", type=int, required=True)
+    x.add_argument("--anchor", action="append")
+    x.set_defaults(fn=_explain)
+
+    st = sub.add_parser("selftest", help="known-answer checks plus a round trip; run this before trusting an install")
+    st.add_argument("--records", type=int, default=1000)
+    st.set_defaults(fn=_selftest)
     return p
 
 
