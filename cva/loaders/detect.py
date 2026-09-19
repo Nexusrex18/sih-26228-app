@@ -8,10 +8,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from .models import KerasLoader, ONNXLoader, PyTorchLoader, TorchScriptLoader
+from .preprocess import attach_preprocess
 from .safety import prescan
 
 
-def detect_and_load(path, arch_registry=None, model_id=None, enforce_safety: bool = True):
+def detect_and_load(path, arch_registry=None, model_id=None, enforce_safety: bool = True,
+                    preprocess=None):
+    """Load `path` with whichever loader supports it.
+
+    `preprocess` is the path of a DECLARED preprocessing spec (`--preprocess`). When None, the
+    sidecar `<path>.preprocess.json` is used if it exists. A spec found either way is validated
+    and its hash/ref/bytes attached to the handle (`cva.loaders.preprocess`); one that is
+    malformed raises rather than being ignored. No spec, nothing attached.
+    """
     path = Path(path)
     # S1: hash before open. A SavedModel is a directory and `prescan` hashes one file; the
     # Keras loader owns the directory case (it converts from the graph, never running layers).
@@ -24,6 +33,7 @@ def detect_and_load(path, arch_registry=None, model_id=None, enforce_safety: boo
         if loader.supports(path):
             handle = loader.load(path, model_id=model_id)
             handle.safety = report
+            attach_preprocess(handle, path, preprocess)
             return handle
     raise ValueError(f"no loader supports {path.name}")
 

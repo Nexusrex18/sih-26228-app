@@ -18,6 +18,7 @@ from .base import (
     probe_image,
     read_json_safely,
     resolve_contributor,
+    resolve_grouping,
     sha256_file,
 )
 
@@ -104,6 +105,12 @@ class COCOLoader:
             # Tier 3 for COCO is `images[].source`, per the precedence list.
             contributor, source = resolve_contributor(
                 root, fpath, sidecar, img.get("source"))
+            # `images[].batch` wins over a `batch_*` directory. `images[].source` is NOT the
+            # source level: it is the contributor declaration above, and is not mapped twice.
+            batch, group_source = resolve_grouping(root, fpath, img.get("batch"))
+            meta = {"file_name": file_name, "format": "coco"}
+            if group_source:
+                meta["source"] = group_source
 
             samples.append(Sample(
                 sample_id=str(img.get("id", file_name)),
@@ -114,7 +121,8 @@ class COCOLoader:
                 labels=labels,
                 contributor=contributor,
                 contributor_source=source,
-                source_meta={"file_name": file_name, "format": "coco"},
+                batch=batch,
+                source_meta=meta,
             ))
 
         return InMemoryDataset(samples=samples, categories=cats, root=root, notes=notes)

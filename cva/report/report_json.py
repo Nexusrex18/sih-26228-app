@@ -140,6 +140,10 @@ def standing_limitations(target: dict[str, Any]) -> list[str]:
             out.append(
                 "No weight digest could be computed for this model artefact, so no "
                 "model_sha256 is recorded and weight-substitution detection is degraded.")
+    if "model_format" in target and "preprocess_hash" not in target:
+        out.append(
+            "No preprocessing spec was declared for this model, so prov.recompute cannot be "
+            "performed for it.")
     return out
 
 

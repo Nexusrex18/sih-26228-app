@@ -4,10 +4,12 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import re
 import shlex
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -16,6 +18,7 @@ import cva.detectors.data.registry  # noqa: F401 — Module A's detectors; witho
 import cva.detectors.model.registry  # noqa: F401 — registration happens at the entrypoint, never in core
 from attacklab.arch import ARCH_REGISTRY
 from cva.core import determinism
+from cva.core.capability import Capability
 from cva.core.egress import egress_guard, run_canaries
 from cva.core.model import Manifest, ModelBattery
 from cva.core.orchestrator import (
@@ -26,10 +29,11 @@ from cva.core.orchestrator import (
     seal_report,
     validate_profile_ids,
 )
-from cva.core.scanid import scan_out_dir
+from cva.core.scanid import EvidenceStore, scan_out_dir
 from cva.loaders.models import load_model
 from cva.loaders.models.http_model import HTTPModel, require_loopback
 from cva.loaders.models.subprocess_model import SubprocessModel
+from cva.loaders.preprocess import attach_preprocess
 from cva.report.coverage import write as write_coverage
 from cva.report.render_html import render
 from cva.report.report_json import write as write_report_json
@@ -54,15 +58,72 @@ def build_battery(corpus: Path, exclude: str, k: int = 2) -> ModelBattery:
     return ModelBattery(models=models)
 
 
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def reference_manifest(model, *, with_fingerprint: bool) -> dict[str, Any]:
+    """What to register about `model` at acceptance. A key is ABSENT when its fact is unknown,
+    never an empty string and never a placeholder: `weights_sha256` only when the digest is
+    really 64 lowercase hex (a frozen TorchScript archive or a query-only endpoint returns
+    "unavailable:..." and registering that would make every later scan "match" it), and
+    `fingerprint` only when the caller asked for it and the model answers."""
+    ref: dict[str, Any] = {"model_id": getattr(model, "model_id", "-")}
+    try:
+        digest = model.weight_digest()
+    except Exception:
+        digest = None
+    if isinstance(digest, str) and _HEX64.match(digest):
+        ref["weights_sha256"] = digest
+    try:
+        arch = getattr(model, "arch_hash", None)
+        arch = arch() if callable(arch) else arch
+    except Exception:
+        arch = None
+    if isinstance(arch, str) and _HEX64.match(arch):
+        ref["arch_hash"] = arch
+    pre_hash = getattr(model, "preprocess_hash", None)
+    pre_ref = getattr(model, "preprocess_ref", None)
+    if isinstance(pre_hash, str) and _HEX64.match(pre_hash):
+        ref["preprocess_hash"] = pre_hash
+    if isinstance(pre_ref, str) and pre_ref:
+        ref["preprocess_ref"] = pre_ref
+    if with_fingerprint:
+        from cva.detectors.model.fingerprint import fingerprint
+        try:
+            ref["fingerprint"] = [round(float(v), 8) for v in fingerprint(model)]
+        except Exception:
+            pass                             # an unanswerable model has no fingerprint to register
+    return ref
+
+
+def store_preprocess(model, out_root: Path) -> None:
+    """Put the declared spec's canonical bytes in `<out_root>/evidence/`, so that the
+    `preprocess_ref` in the report resolves to bytes that exist. The store hashes the same bytes
+    the loader hashed, so the returned name must be the handle's `preprocess_ref`; if it is not,
+    something altered the bytes in between and the record would point at the wrong spec."""
+    blob = getattr(model, "preprocess_spec_bytes", None)
+    if blob is None:
+        return
+    name = EvidenceStore(out_root).put_bytes(blob, ".json")
+    if name != getattr(model, "preprocess_ref", None):
+        raise RuntimeError(
+            f"the stored preprocessing spec is named {name}, but the model handle says "
+            f"{getattr(model, 'preprocess_ref', None)}")
+
+
+def write_reference(model, path: Path, evidence_root: Path, *, with_fingerprint: bool) -> Path:
+    """Write the reference manifest, storing the preprocessing spec it points at."""
+    store_preprocess(model, evidence_root)
+    path.write_text(json.dumps(reference_manifest(model, with_fingerprint=with_fingerprint),
+                               indent=2, sort_keys=True))
+    return path
+
+
 def emit_reference(model, out: Path) -> Path:
     """Close the no-reference gap FORWARD: the fingerprint and digest are computed anyway,
     so write them out. The first scan of an unknown model says little; every subsequent
     scan of it says a great deal."""
-    from cva.detectors.model.fingerprint import fingerprint
-    ref = {"model_id": model.model_id, "weights_sha256": model.weight_digest(),
-           "fingerprint": [round(float(v), 8) for v in fingerprint(model)]}
-    out.write_text(json.dumps(ref, indent=2))
-    return out
+    return write_reference(model, out, out.parent, with_fingerprint=True)
 
 
 def manifest_from(path: Path) -> Manifest:
@@ -72,9 +133,10 @@ def manifest_from(path: Path) -> Manifest:
 
 
 def run_scan(model_path: Path, corpus: Path, out_dir: Path, profile: str = "deep",
-             reference: Path | None = None, battery: bool = True, n_probes: int = 400):
+             reference: Path | None = None, battery: bool = True, n_probes: int = 400,
+             preprocess: Path | None = None):
     out_dir.mkdir(parents=True, exist_ok=True)
-    model = load_model(model_path, ARCH_REGISTRY)
+    model = load_model(model_path, ARCH_REGISTRY, preprocess=preprocess)
     x, y = load_probes(corpus, n_probes)
     bat = build_battery(corpus, model.model_id) if battery else ModelBattery()
     if reference and Path(reference).exists():
@@ -122,7 +184,7 @@ def repro_command(a) -> str:
     # command round-trips through a shell as the list it was parsed into.
     for flag, attr in (("--model-cmd", "model_cmd"), ("--model-url", "model_url"),
                        ("--input-shape", "input_shape"), ("--num-classes", "num_classes"),
-                       ("--model-id", "model_id")):
+                       ("--model-id", "model_id"), ("--preprocess", "preprocess")):
         if _opt(a, attr) is not None:
             argv += [flag, str(_opt(a, attr))]
     if a.dataset:
@@ -161,6 +223,9 @@ def model_arg_error(a) -> str | None:
     shape, n_cls, mid = _opt(a, "input_shape"), _opt(a, "num_classes"), _opt(a, "model_id")
     if sum(bool(x) for x in (path, cmd, url)) > 1:
         return "give exactly ONE model source: a model path, --model-cmd, or --model-url"
+    if _opt(a, "preprocess") is not None and not (path or cmd or url):
+        return ("--preprocess declares how a MODEL is fed: give a model path, --model-cmd "
+                "or --model-url with it")
     if not (cmd or url):
         stray = [f for f, v in (("--input-shape", shape), ("--num-classes", n_cls),
                                 ("--model-id", mid)) if v is not None]
@@ -188,14 +253,19 @@ def build_model(a):
     """The model handle for `a`: a file loader, a Tier-2 adapter, or None (dataset-only).
     `model_arg_error` has already vetted the arguments."""
     cmd, url = _opt(a, "model_cmd"), _opt(a, "model_url")
+    pre = _opt(a, "preprocess")
     if cmd:
         argv = shlex.split(cmd)              # a list, never a shell
-        return SubprocessModel(argv, _opt(a, "model_id") or f"subprocess-{Path(argv[-1]).stem}",
-                               parse_shape(a.input_shape), a.num_classes)
+        sub = SubprocessModel(argv, _opt(a, "model_id") or f"subprocess-{Path(argv[-1]).stem}",
+                              parse_shape(a.input_shape), a.num_classes)
+        attach_preprocess(sub, None, pre)    # a query-only model has no sidecar; `--preprocess` only
+        return sub
     if url:
-        return HTTPModel(url, _opt(a, "model_id") or f"http-{urlsplit(url).netloc}",
+        http = HTTPModel(url, _opt(a, "model_id") or f"http-{urlsplit(url).netloc}",
                          parse_shape(a.input_shape), a.num_classes)
-    return load_model(Path(a.model), ARCH_REGISTRY) if a.model else None
+        attach_preprocess(http, None, pre)
+        return http
+    return load_model(Path(a.model), ARCH_REGISTRY, preprocess=pre) if a.model else None
 
 
 def execute_scan(a, command: str | None = None) -> tuple[ScanResult, Path | None]:
@@ -233,6 +303,13 @@ def execute_scan(a, command: str | None = None) -> tuple[ScanResult, Path | None
     if a.dry_run:
         return res, None
     out = scan_out_dir(Path(a.out), res.scan_id)
+    if model is not None:
+        # The reference manifest, next to the report and NOT inside it: report.json never
+        # counts it and the seal never hashes it. The fingerprint runs its own deterministic
+        # battery, so it needs a model that ANSWERS, not a probe set; gating it on probes meant
+        # the real scan path never registered the one thing that closes the no-reference gap.
+        write_reference(model, out / "reference.json", Path(a.out),
+                        with_fingerprint=Capability.MODEL_PREDICT in model.capabilities())
     command = command or repro_command(a)
     report_path = write_report_json(res, out / "report.json", command)
     # Seal AFTER report.json is final and BEFORE the HTML, which may show the seq. The seq is
@@ -354,6 +431,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--num-classes", type=int, default=None,
                    help="required with --model-cmd/--model-url")
     s.add_argument("--model-id", default=None, help="label for a --model-cmd/--model-url model")
+    s.add_argument("--preprocess", default=None,
+                   help="the DECLARED preprocessing spec of the model (JSON: mean, std, layout, "
+                        "dtype, optional value_range/input_shape). Default: the sidecar "
+                        "<model>.preprocess.json if it exists. Without a spec the report says "
+                        "prov.recompute cannot be performed for this model")
     s.add_argument("--calibration", default=None,
                    help="a calibration set saved by the benchmark; without it the report "
                         "says calibration: null")
@@ -386,7 +468,8 @@ def main(argv: list[str] | None = None) -> int:
     # The Module B path: a corpus supplies probes and a reference battery.
     if a.corpus and not a.dry_run:
         r = run_scan(Path(a.model), Path(a.corpus), Path(a.out), a.profile,
-                     Path(a.reference) if a.reference else None, not a.no_battery)
+                     Path(a.reference) if a.reference else None, not a.no_battery,
+                     preprocess=Path(a.preprocess) if a.preprocess else None)
         print(f"{r.model_id}: {r.verdict}  ->  {a.out}/{r.model_id}.report.html")
         return 0
     return cmd_scan(a)

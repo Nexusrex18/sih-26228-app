@@ -64,17 +64,39 @@ def q_box_coarse(x: float) -> int:
     return _floor_half(float(x))
 
 
+#: JCS serialises numbers as IEEE-754 doubles, so an integer beyond 2**53 - 1 is not exactly
+#: representable in a hashed record. The seal's own profile rejects it (`INT_MAX`); so do we.
+INT_MAX = 2**53 - 1
+
+
+def q_e6(x: float) -> int:
+    """`floor(float64(x) * 1e6 + 0.5)`, UNCLAMPED — mirrors the seal's `q_e6`.
+
+    This is the rule for preprocessing `mean`/`std`/`value_range`, which may legitimately be
+    negative (a `[-1, 1]` normalisation has a negative lower bound). `q_confidence` must not be
+    used for them: it clamps to [0, 1_000_000], so a mean of -0.4 would quantise to 0 and hash
+    identically to a mean of 0.
+    """
+    if isinstance(x, (bool, str, bytes, bytearray)):
+        raise TypeError(f"{type(x).__name__} is not a number")
+    q = _floor_half(float(x) * CONFIDENCE_SCALE)
+    if abs(q) > INT_MAX:
+        raise ValueError(f"quantised value {q} is outside +/-(2**53-1)")
+    return q
+
+
 def q_preprocess(value: Any) -> Any:
     """Quantise a resolved preprocessing spec recursively.
 
-    `mean`/`std` take the same x1e6 integer rule as confidence — which is why
-    `preprocess_hash` is taken over the QUANTISED form, not the raw one.
+    Every float takes the unclamped x1e6 integer rule (`q_e6`) — which is why
+    `preprocess_hash` is taken over the QUANTISED form, not the raw one. Integers pass through
+    unchanged, so callers that need `1` and `1.0` to hash alike must normalise to float first
+    (`cva.loaders.preprocess` does).
     """
     if isinstance(value, bool):
         return value
     if isinstance(value, float):
-        return q_confidence(value) if -1.0 <= value <= 1.0 else _floor_half(
-            value * CONFIDENCE_SCALE)
+        return q_e6(value)
     if isinstance(value, int):
         return value
     if isinstance(value, dict):

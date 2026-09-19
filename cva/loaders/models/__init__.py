@@ -11,8 +11,9 @@ __all__ = ["PyTorchLoader", "TorchScriptLoader", "ONNXLoader", "KerasLoader", "C
            "TorchScriptHandle", "OnnxHandle", "load_model"]
 
 
-def load_model(path, arch_registry=None, model_id=None, enforce_safety=True):
+def load_model(path, arch_registry=None, model_id=None, enforce_safety=True, preprocess=None):
     """Auto-detect and load. Routed through loaders/detect.py so the S1 safety prescan
-    (hash before open, refuse custom ONNX ops) cannot be bypassed."""
+    (hash before open, refuse custom ONNX ops) cannot be bypassed. `preprocess` is a declared
+    preprocessing spec path; None falls back to the `<path>.preprocess.json` sidecar."""
     from cva.loaders.detect import detect_and_load
-    return detect_and_load(path, arch_registry, model_id, enforce_safety)
+    return detect_and_load(path, arch_registry, model_id, enforce_safety, preprocess)

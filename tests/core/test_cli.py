@@ -8,11 +8,13 @@ would replace the pytest process — so it runs as a subprocess and is marked sl
 from __future__ import annotations
 
 import argparse
+import json
 import shlex
 import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from cva import cli
@@ -306,6 +308,235 @@ def test_repro_command_works_for_selftests_namespace_without_the_adapter_flags()
     assert tokens[-4:] == ["--profile", "selftest", "--seed", "42"]
 
 
+# --- --preprocess: the declared spec, and the reference manifest ---------------------------------------
+
+HEX64 = "ab" * 32
+SPEC = {"mean": [0.0, 0.0, 0.0], "std": [1.0, 1.0, 1.0], "layout": "CHW", "dtype": "float32",
+        "value_range": [0.0, 1.0], "input_shape": [3, 8, 8]}
+
+
+def _spec_file(tmp_path: Path, spec: dict | None = None, name: str = "given.preprocess.json"):
+    p = tmp_path / name
+    p.write_text(json.dumps(SPEC if spec is None else spec))
+    return p
+
+
+class RefModel:
+    """What a file loader hands over, minus the file: digests, a structure digest, predict."""
+    fmt = "onnx"
+    opset = 17
+    model_id = "ref-001"
+    input_shape = (3, 8, 8)
+    num_classes = 2
+    digest = HEX64
+    arch = "cd" * 32
+
+    def weight_digest(self) -> str:
+        return self.digest
+
+    def arch_hash(self) -> str:
+        return self.arch
+
+    def predict(self, x):
+        return np.full((len(x), 2), 0.5, dtype=np.float32)
+
+    def capabilities(self) -> CapabilitySet:
+        return CapabilitySet(frozenset({Capability.MODEL_PREDICT}))
+
+
+@pytest.fixture
+def offline_scan(monkeypatch):
+    """`execute_scan` for real, with EMPTY detector registries: what is under test is what the
+    CLI writes around a scan, not what the detectors find."""
+    real = cli.scan
+    monkeypatch.setattr(cli, "scan", lambda model, ctx, profile, **kw: real(
+        model, ctx, profile, registries=({}, {}), **kw))
+
+
+def _scan_args(tmp_path: Path, **extra) -> argparse.Namespace:
+    return argparse.Namespace(model="X.onnx", dataset=None, out=str(tmp_path / "out"),
+                              profile="baseline", budget_tier=None, seed=7, dry_run=False,
+                              **extra)
+
+
+def _run(monkeypatch, model, args) -> Path:
+    monkeypatch.setattr(cli, "build_model", lambda a: model)
+    _res, out = cli.execute_scan(args)
+    assert out is not None
+    return out
+
+
+def test_the_preprocess_flag_is_accepted_and_carried(parsed, tmp_path):
+    p = str(tmp_path / "spec.json")
+    cli.main(["scan", "X.onnx", "--preprocess", p, "--dry-run"])
+    cli.main(["scan", "X.onnx", "--dry-run"])
+    assert parsed[0].preprocess == p
+    assert parsed[1].preprocess is None
+
+
+def test_repro_command_carries_preprocess_but_never_out(monkeypatch, tmp_path):
+    p = str(tmp_path / "spec.json")
+    _, tokens = _repro(monkeypatch, "X.onnx", "--preprocess", p, "--out", "/somewhere/else")
+    assert tokens[tokens.index("--preprocess") + 1] == p
+    assert "--out" not in tokens
+    _, plain = _repro(monkeypatch, "X.onnx")
+    assert "--preprocess" not in plain
+
+
+def test_preprocess_without_a_model_is_an_argparse_error(parsed, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["scan", "--preprocess", "spec.json", "--dry-run"])
+    assert exc.value.code == 2
+    assert "--preprocess" in _error_text(capsys)
+    assert parsed == []
+
+
+def test_preprocess_is_accepted_with_a_query_only_adapter(parsed):
+    cli.main(["scan", "--model-cmd", "python m.py", *ADAPTER_OK, "--preprocess", "s.json",
+              "--dry-run"])
+    assert parsed[0].preprocess == "s.json"
+
+
+def test_build_model_attaches_an_explicit_spec_to_a_query_only_handle(tmp_path):
+    from cva.loaders.preprocess import preprocess_digest
+
+    a = argparse.Namespace(model=None, model_cmd="python /tmp/m.py", model_url=None,
+                           input_shape="3,8,8", num_classes=2, model_id=None,
+                           preprocess=str(_spec_file(tmp_path)))
+    h = cli.build_model(a)
+    digest, blob = preprocess_digest(SPEC)
+    assert (h.preprocess_hash, h.preprocess_ref, h.preprocess_spec_bytes) \
+        == (digest, f"{digest}.json", blob)
+    a.preprocess = None
+    assert not hasattr(cli.build_model(a), "preprocess_hash")
+
+
+def test_execute_scan_writes_reference_json_with_every_known_fact(
+        monkeypatch, tmp_path, offline_scan):
+    from cva.loaders.preprocess import attach_preprocess, preprocess_digest
+
+    model = RefModel()
+    attach_preprocess(model, None, _spec_file(tmp_path))
+    digest, blob = preprocess_digest(SPEC)
+    out = _run(monkeypatch, model, _scan_args(tmp_path))
+
+    ref = json.loads((out / "reference.json").read_text())
+    # `cva scan` builds no probes, but the fingerprint runs its own battery, so a model that
+    # ANSWERS gets one registered: it is what closes the no-reference gap on every later scan.
+    fingerprint = ref.pop("fingerprint")
+    assert fingerprint and all(isinstance(v, float) for v in fingerprint)
+    assert ref == {"model_id": "ref-001", "weights_sha256": HEX64, "arch_hash": "cd" * 32,
+                   "preprocess_hash": digest, "preprocess_ref": f"{digest}.json"}
+    # The ref resolves: the spec bytes sit in the shared evidence store, under that name.
+    stored = tmp_path / "out" / "evidence" / f"{digest}.json"
+    assert stored.read_bytes() == blob
+    # ...and the report carries the same three facts in `target`, but does not list the file.
+    rep = json.loads((out / "report.json").read_text())
+    assert rep["target"]["preprocess_hash"] == digest
+    assert rep["target"]["preprocess_ref"] == f"{digest}.json"
+    assert rep["target"]["arch_hash"] == "cd" * 32
+    assert "reference.json" not in (out / "report.json").read_text()
+
+
+@pytest.mark.parametrize("digest", ["unavailable:frozen", "unavailable:black-box", "", "AB" * 32,
+                                    "ab" * 31, None])
+def test_the_reference_never_carries_a_weights_digest_that_is_not_64_lowercase_hex(
+        monkeypatch, tmp_path, offline_scan, digest):
+    class Model(RefModel):
+        pass
+
+    Model.digest = digest                   # type: ignore[assignment]
+    out = _run(monkeypatch, Model(), _scan_args(tmp_path))
+    ref = json.loads((out / "reference.json").read_text())
+    assert "weights_sha256" not in ref
+    assert ref["model_id"] == "ref-001"
+
+
+def test_a_model_with_no_spec_and_no_structure_digest_gets_neither_key(
+        monkeypatch, tmp_path, offline_scan):
+    class Bare:
+        fmt = "subprocess"
+        model_id = "bare-001"
+        input_shape = (3, 8, 8)
+        num_classes = 2
+
+        def weight_digest(self) -> str:
+            return "unavailable:black-box"
+
+        def capabilities(self) -> CapabilitySet:
+            return CapabilitySet(frozenset({Capability.MODEL_PREDICT}))
+
+    out = _run(monkeypatch, Bare(), _scan_args(tmp_path))
+    ref = json.loads((out / "reference.json").read_text())
+    assert ref == {"model_id": "bare-001"}
+    assert not (tmp_path / "out" / "evidence").exists() or not list(
+        (tmp_path / "out" / "evidence").glob("*.json")), "no spec, nothing stored"
+    rep = json.loads((out / "report.json").read_text())
+    assert not {"preprocess_hash", "preprocess_ref", "arch_hash"} & set(rep["target"])
+
+
+def test_no_key_of_the_reference_is_ever_an_empty_string(monkeypatch, tmp_path, offline_scan):
+    out = _run(monkeypatch, RefModel(), _scan_args(tmp_path))
+    ref = json.loads((out / "reference.json").read_text())
+    assert all(v not in ("", None) for v in ref.values())
+    assert "preprocess_hash" not in ref and "preprocess_ref" not in ref
+
+
+def test_a_dataset_only_scan_writes_no_reference(monkeypatch, tmp_path, offline_scan):
+    out = _run(monkeypatch, None, _scan_args(tmp_path))
+    assert not (out / "reference.json").exists()
+
+
+def test_the_fingerprint_is_written_only_when_the_caller_has_probes():
+    m = RefModel()
+    with_fp = cli.reference_manifest(m, with_fingerprint=True)
+    assert isinstance(with_fp["fingerprint"], list) and with_fp["fingerprint"]
+    assert "fingerprint" not in cli.reference_manifest(m, with_fingerprint=False)
+
+    class Unanswerable(RefModel):
+        def predict(self, x):
+            raise RuntimeError("no")
+
+    # Unknown means absent, not an error and not an empty list.
+    assert "fingerprint" not in cli.reference_manifest(Unanswerable(), with_fingerprint=True)
+
+
+def test_execute_scan_asks_for_a_fingerprint_when_the_model_can_be_queried(
+        monkeypatch, tmp_path, offline_scan):
+    """The fingerprint needs a model that answers, not a probe set: gating it on probes meant
+    the real `cva scan` path never registered the one thing that closes the no-reference gap."""
+    asked: list[bool] = []
+    real = cli.write_reference
+    monkeypatch.setattr(cli, "write_reference", lambda *a, with_fingerprint, **k: (
+        asked.append(with_fingerprint), real(*a, with_fingerprint=with_fingerprint, **k))[1])
+    _run(monkeypatch, RefModel(), _scan_args(tmp_path))
+    assert asked == [True]
+
+
+def test_emit_reference_stores_the_spec_beside_the_manifest_it_points_at(tmp_path):
+    from cva.loaders.preprocess import attach_preprocess, preprocess_digest
+
+    model = RefModel()
+    attach_preprocess(model, None, _spec_file(tmp_path))
+    dest = tmp_path / "corpus_out" / "ref.reference.json"
+    dest.parent.mkdir()
+    cli.emit_reference(model, dest)
+    ref = json.loads(dest.read_text())
+    assert ref["preprocess_ref"] == f"{preprocess_digest(SPEC)[0]}.json"
+    assert (dest.parent / "evidence" / ref["preprocess_ref"]).is_file()
+    assert ref["fingerprint"], "the corpus path has probes, so it registers a fingerprint"
+    # ...and the emitted manifest is still what `manifest_from` reads back.
+    assert cli.manifest_from(dest).weights_sha256 == HEX64
+
+
+def test_a_stored_spec_whose_name_differs_from_the_handles_ref_is_an_error(tmp_path):
+    model = RefModel()
+    model.preprocess_ref = "0" * 64 + ".json"           # type: ignore[attr-defined]
+    model.preprocess_spec_bytes = b"{}"                 # type: ignore[attr-defined]
+    with pytest.raises(RuntimeError, match="stored preprocessing spec"):
+        cli.store_preprocess(model, tmp_path)
+
+
 # --- selftest end to end (slow) --------------------------------------------------------------------
 
 needs_backbone = pytest.mark.skipif(
@@ -354,3 +585,25 @@ def test_v10_two_selftest_runs_write_byte_identical_reports(first_selftest, tmp_
     a, b = _report_of(out_a), _report_of(out_b)
     assert a.parent.name == b.parent.name, "the scan_id is derived from the seed"
     assert a.read_bytes() == b.read_bytes()
+
+
+@pytest.mark.slow
+@needs_backbone
+def test_selftest_exercises_the_preprocess_hash_path(first_selftest):
+    """The fixture model ships a sidecar, so selftest reports the hash, stores the spec it
+    points at, writes the reference manifest, and does NOT claim `prov.recompute` is
+    impossible."""
+    out, proc = first_selftest
+    assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-2000:]
+    report = _report_of(out)
+    rep = json.loads(report.read_text())
+    target = rep["target"]
+    assert len(target["preprocess_hash"]) == 64 and len(target["arch_hash"]) == 64
+    assert target["preprocess_ref"] == f"{target['preprocess_hash']}.json"
+    assert (out / "reports" / "evidence" / target["preprocess_ref"]).is_file()
+    assert not any("No preprocessing spec was declared" in s
+                   for s in rep["coverage"]["standing_limitations"])
+    ref = json.loads((report.parent / "reference.json").read_text())
+    assert ref["preprocess_hash"] == target["preprocess_hash"]
+    assert ref["arch_hash"] == target["arch_hash"]
+    assert len(ref["weights_sha256"]) == 64 and ref["fingerprint"]
