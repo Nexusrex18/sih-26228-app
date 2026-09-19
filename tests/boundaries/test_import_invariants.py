@@ -148,9 +148,8 @@ def test_scanner_code_never_imports_the_attack_lab():
     """attacklab/ trains and converts models and generates poisoned data — Mode A, dev machine
     only. If a plug-in under detectors/ or core/ imports it, the air-gapped scanner image drags
     in training-time dependencies and a synthetic-data generator becomes load-bearing."""
-    _assert_no_import(
-        "detectors", ("attacklab",),
-        "detectors/ must never import attacklab/ (the attack lab is not part of the scanner).")
-    _assert_no_import(
-        "core", ("attacklab",),
-        "core/ must never import attacklab/ (the attack lab is not part of the scanner).")
+    for pkg in ("detectors", "core"):
+        bad = scan_imports(_require(pkg), ("attacklab",))
+        assert not bad, (
+            f"{pkg}/ must never import attacklab/ (the attack lab is not part of the "
+            "scanner).\n  " + "\n  ".join(bad))

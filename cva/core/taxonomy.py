@@ -31,54 +31,67 @@ class AttackClass:
     module: Module
     kind: Kind
     desc: str
+    # The class's DEFAULT nature, where the owning module declared one. NOT the same thing
+    # as `Finding.nature`, which a detector sets per finding from what it actually saw —
+    # this is only the prior to fall back on. `None` means the owning module did not
+    # declare one, which is honest; inventing `indeterminate` here would make a
+    # never-stated default indistinguishable from a deliberate one.
+    nature: str | None = None
 
 
-def _c(name: str, module: Module, kind: Kind, desc: str) -> AttackClass:
-    return AttackClass(name, module, kind, desc)
+def _c(name: str, module: Module, kind: Kind, desc: str,
+       nature: str | None = None) -> AttackClass:
+    return AttackClass(name, module, kind, desc, nature)
 
 
 # --- Module A — training-data integrity (PS §2.2.1) ------------------------
 _A = [
     _c("near_duplicate_flooding", "A", "attack",
-       "Near-duplicate images inflating a class or a contributor's apparent volume"),
-    _c("label_flipping", "A", "attack", "Labels changed to a wrong class"),
+       "Near-identical images injected in volume to skew the training data", "quality"),
+    _c("label_flipping", "A", "attack",
+       "A fraction of training samples carry the wrong class", "quality"),
     _c("systematic_mislabelling", "A", "attack",
-       "A consistent, directed labelling error rather than scattered noise"),
-    _c("trigger_injection", "A", "attack", "A trigger pattern planted in training images"),
-    _c("out_of_distribution", "A", "attack", "Imagery that does not belong to the task at all"),
+       "A contributor consistently applies a wrong class mapping", "indeterminate"),
+    _c("trigger_injection", "A", "attack",
+       "Trigger patch pasted onto training samples (backdoor poisoning)", "adversarial"),
+    _c("out_of_distribution", "A", "attack",
+       "Foreign-domain imagery inserted into the training data", "quality"),
     _c("negative_space_poisoning", "A", "attack",
-       "Poisoning by what is NOT annotated — objects present and deliberately unlabelled"),
+       "Objects present in an image but deliberately left unannotated", "indeterminate"),
     _c("annotation_geometry_tamper", "A", "attack",
-       "Boxes subtly shifted, shrunk or grown to degrade localisation"),
+       "Boxes shifted or shrunk while the class label stays correct", "indeterminate"),
     _c("duplicate_label_conflict", "A", "attack",
-       "The same object annotated twice with conflicting classes"),
+       "Near-duplicate images carrying contradictory labels", "quality"),
     _c("script_generated_batch", "A", "attack",
-       "A contribution whose metadata shows machine generation, not collection"),
+       "A batch processed or generated as a set rather than captured", "quality"),
 ]
 
 # --- Module B — model integrity (PS §2.2.2) --------------------------------
 # Confirmed by ML-2, Plan/Module-B-Model-Integrity-Plan.md §5.
 _B = [
-    _c("model_substitution", "B", "attack", "Supplied model is not the declared model"),
+    _c("model_substitution", "B", "attack",
+       "Supplied model is not the declared model", "adversarial"),
     _c("benign_conversion", "B", "operational",
        "Digest mismatch, fingerprint inside tolerance — re-export, opset change or "
-       "quantisation. ADR-007: this must NOT read as 'SUBSTITUTED'"),
+       "quantisation", "quality"),
     _c("weight_anomaly", "B", "attack",
-       "Per-layer weight distribution diverges from the reference battery"),
+       "Per-layer weight distribution diverges from battery", "indeterminate"),
     _c("activation_anomaly", "B", "attack",
-       "Activation distribution anomaly on clean probes"),
-    _c("backdoor_trigger", "B", "attack", "Trigger-conditioned backdoor"),
-    _c("architectural_backdoor", "B", "attack", "Malice in the graph, not in the weights"),
+       "Activation distribution anomaly on clean probes", "indeterminate"),
+    _c("backdoor_trigger", "B", "attack",
+       "Trigger-conditioned backdoor", "adversarial"),
+    _c("architectural_backdoor", "B", "attack",
+       "Malice in the graph, not the weights", "adversarial"),
     # `model_anomalous` is `attack`, decided in backend_plan.md §9.5 against ML-2's flag
     # that it was a judgment call. PS §2.2.2 names "anomalous" as one of three required
     # model verdicts, so it must appear as CLAIMED COVERAGE even though it is a generic
     # divergence report rather than a named attacker goal. Classing it `operational`
     # would drop a literally-enumerated PS requirement out of the coverage statement.
     _c("model_anomalous", "B", "attack",
-       "Corrupted, truncated or badly trained — PS §2.2.2's third verdict, not "
-       "classifiable as any of the above"),
+       "Corrupted, truncated or badly trained — PS 2.2.2's third verdict, not classifiable "
+       "as the above", "indeterminate"),
     _c("data_model_discrepancy", "B", "attack",
-       "Model behaviour the supplied training data cannot explain"),
+       "Model behaviour the supplied training data cannot explain", "indeterminate"),
 ]
 
 # --- Module C — inference provenance (PS §2.2.3) ---------------------------
@@ -116,12 +129,9 @@ _D = [
 # Backend amendments, declared here rather than invented three ways in three packages.
 _CORE = [
     _c("unsafe_artifact", "core", "attack",
-       "The artefact was refused before loading — deserialisation payload, custom ONNX "
-       "operator, decompression bomb. An attack on the ASSURANCE TOOL, and the one attack "
-       "class we detect without running a single detector"),
+       "Model file unsafe to load (deserialisation / custom op)", "adversarial"),
     _c("tool.error", "core", "operational",
-       "A check raised. A defect in the assurance tool, never a property of the model, and "
-       "never folded into DEGRADED"),
+       "A check raised — a defect in the assurance tool", "indeterminate"),
     _c("not_assessed", "core", "operational",
        "A registered check did not run — capability or budget. Carries the UNAVAILABLE "
        "finding when a check declares more than one attack class and none of them is the "

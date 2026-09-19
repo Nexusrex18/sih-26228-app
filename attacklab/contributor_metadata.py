@@ -35,7 +35,7 @@ def assign_contributors(dataset: Dataset, out_dir: Path | str, seed: int,
         counts[i % len(counts)] += 1
     assign: dict[str, dict] = {}
     pos = 0
-    for name, c in zip(names, counts):
+    for name, c in zip(names, counts, strict=False):
         for idx in order[pos:pos + c]:
             sid = dataset.samples[int(idx)].sample_id
             assign[sid] = {"contributor": name,

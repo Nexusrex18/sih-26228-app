@@ -14,9 +14,10 @@ re-export), not a change to any detector.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 import numpy as np
 

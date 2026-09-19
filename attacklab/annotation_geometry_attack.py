@@ -9,7 +9,7 @@ import dataclasses
 
 import numpy as np
 
-from cva.detectors.data._stub_types import Dataset, Sample
+from cva.detectors.data._stub_types import Dataset
 
 
 def tamper_geometry(dataset: Dataset, seed: int, target_contributor: str, shrink: float = 0.5,

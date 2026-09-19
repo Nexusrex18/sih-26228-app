@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from attacklab.label_flip_attack import flip_labels
-from cva.detectors.data._stub_types import ArrayEmbeddingIndex, stub_embeddings
+from cva.detectors.data._stub_types import stub_embeddings
 from cva.detectors.data.label_flip import LabelConsistency, out_of_fold_probs
 from tests.detectors.data.helpers import detect, resolve
 

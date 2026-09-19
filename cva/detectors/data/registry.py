@@ -5,8 +5,16 @@ registry, shared with ``model.data_consistency``. ``cva/core/`` must never impor
 """
 from cva.core.registry import DETECTOR_REGISTRY
 
-from . import (annotation_geometry, duplicate_label_conflict, label_flip, metadata_anomaly,  # noqa: F401
-               near_duplicate, negative_space, systematic_mislabel, trigger_ood)
+from . import (  # noqa: F401
+    annotation_geometry,
+    duplicate_label_conflict,
+    label_flip,
+    metadata_anomaly,
+    near_duplicate,
+    negative_space,
+    systematic_mislabel,
+    trigger_ood,
+)
 
 __all__ = ["DETECTOR_REGISTRY", "MODULE_A_DETECTORS", "registry_rows"]
 

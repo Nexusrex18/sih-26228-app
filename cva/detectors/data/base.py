@@ -21,15 +21,17 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 
-from cva.core.capability import Availability, Capability
+from cva.core.capability import Availability
 from cva.core.context import CheckContext
 from cva.core.registry import DETECTOR_REGISTRY, register_detector  # noqa: F401  (re-exported)
 from cva.core.types import Disposition, Evidence, Finding, Nature, Severity
+
 from ._stub_types import Dataset, Sample
 
 PENDING_RULE = "pending_risk_engine"
@@ -67,7 +69,7 @@ class Params:
 
     @classmethod
     def from_ctx(cls, detector_id: str, defaults: Mapping[str, Any],
-                 ctx: CheckContext | None) -> "Params":
+                 ctx: CheckContext | None) -> Params:
         return cls(defaults, (ctx.profile.get(detector_id) if ctx is not None else None) or {})
 
     def __getitem__(self, k: str) -> Any:
@@ -77,7 +79,7 @@ class Params:
         return dict(self._p)
 
 
-def seed_of(p: "Params", ctx: CheckContext | None) -> int:
+def seed_of(p: Params, ctx: CheckContext | None) -> int:
     """An explicit ``seed`` in the detector's profile namespace wins; else the scan's seed."""
     s = p["seed"] if "seed" in p.as_dict() else None
     return int(s) if s is not None else int(as_ctx(ctx).rng_seed)

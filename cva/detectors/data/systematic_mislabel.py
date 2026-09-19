@@ -33,9 +33,22 @@ from scipy.stats import fisher_exact
 
 from cva.core.capability import Capability
 from cva.core.types import Nature, Severity
-from ._stub_types import Dataset, EmbeddingIndex
-from .base import (CheckContext, sentence_case, as_ctx, finalise, EvidenceStore, Params, attribution, dominant_category, group_source,
-                   make_finding, not_performed, register_detector)
+
+from ._stub_types import Dataset
+from .base import (
+    CheckContext,
+    EvidenceStore,
+    Params,
+    as_ctx,
+    attribution,
+    dominant_category,
+    finalise,
+    group_source,
+    make_finding,
+    not_performed,
+    register_detector,
+    sentence_case,
+)
 from .taxonomy import SYSTEMATIC_MISLABELLING
 
 DEFAULTS = {"min_n": 10, "rate_min": 0.25, "gap_min": 0.2, "p_max": 1e-3,
