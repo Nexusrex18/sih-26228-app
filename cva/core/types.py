@@ -115,6 +115,27 @@ ATTACK_CLASSES: dict[str, dict[str, str]] = {
                                "desc": "Model behaviour the supplied training data cannot explain"},
     "unsafe_artifact":        {"kind": "attack",      "nature": "adversarial",
                                "desc": "Model file unsafe to load (deserialisation / custom op)"},
+    # Module A — Plan/Module-A-Data-Integrity-Plan.md §5 and backend_plan.md §9.5. All nine are
+    # `attack`: each names something an attacker (or a careless contributor) does to the data
+    # and that a detector claims to look for. `nature` is the class's DEFAULT per Module A §3.
+    "near_duplicate_flooding":    {"kind": "attack", "nature": "quality",
+                                   "desc": "Near-identical images injected in volume to skew the training data"},
+    "label_flipping":             {"kind": "attack", "nature": "quality",
+                                   "desc": "A fraction of training samples carry the wrong class"},
+    "systematic_mislabelling":    {"kind": "attack", "nature": "indeterminate",
+                                   "desc": "A contributor consistently applies a wrong class mapping"},
+    "trigger_injection":          {"kind": "attack", "nature": "adversarial",
+                                   "desc": "Trigger patch pasted onto training samples (backdoor poisoning)"},
+    "out_of_distribution":        {"kind": "attack", "nature": "quality",
+                                   "desc": "Foreign-domain imagery inserted into the training data"},
+    "negative_space_poisoning":   {"kind": "attack", "nature": "indeterminate",
+                                   "desc": "Objects present in an image but deliberately left unannotated"},
+    "annotation_geometry_tamper": {"kind": "attack", "nature": "indeterminate",
+                                   "desc": "Boxes shifted or shrunk while the class label stays correct"},
+    "duplicate_label_conflict":   {"kind": "attack", "nature": "quality",
+                                   "desc": "Near-duplicate images carrying contradictory labels"},
+    "script_generated_batch":     {"kind": "attack", "nature": "quality",
+                                   "desc": "A batch processed or generated as a set rather than captured"},
     "tool.error":             {"kind": "operational", "nature": "indeterminate",
                                "desc": "A check raised — a defect in the assurance tool"},
 }

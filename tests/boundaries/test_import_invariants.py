@@ -78,3 +78,15 @@ def test_attacklab_is_at_repo_root_not_inside_the_scanner_package():
     """Under cva/ it ships training-time dependencies inside the air-gapped image."""
     assert (ROOT / "attacklab").is_dir()
     assert not (ROOT / "cva" / "attacklab").exists()
+
+
+def test_scanner_code_never_imports_the_attack_lab():
+    """attacklab/ trains and converts models and generates poisoned data — Mode A, dev machine
+    only. If a plug-in under detectors/ or core/ imports it, the air-gapped scanner image drags
+    in training-time dependencies and a synthetic-data generator becomes load-bearing."""
+    _assert_no_import(
+        "detectors", ("attacklab",),
+        "detectors/ must never import attacklab/ (the attack lab is not part of the scanner).")
+    _assert_no_import(
+        "core", ("attacklab",),
+        "core/ must never import attacklab/ (the attack lab is not part of the scanner).")
