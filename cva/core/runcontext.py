@@ -41,6 +41,11 @@ class RunContext:
     inference_ledger: InferenceLedgerSource = field(default_factory=NullInferenceLedger)
     code_commit: str = "unknown"
     dataset: Any = None
+    # A second, operator-supplied dataset known to be clean: B7's "reference clean set" for the
+    # absolute-rate check. Deliberately NOT a Capability (`REFERENCE_CLEAN_SET` means
+    # `probes_x`, a model-side array) and never read by `capabilities()`: the orchestrator runs
+    # the data detectors over it and hands the risk engine only a flag count.
+    reference_dataset: Any = None
     # A fitted `CalibrationSet` from the benchmark, or None. A scan has no labels of its own,
     # so with None the report says `calibration: null` rather than inventing a curve.
     calibration: Any = None

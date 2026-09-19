@@ -50,6 +50,9 @@ def build(result, command: str | None = None) -> dict:
         # Empty / null means "not computed", never "nothing found".
         "contributor_risk": list(getattr(result, "contributor_risk", None) or []),
         "permutation_test": getattr(result, "permutation_test", None),
+        # Null when no reference dataset was supplied, or when it was supplied but unusable
+        # (then `contributor_baseline_unavailable` says why).
+        "contributor_baseline": getattr(result, "contributor_baseline", None),
         "provenance_summary": provenance_summary_of(result),
         "drift_summary": None,
         "calibration": getattr(result, "calibration", None),
@@ -57,6 +60,9 @@ def build(result, command: str | None = None) -> dict:
                      "standing_limitations": standing_limitations(target)},
         "reproduction": reproduction_of(result, command),
     })
+    unavailable = getattr(result, "contributor_baseline_unavailable", None)
+    if unavailable:
+        report["contributor_baseline_unavailable"] = unavailable
     return report
 
 

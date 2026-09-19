@@ -385,6 +385,12 @@ def check_pixel_budget(path: Path, max_pixels: int = PIXEL_BUDGET_DEFAULT) -> tu
         raise UnsafeArtifact(
             path, "S7",
             f"image header breaches the {max_pixels}-pixel decode budget: {exc}") from exc
+    except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+        # A path that names no file is a missing image, not a hostile one. Every loader
+        # skips a missing image (`except OSError: continue`), and wrapping it as an S7
+        # refusal made that branch dead: one absent file aborted the whole dataset load. A
+        # file that EXISTS but will not parse still lands in the refusal below.
+        raise
     except Exception as exc:
         raise UnsafeArtifact(
             path, "S7", f"image header could not be read safely: {exc}") from exc

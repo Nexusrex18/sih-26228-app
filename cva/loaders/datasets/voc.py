@@ -34,7 +34,9 @@ def parse_annotation(path: Path) -> ET.Element:
     if size > XML_MAX_BYTES:
         raise UnsafeArtifact(path, "S5", f"annotation is {size} bytes; the cap is {XML_MAX_BYTES}")
     blob = path.read_bytes()
-    low = blob[:65536].lower()
+    # The WHOLE blob, not a prefix: it is already capped at XML_MAX_BYTES, and scanning only
+    # the first 64 KB let a DTD placed after 70,000 spaces through.
+    low = blob.lower()
     if b"<!doctype" in low or b"<!entity" in low:
         raise UnsafeArtifact(path, "S5", "annotation declares a DTD or entity; VOC needs neither")
     try:

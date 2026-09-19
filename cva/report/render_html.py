@@ -254,6 +254,23 @@ def _contributor_section(doc: _Doc, r) -> None:
     if perm:
         doc.add(f"<div class=note>Permutation test ({perm['n_permutations']} permutations, "
                 f"p = {perm['p_value']:.4f}): {_e(perm['conclusion'])}</div>")
+    base = getattr(r, "contributor_baseline", None)
+    why = getattr(r, "contributor_baseline_unavailable", None)
+    if base:
+        line = (f"Reference dataset: {base['reference_flagged']} of {base['reference_n']} images "
+                f"flagged ({base['reference_rate']:.1%}); this cohort's baseline rate is "
+                f"{base['cohort_rate']:.1%}.")
+        if base["cohort_exceeds_reference"]:
+            line += (" Cohort prior unreliable here: the baseline every group is compared "
+                     "with is itself higher than clean data produces, so a contaminated "
+                     "cohort can make its contributors look ordinary.")
+    elif why:
+        line = (f"A reference dataset was supplied but not used ({why}), so a contaminated "
+                "cohort would not be detected.")
+    else:
+        line = ("No reference dataset supplied, so a contaminated cohort would not be "
+                "detected.")
+    doc.add(f"<div class=note>{_e(line)}</div>")
 
 
 def _findings_section(doc: _Doc, r, root: Path, caps: dict[str, int]) -> None:

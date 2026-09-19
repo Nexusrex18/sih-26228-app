@@ -127,6 +127,8 @@ def repro_command(a) -> str:
             argv += [flag, str(_opt(a, attr))]
     if a.dataset:
         argv += ["--dataset", a.dataset]
+    if _opt(a, "reference_dataset"):
+        argv += ["--reference-dataset", str(a.reference_dataset)]
     argv += ["--profile", a.profile]
     if a.budget_tier:
         argv += ["--budget-tier", a.budget_tier]
@@ -221,8 +223,11 @@ def execute_scan(a, command: str | None = None) -> tuple[ScanResult, Path | None
     with guard:
         model = build_model(a)
         ds = load_dataset(Path(a.dataset) if a.dataset else None)
+        ref_ds = load_dataset(Path(_opt(a, "reference_dataset"))
+                              if _opt(a, "reference_dataset") else None)
         ctx = RunContext(out_dir=Path(a.out), seed=a.seed, dataset=ds,
-                         code_commit=code_commit(), calibration=calibration)
+                         code_commit=code_commit(), calibration=calibration,
+                         reference_dataset=ref_ds)
         res = scan(model, ctx, a.profile, dry_run=a.dry_run, plan_sink=print,
                    budget_tier=a.budget_tier)
     if a.dry_run:
@@ -246,6 +251,8 @@ def cmd_scan(a) -> int:
     if out is None:
         print(f"\nDRY RUN — nothing executed. scan_id would be {res.scan_id}")
         return 0
+    if res.contributor_baseline_unavailable:
+        print(f"note: the reference dataset was NOT used: {res.contributor_baseline_unavailable}")
     print(f"{res.model_id}: {res.verdict}  ->  {out}/report.json")
     return 0
 
@@ -324,6 +331,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("model", nargs="?", default=argparse.SUPPRESS)
     s.add_argument("--model", dest="model", default=None)
     s.add_argument("--dataset", default=None)
+    s.add_argument("--reference-dataset", default=None,
+                   help="a second dataset, in any supported layout, that YOU know to be clean: "
+                        "the same data checks run over it and its flag rate is the absolute "
+                        "baseline that a contaminated cohort is compared against")
     s.add_argument("--corpus", default=None)
     s.add_argument("--out", default="artifacts/reports")
     s.add_argument("--profile", default="baseline")

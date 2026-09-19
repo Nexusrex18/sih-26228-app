@@ -16,7 +16,7 @@ import re
 import time
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -38,7 +38,7 @@ from cva.core.scanid import (
 )
 from cva.core.types import Disposition, Evidence, Finding, Severity
 from cva.risk.disposition import default_policy
-from cva.risk.engine import RiskOutcome, assess
+from cva.risk.engine import RiskOutcome, assess, reference_flag_counts
 
 
 @dataclass
@@ -73,6 +73,10 @@ class ScanResult:
     contributor_risk: list[dict[str, Any]] = field(default_factory=list)
     permutation_test: dict[str, Any] | None = None
     calibration: dict[str, Any] | None = None
+    # B7's absolute rate against a reference dataset. None with no reference supplied, and
+    # None with `contributor_baseline_unavailable` saying why when one was supplied but unusable.
+    contributor_baseline: dict[str, Any] | None = None
+    contributor_baseline_unavailable: str | None = None
 
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -419,38 +423,8 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
             embeddings, embedding_gap = build_embeddings(ctx, prof)
             embeddings_built = True
         t0 = time.time()
-        try:
-            got = (inst.detect(ctx.dataset, embeddings, model, cctx) if is_detector
-                   else inst.check(model, cctx))
-            if is_detector and embedding_gap is not None:
-                for f in got:
-                    f.limitations.append(
-                        f"No embedding index was available for this scan: {embedding_gap}")
-            for f in got:
-                if f.availability == Availability.OK and \
-                        row.resolution.state == Availability.DEGRADED:
-                    f.availability = Availability.DEGRADED
-                    f.limitations.append(f"Ran DEGRADED: {row.resolution.reason}")
-            findings.extend(got)
-            if row.check_id == "model.intrinsic_probes":
-                for f in got:
-                    if f.produced_by.startswith("ranking="):
-                        prof["nc_class_order"] = json.loads(
-                            f.produced_by.split("=", 1)[1])
-        except Exception as exc:                       # ERROR, never DEGRADED
-            findings.append(Finding(
-                detector_id=row.check_id, detector_version="?", scan_id=scan_id,
-                target_type="dataset" if is_detector else "model",
-                target_ref="dataset" if is_detector else model_id,
-                severity=Severity.MEDIUM, confidence=0.0,
-                reason=f"Check raised {type(exc).__name__}: {exc}. This is a defect in the "
-                       "assurance tool, not a property of the model.",
-                attack_class="tool.error",
-                evidence=[Evidence("json", "traceback",
-                                   data=traceback.format_exc().splitlines()[-6:])],
-                limitations=["This attack class was NOT assessed — the check failed."],
-                disposition=Disposition.REVIEW, disposition_rule="tool.error",
-                availability=Availability.ERROR))
+        findings.extend(_run_check(row, inst, is_detector, ctx.dataset, embeddings,
+                                   embedding_gap, model, cctx, prof, scan_id, model_id))
         timings[row.check_id] = round(time.time() - t0, 2)
 
     for f in findings:
@@ -464,16 +438,107 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
     if ctx.out_dir is not None:
         materialise_evidence(findings, EvidenceStore(ctx.out_dir))
 
-    risk: RiskOutcome = assess(findings, ctx.dataset, prof, ctx.seed, ctx.calibration)
+    # B7's absolute rate: the same data detectors over a second, known-clean dataset, of which
+    # only the flag count survives. Its findings never enter `findings` or the coverage.
+    reference: dict[str, int] | None = None
+    reference_gap: str | None = None
+    if ctx.reference_dataset is not None:
+        reference, reference_gap = _reference_flags(
+            model, ctx, prof, plan, check_registry, detector_registry, scan_id, model_id,
+            embedding_gap)
+    risk: RiskOutcome = assess(findings, ctx.dataset, prof, ctx.seed, ctx.calibration,
+                               reference, reference_gap)
     result = ScanResult(scan_id, model_id, getattr(model, "fmt", "-"), caps, plan,
                         findings, timings,
                         _verdict(findings, risk), profile_name, phash, ctx.code_commit, access,
                         created_at_utc=_created_at(prof), profile=prof, seed=ctx.seed,
                         target=_target_of(model, ctx), contributor_risk=risk.contributor_risk,
-                        permutation_test=risk.permutation_test, calibration=risk.calibration)
+                        permutation_test=risk.permutation_test, calibration=risk.calibration,
+                        contributor_baseline=risk.contributor_baseline,
+                        contributor_baseline_unavailable=risk.contributor_baseline_unavailable)
     # Sealing is NOT done here: the scan record binds the sha256 of report.json, which does
     # not exist yet. The caller writes the report, then calls `seal_report` (plan §7.9).
     return result
+
+
+def _run_check(row: PlanRow, inst: Any, is_detector: bool, dataset: Any, embeddings: Any,
+               embedding_gap: str | None, model: Any, cctx: CheckContext,
+               prof: dict[str, Any], scan_id: str, model_id: str) -> list[Finding]:
+    """Run ONE resolved check and return its findings; a check that raises becomes an ERROR
+    finding, never DEGRADED. Shared by the scan proper and the reference-dataset pass so both
+    treat DEGRADED rows and a missing embedding index identically."""
+    got: list[Finding] = []
+    try:
+        got = (inst.detect(dataset, embeddings, model, cctx) if is_detector
+               else inst.check(model, cctx))
+        if is_detector and embedding_gap is not None:
+            for f in got:
+                f.limitations.append(
+                    f"No embedding index was available for this scan: {embedding_gap}")
+        for f in got:
+            if f.availability == Availability.OK and \
+                    row.resolution.state == Availability.DEGRADED:
+                f.availability = Availability.DEGRADED
+                f.limitations.append(f"Ran DEGRADED: {row.resolution.reason}")
+        if row.check_id == "model.intrinsic_probes":
+            for f in got:
+                if f.produced_by.startswith("ranking="):
+                    prof["nc_class_order"] = json.loads(f.produced_by.split("=", 1)[1])
+        return got
+    except Exception as exc:                           # ERROR, never DEGRADED
+        return [*got, Finding(
+            detector_id=row.check_id, detector_version="?", scan_id=scan_id,
+            target_type="dataset" if is_detector else "model",
+            target_ref="dataset" if is_detector else model_id,
+            severity=Severity.MEDIUM, confidence=0.0,
+            reason=f"Check raised {type(exc).__name__}: {exc}. This is a defect in the "
+                   "assurance tool, not a property of the model.",
+            attack_class="tool.error",
+            evidence=[Evidence("json", "traceback",
+                               data=traceback.format_exc().splitlines()[-6:])],
+            limitations=["This attack class was NOT assessed — the check failed."],
+            disposition=Disposition.REVIEW, disposition_rule="tool.error",
+            availability=Availability.ERROR)]
+
+
+def _reference_flags(model: Any, ctx: RunContext, prof: dict[str, Any], plan: list[PlanRow],
+                     check_registry: dict[str, Any], detector_registry: dict[str, Any],
+                     scan_id: str, model_id: str, cohort_gap: str | None
+                     ) -> tuple[dict[str, int] | None, str | None]:
+    """Run the scan's own runnable `data.*` detectors over `ctx.reference_dataset` and return
+    `({"reference_n", "reference_flagged"}, None)`, or `(None, why)`.
+
+    Same profile, its own embedding index, the same `embedding_max_images` ceiling. Only the
+    flag count leaves this function: the reference findings are never reported and never count
+    toward coverage. A rate is comparable only when both datasets got the same treatment, so a
+    reference over the ceiling, an embedding index that could not be built, a detector that
+    raised, or a scanned dataset that had no index all give `None` and a reason, never a rate
+    computed from a run that quietly did less than the scan did.
+    """
+    ref = ctx.reference_dataset
+    if not getattr(ref, "samples", None):
+        return None, "the reference dataset has no samples"
+    rows = [r for r in plan if r.resolution.runnable
+            and r.check_id not in check_registry and r.check_id in detector_registry]
+    if not rows:
+        return None, ("no data.* check was runnable in this scan, so there was nothing to "
+                      "run over the reference dataset")
+    if cohort_gap is not None:
+        return None, (f"the scanned dataset had no embedding index ({cohort_gap}), so its flag "
+                      "rate is not comparable with a reference run that has one")
+    ref_embeddings, ref_gap = build_embeddings(replace(ctx, dataset=ref), prof)
+    if ref_gap is not None:
+        return None, f"the reference dataset was not embedded: {ref_gap}"
+    cctx = CheckContext(ctx.probes_x, ctx.probes_y, ctx.suspect_x, ctx.battery,
+                        prof, scan_id, ctx.out_dir, ctx.seed)
+    found: list[Finding] = []
+    for row in rows:
+        got = _run_check(row, detector_registry[row.check_id](), True, ref, ref_embeddings,
+                         None, model, cctx, prof, scan_id, model_id)
+        if any(f.availability == Availability.ERROR for f in got):
+            return None, f"{row.check_id} raised while scanning the reference dataset"
+        found.extend(got)
+    return reference_flag_counts(found, ref, prof, ctx.calibration), None
 
 
 def build_embeddings(ctx: RunContext, prof: dict[str, Any]) -> tuple[Any, str | None]:

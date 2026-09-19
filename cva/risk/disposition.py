@@ -13,6 +13,10 @@ failure that flatters the tool:
     Findings, not fingerprints.
   * D5 floors at `severity >= low`, so an `info` finding never reaches `review` on
     confidence alone.
+
+The engine owns `disposition` and `disposition_rule` for every finding that ran and never
+reads a detector-set `Finding.disposition`. A method-level ceiling a detector's author
+intended (C1..C3) is therefore a `cap` row in the profile, not a field the engine honours.
 """
 from __future__ import annotations
 
@@ -36,6 +40,24 @@ DEFAULT_RULES: list[dict[str, Any]] = [
     {"id": "D6", "attack_class": "module:D", "min_confidence": 0.6, "min_severity": "low",
      "disposition": "review", "cap": "review",
      "description": "drift-vs-manipulation: capped at review, never quarantine alone"},
+    # C1..C3 are method ceilings: facts about a detector, held here as profile data because the
+    # engine never reads a detector-set `Finding.disposition`. Each sits ABOVE D3 so a method
+    # that "cannot justify quarantine" is capped at review whatever its confidence. All three
+    # floor at `low` so an `info` finding (nominal, or a check that could not run) falls through
+    # to D5/D7 and is not pulled into review, and none sets a `min_confidence`: these methods'
+    # own confidence tops out near 0.6, and D5's floor would silently accept a flagged outlier.
+    {"id": "C1", "detector_prefix": "model.intrinsic_probes", "min_severity": "low",
+     "disposition": "review", "cap": "review",
+     "description": "intrinsic probes are individually weak signals whose value is the ranking "
+                    "they hand Neural Cleanse; a high score alone cannot justify quarantine"},
+    {"id": "C2", "attack_class": "activation_anomaly", "min_severity": "low",
+     "disposition": "review", "cap": "review",
+     "description": "the activation-statistics half of weight_stats is reference-free and "
+                    "detects gross structural damage, not a backdoor: capped at review"},
+    {"id": "C3", "attack_class": "model_anomalous", "min_severity": "low",
+     "disposition": "review", "cap": "review",
+     "description": "'something is wrong and we cannot name it' is deliberately not an attack "
+                    "attribution: capped at review, never quarantine"},
     {"id": "D3", "min_confidence": 0.9, "min_severity": "high", "disposition": "quarantine"},
     {"id": "D4", "min_posterior": 0.25, "requires_ci_excludes_cohort": True,
      "disposition": "quarantine",
