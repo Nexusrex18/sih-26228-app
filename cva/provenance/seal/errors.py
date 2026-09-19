@@ -36,3 +36,8 @@ class QuantiseError(SealError, ValueError):
 
 class NonFiniteValue(QuantiseError):
     """NaN or ±inf reached quantise(). The Sealer's default is to seal a marker instead (plan §8)."""
+
+
+class MerkleError(SealError, ValueError):
+    """A Merkle operation given arguments outside the tree (bad index/size), or a store missing a node
+    that must exist (a corrupted cache — the verifier recomputes from the records instead)."""
