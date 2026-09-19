@@ -76,8 +76,9 @@ def test_both_backbones_load_with_the_network_torn_out(monkeypatch):
     """Proven, not hoped for: every egress path a backbone load could take is replaced
     with a raise before the load runs. `pretrained=False` / `weights=None` is the claim;
     this is the test that the claim is true of the code as written."""
-    import torch
     import urllib.request
+
+    import torch
 
     torch.hub.set_dir(tempfile.mkdtemp())
 
