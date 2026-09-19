@@ -54,7 +54,7 @@ def build(result, command: str | None = None) -> dict:
         # (then `contributor_baseline_unavailable` says why).
         "contributor_baseline": getattr(result, "contributor_baseline", None),
         "provenance_summary": provenance_summary_of(result),
-        "drift_summary": None,
+        "drift_summary": getattr(result, "drift_summary", None),
         "calibration": getattr(result, "calibration", None),
         "coverage": {**coverage_of(result),
                      "standing_limitations": standing_limitations(
@@ -68,11 +68,16 @@ def build(result, command: str | None = None) -> dict:
 
 
 def access_assumptions_of(result) -> dict[str, Any]:
-    """Every Capability, present or absent — a shortened list reads as a cleaner scan."""
-    present = [c.value for c in Capability if c in result.capabilities]
+    """Show all declared assessment capabilities, including absences with reasons.
+
+    Legacy scans retain every capability; dataset drift opts into the union of its
+    plug-ins' requirements so unrelated model access is not presented as a gap.
+    """
+    relevant = getattr(result, "relevant_capabilities", tuple(Capability))
+    present = [c.value for c in relevant if c in result.capabilities]
     absent = [{"capability": c.value,
                "reason": result.capabilities.note_for(c) or "not available for this model"}
-              for c in Capability if c not in result.capabilities]
+              for c in relevant if c not in result.capabilities]
     return {"capabilities_present": present, "capabilities_absent": absent,
             "consequence": consequence(result.plan)}
 

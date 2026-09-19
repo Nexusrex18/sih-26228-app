@@ -1,103 +1,111 @@
 # Module D implementation plan and progress
 
-Scope: PS 2.2.4, using the notes repository's Module D architecture and build plan,
-Consolidated/17 full-product direction and Consolidated/19 MVP sequencing. The initial implementation was built against main. This PR is based on modules,
-which supplies canonical Dataset contracts and loaders. The standalone DriftBatch path
-is an explicit image-folder/cache adapter; canonical Dataset integration remains below.
-It does not replace or modify the frozen DriftTest protocol in core/interfaces.py.
+Scope: PS 2.2.4, the Module D notes, Consolidated/17 full-product direction and
+Consolidated/19 MVP sequencing. This PR targets `modules` and incorporates Backend's
+B3–B7/reporting follow-ups. It is a first working increment, not completion of Module D.
 
-## Delivered first increment
+## Current implementation
 
-- Dataset batch/config contracts, separate drift registry and dataset orchestrator.
-- Offline image-folder adapter, strict image decoding, stable content IDs, optional
-  aligned NPZ embeddings with extractor identity/version. No downloading a backbone.
-- PSI with `(1/N + 1/M)` scaling; survival function avoids catastrophic tail subtraction.
-  Label-invariant pooled quantile bins include both infinite tails, collapse duplicate
-  edges and use a half-count pseudocount. Sparse expected counts use a seeded
-  conditional permutation test. Counts, method and sample sizes appear in evidence.
-- KS and BH correction across both tests and all axes within each detector. A minimum
-  KS effect gate prevents statistical significance alone being called material drift.
-- Embedding projection tests and descriptive centroid Euclidean/diagonal Mahalanobis
-  distance; incompatible extractor versions are explicitly unavailable.
-- Brightness, contrast, Laplacian sharpness, residual noise, per-image RGB histogram
-  proportions; JPEG quantization and EXIF ISO only with complete metadata.
-- Existing HTML rendering reused; dataset JSON, generated coverage, seeded photometric
-  fixtures, math/negative/integration/error/reproducibility tests.
+- Plug-ins implement the **existing** `core/interfaces.py:DriftTest` signature:
+  `assess(reference, incoming, reference_dist, incoming_dist)`. Both dataset parameters
+  are canonical `Dataset`s. Every plug-in declares `requires`, `optional`, `attack_classes`;
+  the orchestrator resolves these declarations before execution and validates taxonomy.
+- No `DriftBatch` or `BatchDriftTest` contract, and no added core registry. Concrete checks
+  are composed explicitly at the entrypoint and passed as `Sequence[DriftTest]`. Configuration
+  belongs to the detector package. Frozen interfaces and shared types are unchanged.
+- The image-directory adapter returns an `InMemoryDataset` implementation with cached
+  measurements. Existing COCO/YOLO Dataset instances work through `measure_dataset`;
+  the CLI currently accepts image directories, without inventing annotations or provenance.
+- Image decoding runs in shared S3, with S6 path containment and a 16-million-pixel S7
+  ceiling checked **before** full decode. Header bombs, broken images, escaping symlinks
+  and files modified during loading fail explicitly. S3's Python-level confinement limits
+  remain disclosed. Whole-dataset decode is bounded by the shared sandbox timeout.
+- PSI uses `(1/N + 1/M)` scaling and survival-function tails. Shared pooled quantile edges
+  are label-invariant and include both infinite tails; duplicate edges collapse; a half-count
+  prevents infinities. Sparse bins use a seeded conditional permutation test.
+- KS plus BH correction across both statistics and axes; a minimum KS effect gate prevents
+  significance alone being called material drift. Sparse permutation budgets expand to at
+  least `ceil(2 * family_size / alpha)` so one PSI signal can survive BH. The effective budget
+  and minimum attainable p-value are recorded, not hidden behind the requested default.
+- Brightness, RMS contrast, sharpness, residual noise, RGB histogram proportions; JPEG
+  quantization and EXIF ISO where complete. Missing metadata is stated. Correlated colour
+  bins are not independent pieces of evidence; repeated-monitoring FDR is not claimed.
+- Optional aligned `EmbeddingRows` is an adapter for DriftTest's existing `Any` distribution
+  arguments, not a core contract. KS needs observations; a moments-only
+  `EmbeddingDistribution` reports unavailable. Extractor identity/version/dimensions and
+  sample order must match. Fixed projections and descriptive centroid distances are provided.
+- Reference/incoming content-hash overlap prevents independent two-sample assessment,
+  including renamed copies. Missing reference and small batches are unavailable.
+- Shared risk engine evaluates an explicit review-capped drift profile. Detectors do not
+  set dispositions. Confidence remains an explicitly uncalibrated zero placeholder until a
+  held-out calibration artifact exists; `1-p` is never sold as an attack probability.
+- `python -m cva.cli drift` is a lazy subcommand; no Torch/ONNX import is needed for it.
+  `cva.drift_cli` remains a compatibility shim. Shared report builders and generated coverage
+  are used unchanged in shape; dataset-only capability scoping is opt-in on the result.
+- Normal scan IDs use the shared grammar with atomic, per-output-root/day allocation.
+  Existing scan directories are never overwritten. `--selftest` uses the shared pinned clock
+  and `selftest_scan_id(seed)`; finding IDs stay scan-invariant. The deployment should use a
+  common output root for a scan namespace (the grammar permits 10,000 scans/day per namespace).
+- Deferred semantic and manipulation checks declare `semantic_shift` and
+  `suspicious_manipulation`, respectively. Unavailable rows remain in generated coverage.
 
-## Resolutions of contradictory notes
+## Review resolutions
 
-1. Without a reference, descriptive image metrics are possible but drift is not. Both
-   registered drift comparisons require a reference; unavailable does not mean clean.
-2. The notes' claim that dropping the PSI scale raises false alarms has its direction
-   reversed for N,M > 2: the unscaled chi-square threshold is larger and misses shifts.
-   The regression asserts the correct numeric threshold and sample-size dependence;
-   it does not encode the incorrect proposed test.
-3. KS requires observations. The proposed mean/covariance-only EmbeddingDistribution
-   cannot support it. DriftBatch retains aligned rows; the future cache adapter must do so.
-4. A p-value is not calibrated confidence in drift, and especially not malicious intent.
-   P/q values are evidence; Finding.confidence remains explicitly uncalibrated (0),
-   until held-out calibration artifacts exist. No arbitrary `1-p` conversion.
-5. Statistical drift has quality nature. This initial path routes material drift or
-   incomplete coverage to REVIEW, never quarantine. This is a local deterministic
-   policy until the shared calibrated risk engine exists.
-6. New four-role ownership supersedes ML-1 wording: Detection owns drift; Core owns
-   eventual shared dataset/cache integration; Adversary owns held-out evaluation.
+1. Safety: shared S3/S6/S7; malformed-image errors reach argparse without a traceback.
+2. Contracts: deleted parallel core types/registry; frozen Dataset/DriftTest now used.
+3. Renderer: explicit asset kind and per-result relevant capabilities; current model behavior
+   is preserved. The newer Backend renderer intentionally includes every capability for
+   model scans; this PR does not add or remove those rows.
+4. Coverage: shared `coverage_of`, shared Markdown writer, no hand-written replacement.
+   Full JSON is validated against the published report schema. Backend's recent update also
+   fixed the formerly missing common envelope fields; that code is reused, not duplicated.
+5. Taxonomy: deferred checks corrected.
+6. Independence: same content and partial overlap are unavailable.
+7. Sparse PSI: family-aware permutation budget plus significance and null-calibration tests.
+8. Risk: shared risk engine/profile owns policy; gaps receive explicit rules; no fabricated
+   calibration. Batch-level drift does not imply contributor-risk assessment.
+9. Identity: new scan IDs, preserved outputs, deterministic IDs only in explicit selftest.
+10. Access: capabilities probed from the Dataset and reference, scoped by plug-in declarations;
+    no hard-coded `DATASET_IMAGES=True` and no irrelevant model rows in the drift header.
 
-## Next increments (required product work, not removed from scope)
+## Remaining product work
 
-1. Integrate canonical COCO/YOLO Dataset and shared independent-backbone cache when Core
-   delivers them. Preserve sample alignment, extractor version and batch identity.
-   Current folder ingestion reads images only, not annotations.
-2. Add categorical camera/sensor comparison, per-feature missingness assessment and
-   metadata sidecars for time, labels and contributor provenance. Preserve sample unit;
-   do not inflate N by treating image pixels as independent images.
-3. Implement the MVP three-feature manipulation triage (breadth, class-conditionality,
-   contributor concentration) once labels/contributors and held-out attack/benign corpora
-   exist. Train on development data; calibrate separately; freeze before held-out scoring.
-   Report feature contributions, missing evidence and review-only policy. Expand to seven
-   features only with temporal/spatial/manifold inputs and independent evaluation.
-4. Add bounded MMD permutation testing (memory/sample budgets recorded), semantic cluster
-   occupancy and nearest-example evidence. Reference-only k-means cannot create an
-   "absent reference cluster"; use outlier distance for novelty and occupancy for mixture
-   change. Do not invent terrain/season labels from unlabeled clusters.
-5. Validate on independent benign drift and attack datasets with matched nuisance factors;
-   report false-positive rate, power, intervals and performance. Export versioned
-   calibration and deployment bundles with dependency licences/hashes and egress tests.
+1. Expose canonical COCO/YOLO routing and shared embedding cache through the drift CLI;
+   preserve sample hashes, extractor version, labels and contributor provenance.
+2. Add camera/sensor categories and feature-missingness assessment, timestamp/label/contributor
+   sidecars, and stronger interpretation. Do not treat pixels as independent images.
+3. Train the MVP three-feature manipulation triage on development data, calibrate separately,
+   then evaluate on held-out benign and attack families. Expand to seven features only when
+   temporal/spatial/manifold inputs and independent validation exist. Keep review-only policy.
+4. Add budgeted MMD and semantic cluster occupancy/nearest-example evidence. Reference-only
+   k-means cannot create an absent reference cluster: use outlier distance for novelty and
+   occupancy for mixture changes. Do not invent terrain/season labels from unlabeled clusters.
+5. Measure field false positives, power, uncertainty and throughput. Publish deployment
+   dependency hashes/licences and prove offline behavior under OS-level egress controls.
 
-## Acceptance gates
+## Statistics and validation
 
-First increment: numerical PSI regression, sparse/constant/extreme samples, clean null
-simulation, known brightness shift, no-reference/small-batch/embedding-version rejection,
-corrupt-image fail-fast, report serialization, deterministic fixture hashes, import boundaries.
+The notes' unscaled-PSI explanation had its direction reversed: for ordinary N,M the
+unscaled chi-square threshold is too large and **misses shifts**. Fixed 0.25 heuristics are
+a different issue and can overflag small batches. Tests pin the corrected numeric threshold.
 
-MVP completion additionally requires the three-feature triage above, held-out calibration,
-shared loader/cache integration and target-machine throughput measurement. This increment
-is not a declaration that Module D or the complete product is finished.
+Sources:
+- https://scholarworks.wmich.edu/dissertations/3208/
+- https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.ks_2samp.html
+- https://docs.scipy.org/doc/scipy/reference/stats.html
 
-## Statistical sources
+Regression coverage includes dense/sparse null sampling, constant/extreme inputs, family-wise
+permutation resolution, multiple clean fixture seeds, injected brightness drift, canonical
+Dataset acceptance, declared capabilities, taxonomy, schema validation, model-renderer
+compatibility, overlap, scan identity/selftest, corrupt images and decompression-bomb headers.
+Synthetic tests are not field validation. Runtime/confidence limitations stay in reports.
 
-- Yurdakul, Statistical Properties of Population Stability Index:
-  https://scholarworks.wmich.edu/dissertations/3208/
-- SciPy KS documentation (continuous independent two-sample assumptions):
-  https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.ks_2samp.html
-- SciPy statistical functions / FDR adjustment:
-  https://docs.scipy.org/doc/scipy/reference/stats.html
+## Verified after review fixes
 
-BH is applied within each detector; it is not global control across scans and assumes
-appropriate dependence. Sequential monitoring needs its own policy. Sparse PSI uses
-permutations; the dense scaled chi-square result remains an approximation with smoothing
-and estimated bins. No field performance claims follow from synthetic tests.
-
-## Validation performed
-
-Python 3.14, NumPy 2.5.3, SciPy 1.18.1, Pillow 12.3.0. Targeted tests and existing
-import-boundary tests: 28 passed against the modules branch. CLI fixture generation
-and HTML/JSON/coverage report smoke passed. Network connect is blocked in the end-to-end
-test. Full Module B tests were not run: its Torch/ONNX test environment is not installed
-in this temporary environment. Statistical methods and approximation/fallback status
-are recorded in each axis's evidence.
-
-PR validation on `modules`: changed-file Ruff passes; 28 targeted drift/import-boundary
-checks pass. `mypy cva/core` reports one pre-existing `quantise.py:97` no-any-return
-error in this dependency environment, reproduced on an unmodified checkout of the base.
-No additional core type errors were introduced.
+Fast suite (`pytest -q -m "not slow and not corpus"`): **2,211 passed, 28 skipped,
+4 deselected, 1 expected failure**. Local HTTP test servers require execution outside
+the restricted sandbox; optional Module A dependencies were installed in the temporary
+test environment. Module D alone: 33 passed. Repository Ruff and `mypy cva/core` pass.
+Schema validation, renderer/CLI regressions, independent batches, loader safety and shared
+risk ownership are included. The 28 skips and excluded slow/corpus cases are not claimed
+as passing tests. No field accuracy is inferred from this suite.

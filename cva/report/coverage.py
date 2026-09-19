@@ -43,7 +43,7 @@ def render_markdown(result) -> str:
     from .report_json import coverage_of, verdict_line
     cov = coverage_of(result)
     out = [f"# Coverage statement — scan {result.scan_id}", "",
-           f"Model `{result.model_id}` ({result.model_fmt}). "
+           f"{getattr(result, 'asset_kind', 'model').title()} `{result.model_id}` ({result.model_fmt}). "
            f"Verdict: **{verdict_line(result)}**.",
            "", "## Attack classes assessed in this scan", ""]
     for ac, checks in cov["assessed"].items():

@@ -100,11 +100,12 @@ Three surfaces, deliberately separate:
 Compare a declared reference image directory with an incoming image directory, offline:
 
 ```bash
-python -m cva.drift_cli --reference data/reference --incoming data/incoming --out artifacts/drift
+python -m cva.cli drift --reference data/reference --incoming data/incoming --out artifacts/drift
 ```
 
 This entrypoint requires NumPy, SciPy and Pillow, but does not import Torch or ONNX.
-It writes `drift.report.json`, `drift.report.html` and `drift.coverage.md`. Missing reference,
+It writes `drift.report.json`, `drift.report.html` and `drift.coverage.md` under
+`<out>/<scan_id>/`, preserving previous runs. Evidence is shared under `<out>/evidence/`. Missing reference,
 small batches, absent embeddings and unimplemented checks are explicit coverage gaps.
 Material drift requests review; no attack intent or field-calibrated confidence is claimed.
 
@@ -112,7 +113,7 @@ Reproducible smoke demo (use a new/empty output directory):
 
 ```bash
 python -m attacklab.photometric_shift --out /tmp/cva-drift-demo
-python -m cva.drift_cli --reference /tmp/cva-drift-demo/reference --incoming /tmp/cva-drift-demo/incoming
+python -m cva.cli drift --reference /tmp/cva-drift-demo/reference --incoming /tmp/cva-drift-demo/incoming
 python -m pytest tests/detectors/drift tests/boundaries
 ```
 
@@ -124,3 +125,9 @@ embeddings; photometric checks still run without them.
 
 Full sequencing, corrections to the notes, statistical assumptions and remaining MVP
 work: [Module D implementation plan](docs/MODULE_D_IMPLEMENTATION_PLAN.md).
+
+Module D uses the frozen `Dataset` / `DriftTest` interfaces. It accepts canonical datasets
+through the Python API; the CLI's image-folder adapter enforces S3/S6/S7 controls before
+full image decoding. Identical or overlapping image content is not a valid independent
+comparison and returns UNAVAILABLE. `--selftest` pins scan identity/time for repeatability
+(use different output roots); normal scans reserve a fresh ID within the output root.

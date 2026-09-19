@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from cva.core.drift import DriftConfig
+from cva.detectors.drift.config import DriftConfig
 from cva.detectors.drift.statistics import (
     bh_adjust,
     compare_axis,
@@ -53,3 +53,29 @@ def test_clean_null_false_alarm_smoke():
 def test_invalid_observations_rejected(x,y):
     with pytest.raises(ValueError):
         compare_axis(x,y,DriftConfig())
+
+
+def test_sparse_null_calibration_repeated_sampling():
+    rng = np.random.default_rng(9812)
+    config = DriftConfig(bins=20,permutations=399)
+    flags = 0
+    for _ in range(100):
+        row = compare_axis(rng.normal(size=30),rng.normal(size=30),config)
+        assert row['psi_method'] == 'permutation (sparse bins)'
+        flags += row['psi_p'] < .05
+    # Loose binomial regression at a fixed seed, not a claim of exact field FPR.
+    assert flags <= 12
+
+
+def test_sparse_psi_can_survive_large_family_bh():
+    from cva.detectors.drift.common import compare_features
+    from cva.loaders.drift import FeatureTable
+    rng = np.random.default_rng(1)
+    x = {str(i):rng.normal(size=20) for i in range(30)}
+    y = {key:value.copy() for key,value in x.items()}
+    y['0'] = x['0']+100
+    f = compare_features(FeatureTable('r'),FeatureTable('i'),DriftConfig(bins=20),
+                         'drift.test',x,y)[0]
+    evidence = f.evidence[0].data
+    assert evidence['minimum_permutation_p'] <= .05/60
+    assert evidence['axes']['0']['psi_q'] < .05
