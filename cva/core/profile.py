@@ -1,22 +1,82 @@
 """Budget profiles. No constants in code — every threshold comes from here or a YAML
 profile, so a tuning change never requires a code change.
 
-Budget is the SECOND axis on Availability. A check excluded by profile reports
-UNAVAILABLE with exclusion_reason="budget", distinct from a capability exclusion: the
-report must say whether it could not run or was not asked to.
+Two orthogonal axes in one table (§5.6): the four BUDGET TIERS say how much work to do,
+the four POLICIES say what posture to take. `--profile <policy> --budget-tier <tier>`
+selects one of each; a bare `--profile <tier>` still works and is what the existing
+Module B call sites pass.
+
+Budget is the SECOND axis on Availability. A check excluded by tier reports UNAVAILABLE
+with exclusion_reason="budget", distinct from a capability exclusion: the report must say
+whether it could not run or was not asked to.
 """
 from __future__ import annotations
 
 from typing import Any
 
-PROFILES: dict[str, dict[str, Any]] = {
-    "triage":   {"checks": {"model.weight_digest", "model.graph_structure"}},
-    "standard": {"checks": {"model.weight_digest", "model.graph_structure",
-                            "model.behavioural_fingerprint", "model.anomalous",
-                            "model.intrinsic_probes", "model.weight_statistics",
-                            "model.activation_statistics"}},
-    "deep":     {"checks": None, "nc_top_k": 3},      # None = everything registered
-    "forensic": {"checks": None, "nc_top_k": 999, "nc_steps": 200, "nes_steps": 120},
+# `embedding_max_images` = measured DINOv2 CPU throughput (16.84 img/s, 224 px, batch 16,
+# 6 threads; `python -m cva.features.throughput`) x the tier's embedding time budget
+# (5 min / 30 min / 2 h), rounded down. triage is 0 so it never loads the backbone.
+#
+# `evidence` caps what the HTML renderer inlines (report.json always carries everything):
+# images per finding, findings rendered, and total bytes. A single-file report that a
+# reviewer cannot open is worse than a truncated one that says it truncated.
+TIERS: dict[str, dict[str, Any]] = {
+    "triage":   {"checks": {"model.weight_digest", "model.graph_structure"},
+                 "embedding_max_images": 0,
+                 "evidence": {"max_images_per_finding": 2, "max_findings_rendered": 50,
+                              "max_report_bytes": 5_000_000}},
+    # standard = every registered check EXCEPT the expensive ones named here. It was a
+    # hand-typed inclusion list, which drifted: it named ids that are not in the registry
+    # (behavioural_fingerprint, weight_statistics, activation_statistics), so real checks read
+    # as budget-excluded. Walking the registry cannot drift (V17); `except_checks` is resolved
+    # against it in build_plan.
+    "standard": {"checks": None,
+                 "except_checks": {"model.neural_cleanse", "model.strip",
+                                   "model.universal_margin", "model.data_consistency"},
+                 "embedding_max_images": 5000,
+                 "evidence": {"max_images_per_finding": 4, "max_findings_rendered": 200,
+                              "max_report_bytes": 15_000_000}},
+    "deep":     {"checks": None, "nc_top_k": 3,       # None = everything registered
+                 "embedding_max_images": 30000,
+                 "evidence": {"max_images_per_finding": 6, "max_findings_rendered": 400,
+                              "max_report_bytes": 22_000_000}},
+    "forensic": {"checks": None, "nc_top_k": 999, "nc_steps": 200, "nes_steps": 120,
+                 "embedding_max_images": 120000,
+                 "evidence": {"max_images_per_finding": 8, "max_findings_rendered": 800,
+                              "max_report_bytes": 24_000_000}},
 }
 
+#: Policy axis. `budget_tier` is the default tier; --budget-tier overrides it.
+POLICIES: dict[str, dict[str, Any]] = {
+    "baseline": {"budget_tier": "standard"},
+    "strict":   {"budget_tier": "deep"},
+    # Not "could not" but "was not asked to": white-box checks are disabled up front. Every id
+    # here must be a real registry id (`validate_profile_ids` enforces it at the entrypoint);
+    # this list once named `model.weight_statistics` / `model.activation_statistics`, which do
+    # not exist, so the policy disabled less than it claimed. The white-box set is:
+    #   model.weight_stats     requires MODEL_WEIGHTS (activation statistics are its optional half)
+    #   model.graph_structure  requires MODEL_ARCHITECTURE
+    #   model.weight_digest    reads the weight artefact itself (optional MODEL_WEIGHTS)
+    #   model.neural_cleanse   takes the gradient path (optional MODEL_GRADIENTS) whenever the
+    #                          model exposes gradients, so it cannot be left on and still call
+    #                          the scan query-only
+    "blackbox": {"budget_tier": "standard",
+                 "disabled_checks": ["model.weight_digest", "model.weight_stats",
+                                     "model.graph_structure", "model.neural_cleanse"]},
+    # standard, not triage: triage never loads the backbone, and that load is where an
+    # egress is most likely to hide (plan §5.6). nc_*/nes_* only bite if --budget-tier deep.
+    "selftest": {"budget_tier": "standard", "nc_top_k": 1, "nc_steps": 10, "nes_steps": 10,
+                 "scan_id_from_seed": True, "pin_clock": True, "egress_guard": True},
+}
 
+#: Measured DINOv2 ViT-S/14 CPU throughput (224 px, batch 16, 6 threads) — the same figure the
+#: tiers' `embedding_max_images` are derived from. Used to price a budget exclusion.
+EMBED_IMG_PER_S = 16.84
+
+#: Calibration defaults. `prov.*` is excluded always: a hash mismatch is arithmetic, not a belief.
+CALIBRATION: dict[str, Any] = {"method": "isotonic", "exclude_detector_prefixes": ["prov."],
+                               "min_points": 30}
+
+#: Legacy/back-compat: a bare tier name is a valid --profile.
+PROFILES: dict[str, dict[str, Any]] = {**TIERS, **POLICIES}

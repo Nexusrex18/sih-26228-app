@@ -12,7 +12,10 @@
 
   "properties": {
     "schema_version": { "const": "1.0.0" },
-    "name": { "enum": ["baseline", "strict", "blackbox", "selftest"] },
+    "name": {
+      "enum": ["baseline", "strict", "blackbox", "selftest", "triage", "standard", "deep", "forensic"],
+      "description": "The four policies, plus the four budget-tier names: a bare `--profile <tier>` is a legal invocation (the existing Module B call sites pass one), so a resolved profile can carry a tier name."
+    },
     "description": { "type": "string" },
 
     "budget_tier": {
@@ -25,9 +28,37 @@
       "items": { "type": "string" },
       "description": "null = every registered check. An explicit list is how a budget tier excludes; the excluded checks still appear in the plan and the coverage statement, stating why."
     },
+    "except_checks": {
+      "type": "array", "items": { "type": "string" },
+      "description": "A tier that means 'every registered check except these'. Resolved against the registry at plan time, so the tier cannot drift from it: a hand-typed inclusion list named ids that were not in the registry and made real checks read as budget-excluded."
+    },
     "disabled_checks": {
       "type": "array", "items": { "type": "string" },
       "description": "The blackbox policy's mechanism: white-box detectors disabled UP FRONT, so the report says 'not asked to' rather than 'could not' — two different facts about the scan."
+    },
+
+    "embedding_max_images": {
+      "type": "integer", "minimum": 0,
+      "description": "Largest dataset the tier will embed. 0 = the backbone is never loaded. Derived from the measured CPU img/s at B4 times the tier's time budget; a larger dataset is reported as not embedded with this reason, never silently subsampled."
+    },
+
+    "estimated_cost": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "check_id -> what lifting a budget exclusion would cost. NOT filled by the orchestrator any more: the strings embed the dataset size, so putting them in the profile gave the same profile a different profile_hash per dataset. The orchestrator now passes them to build_plan(costs=...) instead. A caller that supplies this block itself is still honoured (build_plan falls back to it when `costs` is None), and it then IS part of the hash."
+    },
+
+    "nc_top_k": {
+      "type": "integer", "minimum": 1,
+      "description": "Neural Cleanse: how many of the intrinsic-probe-ranked target classes to reverse-engineer. Tier-level (deep = 3, forensic = 999 = all); selftest lowers it to 1."
+    },
+    "nc_steps": {
+      "type": "integer", "minimum": 1,
+      "description": "Neural Cleanse: optimisation steps per class on the gradient path."
+    },
+    "nes_steps": {
+      "type": "integer", "minimum": 1,
+      "description": "Neural Cleanse: NES iterations per class on the gradient-free path (ONNX, frozen TorchScript, every query-only handle)."
     },
 
     "cost_ceiling_s": {
@@ -112,7 +143,7 @@
               "id": { "type": "string" },
               "description": { "type": "string" },
               "detector_prefix": { "type": ["string", "null"], "description": "e.g. 'prov.' — this is D1's scoping" },
-              "attack_class": { "type": ["string", "null"], "description": "D2 keys on attack_class == 'benign_conversion', NOT on a tolerance predicate: the tolerance band is DETECTOR-INTERNAL and the risk engine sees Findings, not fingerprints." },
+              "attack_class": { "type": ["string", "null"], "description": "D2 keys on attack_class == 'benign_conversion', NOT on a tolerance predicate: the tolerance band is DETECTOR-INTERNAL and the risk engine sees Findings, not fingerprints. Besides a literal class name this accepts the pseudo-value 'module:<X>', which matches EVERY class owned by module X in the taxonomy (D6 uses 'module:D' because Module D owns three classes and this field is a single string). It is not itself an attack class and never appears on a Finding." },
               "min_confidence": { "type": ["number", "null"] },
               "min_severity": {
                 "enum": ["info", "low", "medium", "high", "critical", null],

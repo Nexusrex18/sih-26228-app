@@ -33,15 +33,20 @@ fixtures: ## deterministic demo + selftest corpora (committed as a generator, no
 vendor: ## Mode A only: fetch the pinned backbone artefacts and verify their SHA-256
 	$(PY) -m cva.features.vendor fetch
 
-lock: ## resolve the CPU-pinned lockfile
-	$(PIP) install -q pip-tools && .venv/bin/pip-compile --index-url $(CPU_IDX) \
-		--output-file requirements.lock pyproject.toml
+lock: ## resolve the CPU-pinned lockfile (extras data, seal, network)
+	$(PIP) install -q pip-tools
+	.venv/bin/pip-compile -q --extra-index-url $(CPU_IDX) -c constraints-cpu.txt \
+		--extra data --extra seal --extra network --allow-unsafe \
+		--output-file requirements.lock pyproject.toml build-tools.in
+	@! grep -Eiq '^(nvidia|triton)' requirements.lock || { echo "CUDA wheel in lock — see §5.7"; exit 1; }
 
+# --extra-index-url, not --index-url: the CPU index carries torch and a few of its
+# dependencies only, so making it the SOLE index fails on scipy, onnxruntime and the rest.
 wheelhouse: lock ## the exact bytes the air-gapped host installs from
-	$(PIP) wheel --only-binary=:all: --index-url $(CPU_IDX) \
+	$(PIP) wheel --only-binary=:all: --extra-index-url $(CPU_IDX) \
 		-r requirements.lock -w wheelhouse
 
-bundle: ## cva-bundle.tar — wheelhouse, weights, fixtures, generated manifest (<=3.5 GB)
+bundle: ## cva-bundle.tar — wheelhouse, weights, fixtures, generated manifest (< 4 GB)
 	$(PY) -m cva.bundle
 
 selftest: ## process-level egress guard, armed programmatically

@@ -45,9 +45,28 @@ def _load(kind: str, artefacts):
 
 MODEL_KINDS = ["onnx", "torchscript", "pytorch"]
 
+#: B2b's query-only adapters. Kept OUT of `MODEL_KINDS` on purpose: test_gate_b2a pins that
+#: list to the five B2a loaders, and these two have no file to load, no structure to hash and
+#: no weights to digest — so the tests that need those are told to expect that, below.
+BLACKBOX_MODEL_KINDS = ["subprocess", "http"]
 
-@pytest.fixture(params=MODEL_KINDS)
+
+def _load_blackbox(kind: str, request):
+    from cva.loaders.models import HTTPModel, SubprocessModel
+
+    from .conftest import LogitsHandler
+
+    if kind == "subprocess":
+        return SubprocessModel(request.getfixturevalue("child_command"), "child",
+                               INPUT_SHAPE, NUM_CLASSES)
+    port = request.getfixturevalue("serve")(LogitsHandler)
+    return HTTPModel(f"http://127.0.0.1:{port}/predict", "endpoint", INPUT_SHAPE, NUM_CLASSES)
+
+
+@pytest.fixture(params=MODEL_KINDS + BLACKBOX_MODEL_KINDS)
 def model(request, artefacts):
+    if request.param in BLACKBOX_MODEL_KINDS:
+        return request.param, None, _load_blackbox(request.param, request)
     loader, handle = _load(request.param, artefacts)
     return request.param, loader, handle
 
@@ -90,6 +109,11 @@ def test_digests_are_stable_across_two_independent_loads(model, artefacts):
     """Computed once at load and cached, per §9.2 — and identical between loads, or the
     seal binds a value that changes when nothing changed."""
     kind, _loader, h = model
+    if kind in BLACKBOX_MODEL_KINDS:
+        # Nothing to hash: a query-only endpoint has no weights and no graph, and says so
+        # with a constant rather than a digest of nothing.
+        assert h.weight_digest() == h.weight_digest() == "unavailable:black-box"
+        return
     _loader2, h2 = _load(kind, artefacts)
     assert h.weight_digest() == h2.weight_digest()
     assert h.arch_hash() == h2.arch_hash()
@@ -102,6 +126,8 @@ def test_arch_hash_is_structure_not_weights(model, artefacts, retrained):
     with the weights it could only ever say "something changed", which starts an
     investigation without narrowing it."""
     kind, _loader, h = model
+    if kind in BLACKBOX_MODEL_KINDS:
+        pytest.skip("a query-only endpoint has no structure to hash")
     _l, h_retrained = _load(kind, retrained)
     assert h.arch_hash() == h_retrained.arch_hash(), (
         "same architecture, different weights must share an arch_hash")
@@ -178,14 +204,39 @@ def test_onnx_never_reports_gradients_and_records_its_opset(artefacts):
 # --------------------------------------------------------------------------
 DATASET_KINDS = ["coco", "yolo"]
 
+#: B2b's loaders. Separate from `DATASET_KINDS` for the same reason as the black-box models:
+#: test_gate_b2a pins that list to the B2a gate's five ids. They run through every test below.
+B2B_DATASET_KINDS = ["voc", "imagefolder", "generic"]
 
-@pytest.fixture(params=DATASET_KINDS)
+#: Classification-only layouts. They carry no boxes, and the box test says so rather than
+#: passing vacuously — `seen == 0` is asserted, so a loader that starts inventing boxes fails.
+BOXLESS_KINDS = {"imagefolder"}
+
+
+@pytest.fixture(params=DATASET_KINDS + B2B_DATASET_KINDS)
 def dataset(request, coco_tree, yolo_tree):
-    from cva.loaders.datasets import COCOLoader, YOLOLoader
+    from cva.loaders.datasets import (
+        COCOLoader,
+        GenericDataset,
+        ImageFolderLoader,
+        VOCLoader,
+        YOLOLoader,
+    )
 
-    if request.param == "coco":
-        return request.param, COCOLoader(), COCOLoader().load(coco_tree)
-    return request.param, YOLOLoader(), YOLOLoader().load(yolo_tree)
+    from .conftest import generic_label_fn
+
+    kind = request.param
+    if kind == "coco":
+        return kind, COCOLoader(), COCOLoader().load(coco_tree)
+    if kind == "yolo":
+        return kind, YOLOLoader(), YOLOLoader().load(yolo_tree)
+    if kind == "voc":
+        return kind, VOCLoader(), VOCLoader().load(request.getfixturevalue("voc_tree"))
+    if kind == "imagefolder":
+        return (kind, ImageFolderLoader(),
+                ImageFolderLoader().load(request.getfixturevalue("imagefolder_tree")))
+    gen = GenericDataset(request.getfixturevalue("generic_tree"), label_fn=generic_label_fn)
+    return kind, gen, gen.load()
 
 
 def test_dataset_capabilities_are_dataset_scoped_only(dataset):
@@ -213,7 +264,7 @@ def test_boxes_are_absolute_pixels_inside_the_image(dataset):
     """§7.2 stores COCO-style absolute pixels internally whatever the source format.
     Normalising at ingest throws away the pixel grid, and the pixel grid is exactly what
     `Evidence(kind="image_crop")` needs to cut a crop."""
-    _kind, _loader, ds = dataset
+    kind, _loader, ds = dataset
     seen = 0
     for s in ds.samples:
         for lb in s.labels:
@@ -225,7 +276,10 @@ def test_boxes_are_absolute_pixels_inside_the_image(dataset):
             assert x + w <= s.width + 1e-6 and y + h <= s.height + 1e-6
             assert max(w, h) > 1.5, "a box in [0,1] means normalised units leaked through"
             seen += 1
-    assert seen, "the fixture must carry boxes or this asserts nothing"
+    if kind in BOXLESS_KINDS:
+        assert seen == 0, "a classification-only layout has no boxes to report"
+    else:
+        assert seen, "the fixture must carry boxes or this asserts nothing"
 
 
 def test_categories_are_dense_and_zero_based_but_remember_the_source_id(dataset):
