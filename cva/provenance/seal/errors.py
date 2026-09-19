@@ -63,3 +63,48 @@ class KeyExists(SealError):
 
 class TrustRootError(SealError, ValueError):
     """The trust root is malformed or internally inconsistent."""
+
+
+class LedgerUnavailable(SealError):
+    """The ledger cannot be written right now (disk full, read-only, locked, corrupt, key unusable).
+    Under the default fail-closed policy this propagates and THE CALLER MUST NOT RELEASE THE INFERENCE
+    OUTPUT (plan §8, C-14)."""
+
+
+class LedgerBusy(LedgerUnavailable):
+    """Another writer held the lock for longer than busy_timeout."""
+
+
+class LedgerCorrupt(LedgerUnavailable):
+    """The database file is not a valid ledger, or its cache disagrees with its records."""
+
+
+class LedgerNotInitialised(SealError):
+    """No ledger (or no genesis) at this path. Create one explicitly with `cva-seal init`."""
+
+
+class WrongKey(SealError):
+    """The supplied key is not the ledger's active signing key."""
+
+
+class SealMissing(SealError):
+    """A `guard()` block finished without sealing the inference it wrapped."""
+
+
+class PayloadMissing(SealError):
+    """A content-addressed payload is not in the store."""
+
+
+class PayloadCorrupt(SealError):
+    """A stored payload does not hash to its address."""
+
+
+class SigningFailed(LedgerUnavailable):
+    """The key provider could not sign (an HSM unplugged, a key file gone). Treated as a ledger failure:
+    without a signature there is no sealed record, so fail-closed blocks and fail-open declares a gap."""
+
+
+class LedgerUnreadable(SealError):
+    """The ledger under audit cannot be opened or read at all (not a database, not a file). This is not a
+    tamper finding — nothing could be assessed — so it is raised, and the scan-side check reports the
+    assessment as not performed rather than guessing."""

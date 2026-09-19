@@ -24,7 +24,7 @@ from typing import Any
 
 from .canonical import parse_strict
 from .constants import DOMAIN_LINK, TAG_RECORD
-from .errors import InvalidRecord, NonCanonical
+from .errors import InvalidRecord, NonCanonical, SealError, SigningFailed
 from .keys import KeyProvider, verify_ed25519
 from .records import (
     build_record,
@@ -46,7 +46,12 @@ def sign_record(unsigned: Mapping[str, Any], key: KeyProvider) -> dict[str, Any]
     validate_record(unsigned, signed=False)
     if unsigned["key_id"] != key.key_id:
         raise ValueError(f"record names key {unsigned['key_id'][:16]}… but the signing key is {key.key_id[:16]}…")
-    sig = key.sign(TAG_RECORD + canon(unsigned))
+    try:
+        sig = key.sign(TAG_RECORD + canon(unsigned))
+    except SealError:
+        raise
+    except Exception as e:                                   # noqa: BLE001 - any provider failure means "cannot sign"
+        raise SigningFailed(f"the signing key could not sign: {type(e).__name__}: {e}") from None
     signed = dict(unsigned)
     signed["signature"] = sig.hex()
     validate_record(signed, signed=True)
@@ -64,19 +69,25 @@ def verify_signature(record: Mapping[str, Any], public_key: bytes) -> bool:
     return verify_ed25519(public_key, message, sig)
 
 
+def link_from(rec_hash: bytes, signature_hex: str) -> str:
+    """The one definition of the chain link, from an already-computed record_hash and the signature."""
+    return hashlib.sha256(DOMAIN_LINK + rec_hash + bytes.fromhex(signature_hex)).hexdigest()
+
+
 def link_hash(prev_signed: Mapping[str, Any]) -> str:
     """The value the NEXT record stores as `prev_record_hash`. It covers the previous record's signature,
     not just its fields: an attacker cannot swap in a differently-signed copy of the same fields."""
     validate_record(prev_signed, signed=True)
-    return hashlib.sha256(DOMAIN_LINK + record_hash(prev_signed) + bytes.fromhex(prev_signed["signature"])).hexdigest()
+    return link_from(record_hash(prev_signed), prev_signed["signature"])
 
 
 def seal_next(rtype: str, body: Mapping[str, Any], *, key: KeyProvider, prev: Mapping[str, Any] | None,
-              now: datetime, nonce: str) -> tuple[dict[str, Any], bytes]:
+              now: datetime, nonce: str, prev_link: str | None = None) -> tuple[dict[str, Any], bytes]:
     """Build, link, sign and serialise the record that follows `prev` (`None` = this is genesis).
 
     Returns `(signed_record, stored_bytes)`. Pure: no I/O, so the caller decides where it is stored, and
-    the clock and nonce are passed in so tests are reproducible.
+    the clock and nonce are passed in so tests are reproducible. `prev_link` may carry the already-known
+    `link_hash(prev)` so a writer that just produced `prev` need not re-validate and re-hash it.
     """
     if prev is None:
         if rtype != "genesis":
@@ -85,7 +96,7 @@ def seal_next(rtype: str, body: Mapping[str, Any], *, key: KeyProvider, prev: Ma
     else:
         if rtype == "genesis":
             raise ValueError("genesis can only be the first record")
-        seq, prev_hash = prev["seq"] + 1, link_hash(prev)
+        seq, prev_hash = prev["seq"] + 1, prev_link or link_hash(prev)
     unsigned = build_record(rtype, seq=seq, prev_record_hash=prev_hash, key_id=key.key_id,
                             created_at_utc=now, nonce=nonce, body=body)
     signed = sign_record(unsigned, key)

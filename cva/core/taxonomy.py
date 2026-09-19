@@ -105,6 +105,10 @@ _C_TAMPER = [
     "boundary_flip", "tail_truncation", "ledger_fork", "key_unauthorised", "chain_broken",
     "nonce_reuse", "genesis_mismatch", "checkpoint_mismatch", "ledger_incomplete",
     "non_canonical_encoding", "derived_column_mismatch",
+    # [added by Module C, C5 — flagged for Backend] a stored record that is not a valid record at all
+    # (unparseable, wrong schema, uppercase hex). Distinct from `non_canonical_encoding`, which is a VALID
+    # record in the wrong bytes. Module C plan T14 names it; the §10.1 list omitted it.
+    "malformed_record",
 ]
 _C = [_c(n, "C", "attack", f"Provenance verification failure: {n.replace('_', ' ')}")
       for n in _C_TAMPER] + [
@@ -113,6 +117,12 @@ _C = [_c(n, "C", "attack", f"Provenance verification failure: {n.replace('_', ' 
        "condition, not an attack. Maps to severity `low`"),
     _c("clock_regression", "C", "operational",
        "NTP stepped the host clock backwards. Must NEVER affect disposition"),
+    # [added by Module C, C5 — flagged for Backend] Open item O9: the report always prints a provenance
+    # summary, including when nothing failed, so "no provenance section" can never be mistaken for
+    # "provenance was never checked". One `info` finding per scan carries it.
+    _c("ledger_verified", "C", "operational",
+       "Summary of an inference-ledger verification: records checked, anchors, declared gaps, the "
+       "unwitnessed window. Emitted whether or not anything failed"),
 ]
 
 # --- Module D — distribution shift (PS §2.2.4) -----------------------------

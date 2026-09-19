@@ -23,7 +23,7 @@ CONFIG = {"preprocess_hash": H("c"), "preprocess_ref": "sha256:" + H("d"), "post
 INPUT = {"sha256": H("1"), "source_kind": "encoded_file", "phash": None,
          "phash_omitted_reason": "not_computed", "dims": [1920, 1080]}
 OUTPUT = {"jcs_sha256": H("2"), "decision_sha256": H("3"), "raw_jcs_sha256": H("4"),
-          "payload_ref": "sha256:" + H("6")}
+          "payload_ref": "sha256:" + H("2")}          # the ref must name the payload jcs_sha256 commits to
 MANIFEST = {"device_id": "jetson-07", "key_id": KEY_ID, "profile_hash": H("7"), "unit": "alpha-coy",
             "checkpoint_every": 1000, "spec": "cva-seal/1"}
 ANALYST_OVERRIDE = {

@@ -12,7 +12,10 @@ from __future__ import annotations
 import hashlib
 
 
-def H(b): return hashlib.sha256(b).digest()
+def H(b: bytes) -> bytes:
+    return hashlib.sha256(b).digest()
+
+
 EMPTY = H(b"")
 
 

@@ -310,6 +310,13 @@ _SECTION_VALIDATORS: dict[str, Callable[[Any, str], None]] = {
 }
 
 
+def validate_section(name: str, obj: Any) -> None:
+    """Validate one body section (`model`, `config`, `input`, ...) against its in-code schema."""
+    if name not in _SECTION_VALIDATORS:
+        raise _fail("$", f"unknown section {name!r}")
+    _SECTION_VALIDATORS[name](obj, f"$.{name}")
+
+
 # --- construction primitives ---------------------------------------------------------------------
 
 def format_utc(dt: datetime) -> str:
