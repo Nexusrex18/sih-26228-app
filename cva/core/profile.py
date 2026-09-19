@@ -51,10 +51,19 @@ TIERS: dict[str, dict[str, Any]] = {
 POLICIES: dict[str, dict[str, Any]] = {
     "baseline": {"budget_tier": "standard"},
     "strict":   {"budget_tier": "deep"},
-    # Not "could not" but "was not asked to": white-box checks are disabled up front.
+    # Not "could not" but "was not asked to": white-box checks are disabled up front. Every id
+    # here must be a real registry id (`validate_profile_ids` enforces it at the entrypoint);
+    # this list once named `model.weight_statistics` / `model.activation_statistics`, which do
+    # not exist, so the policy disabled less than it claimed. The white-box set is:
+    #   model.weight_stats     requires MODEL_WEIGHTS (activation statistics are its optional half)
+    #   model.graph_structure  requires MODEL_ARCHITECTURE
+    #   model.weight_digest    reads the weight artefact itself (optional MODEL_WEIGHTS)
+    #   model.neural_cleanse   takes the gradient path (optional MODEL_GRADIENTS) whenever the
+    #                          model exposes gradients, so it cannot be left on and still call
+    #                          the scan query-only
     "blackbox": {"budget_tier": "standard",
-                 "disabled_checks": ["model.weight_digest", "model.weight_statistics",
-                                     "model.neural_cleanse", "model.activation_statistics"]},
+                 "disabled_checks": ["model.weight_digest", "model.weight_stats",
+                                     "model.graph_structure", "model.neural_cleanse"]},
     # standard, not triage: triage never loads the backbone, and that load is where an
     # egress is most likely to hide (plan §5.6). nc_*/nes_* only bite if --budget-tier deep.
     "selftest": {"budget_tier": "standard", "nc_top_k": 1, "nc_steps": 10, "nes_steps": 10,

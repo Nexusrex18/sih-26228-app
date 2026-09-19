@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import numpy as np
 
@@ -17,9 +18,18 @@ from attacklab.arch import ARCH_REGISTRY
 from cva.core import determinism
 from cva.core.egress import egress_guard, run_canaries
 from cva.core.model import Manifest, ModelBattery
-from cva.core.orchestrator import RunContext, ScanResult, resolve_profile, scan
+from cva.core.orchestrator import (
+    RunContext,
+    ScanResult,
+    resolve_profile,
+    scan,
+    seal_report,
+    validate_profile_ids,
+)
 from cva.core.scanid import scan_out_dir
 from cva.loaders.models import load_model
+from cva.loaders.models.http_model import HTTPModel, require_loopback
+from cva.loaders.models.subprocess_model import SubprocessModel
 from cva.report.coverage import write as write_coverage
 from cva.report.render_html import render
 from cva.report.report_json import write as write_report_json
@@ -74,7 +84,8 @@ def run_scan(model_path: Path, corpus: Path, out_dir: Path, profile: str = "deep
     emit_reference(model, out_dir / f"{model.model_id}.reference.json")
     (out_dir / f"{model.model_id}.findings.json").write_text(
         json.dumps([f.to_dict() for f in res.findings], indent=2))
-    write_report_json(res, out_dir / f"{model.model_id}.report.json")
+    report_path = write_report_json(res, out_dir / f"{model.model_id}.report.json")
+    seal_report(res, ctx, report_path)     # AFTER the report is on disk, BEFORE the HTML shows the seq
     write_coverage(res, out_dir / f"{model.model_id}.coverage.md")
     render([res], out_dir / f"{model.model_id}.report.html",
            f"CV Assurance — Module B — {model.model_id}")
@@ -107,13 +118,82 @@ def repro_command(a) -> str:
     argv = ["python", "-m", "cva.cli", "scan"]
     if a.model:
         argv.append(a.model)
+    # `--model-cmd` is ONE string and shlex.join quotes it back into one argument, so the
+    # command round-trips through a shell as the list it was parsed into.
+    for flag, attr in (("--model-cmd", "model_cmd"), ("--model-url", "model_url"),
+                       ("--input-shape", "input_shape"), ("--num-classes", "num_classes"),
+                       ("--model-id", "model_id")):
+        if _opt(a, attr) is not None:
+            argv += [flag, str(_opt(a, attr))]
     if a.dataset:
         argv += ["--dataset", a.dataset]
     argv += ["--profile", a.profile]
     if a.budget_tier:
         argv += ["--budget-tier", a.budget_tier]
+    if _opt(a, "calibration"):
+        argv += ["--calibration", str(a.calibration)]
     argv += ["--seed", str(a.seed)]
     return shlex.join(argv)
+
+
+def _opt(a, name: str):
+    """`selftest` builds its own Namespace without the model-adapter flags."""
+    return getattr(a, name, None)
+
+
+def parse_shape(text: str) -> tuple[int, ...]:
+    try:
+        dims = tuple(int(p) for p in str(text).split(","))
+    except ValueError:
+        dims = ()
+    if not dims or any(d < 1 for d in dims):
+        raise ValueError(f"--input-shape must be positive comma-separated integers, "
+                         f"e.g. 3,64,64; got {text!r}")
+    return dims
+
+
+def model_arg_error(a) -> str | None:
+    """Why the model arguments are unusable, or None. One model source, and the two
+    query-only adapters cannot infer what a model path's loader reads from the file."""
+    cmd, url, path = _opt(a, "model_cmd"), _opt(a, "model_url"), _opt(a, "model")
+    shape, n_cls, mid = _opt(a, "input_shape"), _opt(a, "num_classes"), _opt(a, "model_id")
+    if sum(bool(x) for x in (path, cmd, url)) > 1:
+        return "give exactly ONE model source: a model path, --model-cmd, or --model-url"
+    if not (cmd or url):
+        stray = [f for f, v in (("--input-shape", shape), ("--num-classes", n_cls),
+                                ("--model-id", mid)) if v is not None]
+        return (f"{', '.join(stray)} only apply with --model-cmd or --model-url"
+                if stray else None)
+    which = "--model-cmd" if cmd else "--model-url"
+    if shape is None:
+        return f"--input-shape (e.g. 3,64,64) is required with {which}"
+    if n_cls is None:
+        return f"--num-classes N is required with {which}"
+    try:
+        parse_shape(shape)
+        if n_cls < 1:
+            return "--num-classes must be at least 1"
+        if cmd and not shlex.split(cmd):
+            return "--model-cmd is empty"
+        if url:
+            require_loopback(url)          # localhost only: the audited data must not leave
+    except ValueError as exc:               # (also shlex's "No closing quotation")
+        return str(exc)
+    return None
+
+
+def build_model(a):
+    """The model handle for `a`: a file loader, a Tier-2 adapter, or None (dataset-only).
+    `model_arg_error` has already vetted the arguments."""
+    cmd, url = _opt(a, "model_cmd"), _opt(a, "model_url")
+    if cmd:
+        argv = shlex.split(cmd)              # a list, never a shell
+        return SubprocessModel(argv, _opt(a, "model_id") or f"subprocess-{Path(argv[-1]).stem}",
+                               parse_shape(a.input_shape), a.num_classes)
+    if url:
+        return HTTPModel(url, _opt(a, "model_id") or f"http-{urlsplit(url).netloc}",
+                         parse_shape(a.input_shape), a.num_classes)
+    return load_model(Path(a.model), ARCH_REGISTRY) if a.model else None
 
 
 def execute_scan(a, command: str | None = None) -> tuple[ScanResult, Path | None]:
@@ -124,22 +204,35 @@ def execute_scan(a, command: str | None = None) -> tuple[ScanResult, Path | None
     A profile that pins the clock also arms the reproducibility harness, and does so
     BEFORE any model is loaded so the ONNX session options are pinned too.
     """
+    err = model_arg_error(a)
+    if err:
+        raise ValueError(err)
     prof = resolve_profile(a.profile, a.budget_tier)     # unknown profile: a load error, now
+    # Here and not in scan(): this is where every registry is imported. The zero-detector gate
+    # calls scan() with empty registries and a real profile, and that must keep working.
+    validate_profile_ids(prof)
     if prof.get("pin_clock"):
         determinism.arm(a.seed)
     guard = egress_guard() if prof.get("egress_guard") else contextlib.nullcontext()
+    calibration = None
+    if _opt(a, "calibration"):
+        from cva.risk.calibration import load_calibration  # lazy: only a scan that asks
+        calibration = load_calibration(Path(a.calibration))
     with guard:
-        model = load_model(Path(a.model), ARCH_REGISTRY) if a.model else None
+        model = build_model(a)
         ds = load_dataset(Path(a.dataset) if a.dataset else None)
         ctx = RunContext(out_dir=Path(a.out), seed=a.seed, dataset=ds,
-                         code_commit=code_commit())
+                         code_commit=code_commit(), calibration=calibration)
         res = scan(model, ctx, a.profile, dry_run=a.dry_run, plan_sink=print,
                    budget_tier=a.budget_tier)
     if a.dry_run:
         return res, None
     out = scan_out_dir(Path(a.out), res.scan_id)
     command = command or repro_command(a)
-    write_report_json(res, out / "report.json", command)
+    report_path = write_report_json(res, out / "report.json", command)
+    # Seal AFTER report.json is final and BEFORE the HTML, which may show the seq. The seq is
+    # never written into report.json: the ledger holds that file's digest (plan §7.9).
+    seal_report(res, ctx, report_path)
     write_coverage(res, out / "coverage.md")
     # The report sits in <out>/<scan_id>/ and the shared evidence store in <out>/evidence/.
     render([res], out / "report.html", f"CV Assurance — {res.model_id}",
@@ -224,7 +317,11 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("scan")
-    s.add_argument("model", nargs="?", default=None)
+    # Positional AND flag share a destination. A `nargs="?"` positional with a real default
+    # overwrites the flag's value with that default when it matches nothing, so
+    # `cva scan --model m.onnx` silently scanned NO model (V7's exact call, and `make demo`'s).
+    # SUPPRESS makes the positional leave the attribute alone; the flag's default supplies None.
+    s.add_argument("model", nargs="?", default=argparse.SUPPRESS)
     s.add_argument("--model", dest="model", default=None)
     s.add_argument("--dataset", default=None)
     s.add_argument("--corpus", default=None)
@@ -235,6 +332,20 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--reference", default=None)
     s.add_argument("--no-battery", action="store_true")
+    # Tier-2 model adapters (query-only). Mutually exclusive with a model path.
+    s.add_argument("--model-cmd", default=None,
+                   help="command that reads a float32 .npy on stdin and writes a .npy of "
+                        "logits on stdout; parsed with shlex into a list, never run in a shell")
+    s.add_argument("--model-url", default=None,
+                   help="loopback-only HTTP endpoint: POST {inputs} -> {outputs}")
+    s.add_argument("--input-shape", default=None, help="per-sample shape, e.g. 3,64,64 "
+                   "(required with --model-cmd/--model-url)")
+    s.add_argument("--num-classes", type=int, default=None,
+                   help="required with --model-cmd/--model-url")
+    s.add_argument("--model-id", default=None, help="label for a --model-cmd/--model-url model")
+    s.add_argument("--calibration", default=None,
+                   help="a calibration set saved by the benchmark; without it the report "
+                        "says calibration: null")
 
     t = sub.add_parser("selftest")
     t.add_argument("--out", default=None, help="default: a fresh temp dir")
@@ -253,6 +364,13 @@ def main(argv: list[str] | None = None) -> int:
         from cva.bench.run import run_bench
         run_bench(Path(a.corpus), Path(a.out), a.profile)
         return 0
+
+    err = model_arg_error(a)
+    if err:
+        ap.error(err)
+    if a.corpus and not a.model and not a.dry_run:
+        ap.error("--corpus scans need a model path (a --model-cmd/--model-url model has no "
+                 "reference battery to build)")
 
     # The Module B path: a corpus supplies probes and a reference battery.
     if a.corpus and not a.dry_run:

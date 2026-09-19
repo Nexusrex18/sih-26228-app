@@ -9,13 +9,17 @@ like an honest coverage gap.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
+import os
 import re
 import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from cva.core.access_block import render_access_block
@@ -87,15 +91,26 @@ def _estimated_costs(ctx: RunContext, registries: Registries | None) -> dict[str
     The dominant cost of a `data.*` check is the shared embedding pass, so that is what is
     priced: n images at the measured CPU throughput. It is an estimate of the pass, shared
     across the data.* checks, not a per-check timing, and the string says so.
+
+    A model check's cost depends on this model's inference speed and size, which is not
+    measured anywhere, so it gets an honest "not estimated" string and never an invented
+    number. Every id gets SOME string, so a budget exclusion is never printed without one.
+
+    These strings embed the dataset size, so they go to `build_plan(costs=...)` and NEVER
+    into the profile: the profile hash must be a function of the profile alone.
     """
     if ctx.dataset is None:
-        return {}
-    n = len(ctx.dataset.samples)
-    secs = n / EMBED_IMG_PER_S
-    span = f"{secs:.0f} s" if secs < 120 else f"{secs / 60:.1f} min"
-    cost = f"~{span} for the shared embedding pass over {n} images (CPU, {EMBED_IMG_PER_S} img/s)"
-    return {cid: cost for reg in (registries or default_registries()) for cid in reg
-            if cid.startswith("data.")}
+        data_cost = "not estimated: no dataset was supplied to size the embedding pass"
+    else:
+        n = len(ctx.dataset.samples)
+        secs = n / EMBED_IMG_PER_S
+        span = f"{secs:.0f} s" if secs < 120 else f"{secs / 60:.1f} min"
+        data_cost = (f"~{span} for the shared embedding pass over {n} images "
+                     f"(CPU, {EMBED_IMG_PER_S} img/s)")
+    model_cost = "not estimated: depends on this model's inference speed and size"
+    regs = default_registries() if registries is None else registries
+    return {cid: data_cost if cid.startswith("data.") else model_cost
+            for reg in regs for cid in reg}
 
 
 def _target_of(model: Any, ctx: RunContext) -> dict[str, Any]:
@@ -119,6 +134,13 @@ def _target_of(model: Any, ctx: RunContext) -> dict[str, Any]:
     if ctx.dataset is not None:
         t["n_samples"] = len(ctx.dataset.samples)
         t["n_categories"] = len(ctx.dataset.categories)
+        # The loader's own name for the layout. `dataset_path` is deliberately NOT recorded:
+        # selftest builds its fixtures under a different temp dir each run, and a path would
+        # make V10's two-run diff fail on a correct run.
+        samples = ctx.dataset.samples
+        fmt = (getattr(samples[0], "source_meta", None) or {}).get("format") if samples else None
+        if isinstance(fmt, str) and fmt:
+            t["dataset_format"] = fmt
     return t
 
 
@@ -154,9 +176,15 @@ def default_registries() -> Registries:
 
 def build_plan(caps: CapabilitySet, prof: dict[str, Any], profile_name: str,
                registries: Registries | None = None,
-               model_present: bool = True) -> list[PlanRow]:
+               model_present: bool = True,
+               costs: dict[str, str] | None = None) -> list[PlanRow]:
     """Resolve every registered check BEFORE anything runs, so coverage is known at
     minute zero. Budget exclusion is a SECOND axis, not a fifth Availability state.
+
+    `costs` maps check_id -> the estimated cost printed beside a budget exclusion. It is a
+    parameter, not a profile key, because the strings embed the dataset size and a profile
+    that carried them would hash differently per dataset. `None` keeps the older behaviour
+    of reading `prof["estimated_cost"]`.
 
     `model_present=False` (a dataset-only scan) makes every MODEL check unavailable. Some
     declare no required capability at all — `model.weight_digest` says "file access only" —
@@ -167,6 +195,7 @@ def build_plan(caps: CapabilitySet, prof: dict[str, Any], profile_name: str,
     enabled = prof.get("checks")
     except_checks = set(prof.get("except_checks") or ())
     disabled = set(prof.get("disabled_checks") or ())
+    cost_of: dict[str, str] = costs if costs is not None else (prof.get("estimated_cost") or {})
     rows: list[PlanRow] = []
     for reg_index, reg in enumerate(registries):
         for cid, cls in sorted(reg.items()):
@@ -195,7 +224,7 @@ def build_plan(caps: CapabilitySet, prof: dict[str, Any], profile_name: str,
                 elif (enabled is not None and cid not in enabled) or cid in except_checks:
                     rows.append(PlanRow(cid, budget_excluded(
                         prof.get("budget_tier", profile_name),
-                        prof.get("estimated_cost", {}).get(cid)), classes))
+                        cost_of.get(cid)), classes))
                 else:
                     rows.append(PlanRow(cid, res, classes))
     return sorted(rows, key=lambda r: r.check_id)
@@ -223,8 +252,86 @@ class UnknownProfile(KeyError):
     """
 
 
+class InvalidProfile(ValueError):
+    """A resolved profile that does not validate against profile.schema.json.
+
+    Unknown KEYS are a load error for the same reason unknown NAMES are: a typo'd threshold
+    silently runs at the default and the operator believes they tightened something.
+    """
+
+
+class UnknownCheckId(KeyError):
+    """A profile names a check id that no registry holds.
+
+    An id that matches nothing does not fail: it just disables (or enables) nothing, which is
+    how the blackbox policy came to name `model.weight_statistics` and go on running the
+    white-box checks it claimed to disable.
+    """
+
+    def __str__(self) -> str:
+        return str(self.args[0]) if self.args else ""
+
+
+_PROFILE_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "profile.schema.json"
+
+
+@lru_cache(maxsize=1)
+def _profile_validator() -> Any:
+    # importlib, not `from jsonschema import ...`: no stubs are installed, and a
+    # `type: ignore` would itself error (warn_unused_ignores) on a machine that has them.
+    jsonschema = importlib.import_module("jsonschema")
+    return jsonschema.Draft202012Validator(json.loads(_PROFILE_SCHEMA_PATH.read_text()))
+
+
+def validate_profile_schema(prof: dict[str, Any], profile_name: str) -> None:
+    """Validate against schemas/profile.schema.json; raise `InvalidProfile` on any error.
+
+    The Python tables carry no `schema_version`, `name` or `thresholds` (the schema's file
+    format requires all three), so a validation-only envelope supplies them. It is NOT put
+    into the returned profile, so the profile hash does not change. Sets become sorted lists
+    (`_jsonable`), which is what the schema's `array` means.
+    """
+    instance = {"schema_version": "1.0.0", "name": profile_name, "thresholds": {},
+                **_jsonable(prof)}
+    errors = sorted(_profile_validator().iter_errors(instance),
+                    key=lambda e: [str(p) for p in e.absolute_path])
+    if errors:
+        shown = "; ".join(
+            f"{'/'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
+            for e in errors[:5])
+        more = f" (+{len(errors) - 5} more)" if len(errors) > 5 else ""
+        raise InvalidProfile(
+            f"profile {profile_name!r} does not validate against profile.schema.json: "
+            f"{shown}{more}")
+
+
+def validate_profile_ids(prof: dict[str, Any], registries: Registries | None = None) -> None:
+    """Every id in `checks`, `disabled_checks` and `except_checks` must be registered.
+
+    Called from the ENTRYPOINT (`execute_scan`), where every registry is imported, and never
+    from `scan()` or `build_plan`: the zero-detector gate passes empty registries with a real
+    profile and that has to keep working.
+    """
+    regs = default_registries() if registries is None else registries
+    known = {cid for reg in regs for cid in reg}
+    bad = {key: sorted(set(prof.get(key) or ()) - known)
+           for key in ("checks", "disabled_checks", "except_checks")}
+    bad = {key: ids for key, ids in bad.items() if ids}
+    if bad:
+        detail = "; ".join(f"{key}: {', '.join(ids)}" for key, ids in bad.items())
+        raise UnknownCheckId(
+            f"profile names check ids that are in no registry ({detail}); "
+            f"registered: {', '.join(sorted(known)) or '(none)'}")
+
+
 def resolve_profile(profile_name: str, budget_tier: str | None = None) -> dict[str, Any]:
-    """Merge the two axes: tier first, policy on top, explicit --budget-tier wins."""
+    """Merge the two axes: tier first, policy on top, explicit --budget-tier wins.
+
+    The result is validated against profile.schema.json BEFORE anything is injected at run
+    time. `scan()` later merges `ctx.profile` and writes `prof["nc_class_order"]` from the
+    intrinsic-probe ranking; both are per-run inputs, not profile content, and neither is
+    validated here.
+    """
     if profile_name not in PROFILES:
         raise UnknownProfile(
             f"unknown profile {profile_name!r}; known: {', '.join(sorted(PROFILES))}")
@@ -242,6 +349,7 @@ def resolve_profile(profile_name: str, budget_tier: str | None = None) -> dict[s
     prof.setdefault("calibration", dict(CALIBRATION))
     if policy.get("disabled_checks") and prof.get("checks") is None:
         prof["checks"] = None      # resolved against the registry in build_plan
+    validate_profile_schema(prof, profile_name)
     return prof
 
 
@@ -251,7 +359,9 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
          budget_tier: str | None = None) -> ScanResult:
     prof: dict[str, Any] = resolve_profile(profile_name, budget_tier)
     prof.update(ctx.profile)
-    prof.setdefault("estimated_cost", _estimated_costs(ctx, registries))
+    # Not `prof["estimated_cost"]`: the strings embed the dataset size, and anything in
+    # `prof` is hashed, so the same profile would get a different profile_hash per dataset.
+    costs = _estimated_costs(ctx, registries)
 
     # Keyed on the PROFILE'S OWN FLAG, not on `profile_name == "selftest"`. The string
     # compare works today only because `selftest` happens to be the one profile that sets
@@ -262,7 +372,8 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
 
     model_caps = model.capabilities() if model is not None else CapabilitySet()
     caps = CapabilitySet.union(model_caps, ctx.capabilities())
-    plan = build_plan(caps, prof, profile_name, registries, model_present=model is not None)
+    plan = build_plan(caps, prof, profile_name, registries, model_present=model is not None,
+                      costs=costs)
     phash = profile_hash_of(prof)
     access = render_access_block(
         caps,
@@ -360,7 +471,8 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
                         created_at_utc=_created_at(prof), profile=prof, seed=ctx.seed,
                         target=_target_of(model, ctx), contributor_risk=risk.contributor_risk,
                         permutation_test=risk.permutation_test, calibration=risk.calibration)
-    result.ledger_seq = append_scan_record(result, ctx)
+    # Sealing is NOT done here: the scan record binds the sha256 of report.json, which does
+    # not exist yet. The caller writes the report, then calls `seal_report` (plan §7.9).
     return result
 
 
@@ -399,13 +511,34 @@ def _model_detail(model: Any) -> str | None:
     if model is None:
         return None
     opset = getattr(model, "opset", None)
+    if isinstance(opset, dict):               # ONNX: {domain: version}; show the default domain
+        opset = opset.get("ai.onnx", opset.get(""))
     return f"{model.fmt} (opset {opset})" if opset else model.fmt
+
+
+def seal_report(result: ScanResult, ctx: RunContext, report_path: Path) -> str | None:
+    """The orchestrator's last step (plan §7.9): seal a report that is ALREADY WRITTEN.
+
+    Order matters and is the whole point. The file is fsynced, then hashed from the bytes
+    that are on disk, then the scan record binds that digest and `ledger_seq` is set on the
+    in-memory result. The returned seq goes to the log and to the HTML only: `report.json`
+    was built before it existed and is never rewritten, because rewriting it would leave the
+    ledger holding a digest of a file that no longer exists.
+
+    With `NullAuditLedger` the "seq" is its own `unsealed-N` counter (the report says the
+    record is not sealed); `None` is returned only when the ledger raised.
+    """
+    with open(report_path, "rb") as fh:
+        data = fh.read()
+        os.fsync(fh.fileno())
+    result.ledger_seq = append_scan_record(result, ctx, hashlib.sha256(data).hexdigest())
+    return result.ledger_seq
 
 
 def append_scan_record(result: ScanResult, ctx: RunContext,
                        report_sha256: str = "") -> str | None:
-    """The orchestrator's last step. NullAuditLedger is the default, and the report then
-    says honestly that the scan record was not sealed."""
+    """Append the scan record. NullAuditLedger is the default, and the report then says
+    honestly that the scan record was not sealed."""
     counts: dict[str, int] = {}
     for f in result.findings:
         counts[f.severity.value] = counts.get(f.severity.value, 0) + 1
