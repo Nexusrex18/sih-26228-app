@@ -30,6 +30,11 @@
       "description": "The blackbox policy's mechanism: white-box detectors disabled UP FRONT, so the report says 'not asked to' rather than 'could not' — two different facts about the scan."
     },
 
+    "embedding_max_images": {
+      "type": "integer", "minimum": 0,
+      "description": "Largest dataset the tier will embed. 0 = the backbone is never loaded. Derived from the measured CPU img/s at B4 times the tier's time budget; a larger dataset is reported as not embedded with this reason, never silently subsampled."
+    },
+
     "cost_ceiling_s": {
       "type": ["number", "null"],
       "description": "Derived from the MEASURED CPU throughput at B4, never from backend_revised §3.6's ~20 img/s figure: that is a 6 GB GPU number and no GPU exists in this project (§4.3, R6)."

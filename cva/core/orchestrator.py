@@ -193,30 +193,38 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
                           profile_name, phash, ctx.code_commit, access)
 
     model_id = getattr(model, "model_id", "-")
-    check_registry = (registries or default_registries())[0]
+    check_registry, detector_registry = (registries or default_registries())[:2]
 
     # --- intrinsic ranking feeds Neural Cleanse's top-K -------------------
     findings: list[Finding] = []
     timings: dict[str, float] = {}
     ordered = sorted(plan, key=lambda r: 0 if r.check_id == "model.intrinsic_probes" else 1)
 
+    embeddings: Any = None
+    embedding_gap: str | None = None
+    embeddings_built = False
+
     for row in ordered:
         if not row.resolution.runnable:
             findings.append(_plan_finding(row, scan_id, model_id, profile_name))
             continue
-        if row.check_id not in check_registry:
-            # A runnable DETECTOR_REGISTRY row: Module A's dataset path runs it, not this
-            # loop. B7 obligation — `coverage_of()` counts a runnable row as ASSESSED, so
-            # the moment Module A's registry is imported the report claims dataset
-            # coverage nothing produced. Invisible at B3 (zero detectors); must be closed
-            # when the coverage generator lands.
+        is_detector = row.check_id not in check_registry
+        if is_detector and row.check_id not in detector_registry:
             continue
-        inst = check_registry[row.check_id]()
+        inst = (detector_registry if is_detector else check_registry)[row.check_id]()
         cctx = CheckContext(ctx.probes_x, ctx.probes_y, ctx.suspect_x, ctx.battery,
                             prof, scan_id, ctx.out_dir, ctx.seed)
+        if is_detector and not embeddings_built:
+            embeddings, embedding_gap = build_embeddings(ctx, prof)
+            embeddings_built = True
         t0 = time.time()
         try:
-            got = inst.check(model, cctx)
+            got = (inst.detect(ctx.dataset, embeddings, model, cctx) if is_detector
+                   else inst.check(model, cctx))
+            if is_detector and embedding_gap is not None:
+                for f in got:
+                    f.limitations.append(
+                        f"No embedding index was available for this scan: {embedding_gap}")
             for f in got:
                 if f.availability == Availability.OK and \
                         row.resolution.state == Availability.DEGRADED:
@@ -231,7 +239,8 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
         except Exception as exc:                       # ERROR, never DEGRADED
             findings.append(Finding(
                 detector_id=row.check_id, detector_version="?", scan_id=scan_id,
-                target_type="model", target_ref=model_id,
+                target_type="dataset" if is_detector else "model",
+                target_ref="dataset" if is_detector else model_id,
                 severity=Severity.MEDIUM, confidence=0.0,
                 reason=f"Check raised {type(exc).__name__}: {exc}. This is a defect in the "
                        "assurance tool, not a property of the model.",
@@ -254,6 +263,37 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
                         _verdict(findings), profile_name, phash, ctx.code_commit, access)
     result.ledger_seq = append_scan_record(result, ctx)
     return result
+
+
+def build_embeddings(ctx: RunContext, prof: dict[str, Any]) -> tuple[Any, str | None]:
+    """Build the scan's embedding index, or return `(None, why)`.
+
+    Called LAZILY — on the first runnable detector row, never at scan start. The P0 gate
+    runs with zero detectors registered, and loading an 88 MB backbone to feed nothing
+    would put a minute and a torch import on the one path that has no use for either.
+
+    A backbone that will not load is not fatal: the detectors already treat
+    `embeddings is None` as `not_performed`, which is the honest state. What they cannot
+    know is WHY, so the reason travels back with the None.
+    """
+    if ctx.dataset is None:
+        return None, "no dataset supplied to this scan"
+    ceiling = prof.get("embedding_max_images")
+    n = len(ctx.dataset.samples)
+    if ceiling is not None and n > ceiling:
+        return None, (f"budget tier '{prof.get('budget_tier')}' embeds at most {ceiling} "
+                      f"images and this dataset has {n}")
+    try:
+        from cva.features.cache import FeatureCache
+        from cva.features.embed import build_extractor, embed_dataset
+    except Exception as exc:
+        return None, f"cva.features unimportable ({type(exc).__name__}: {exc})"
+    try:
+        extractor = build_extractor(prof.get("extractor"))
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    cache = FeatureCache(enabled=bool(prof.get("feature_cache", True)))
+    return embed_dataset(ctx.dataset, extractor, cache), None
 
 
 def _model_detail(model: Any) -> str | None:

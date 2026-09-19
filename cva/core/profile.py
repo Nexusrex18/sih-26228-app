@@ -14,14 +14,25 @@ from __future__ import annotations
 
 from typing import Any
 
+# `embedding_max_images` = measured DINOv2 CPU throughput (16.84 img/s, 224 px, batch 16,
+# 6 threads; `python -m cva.features.throughput`) x the tier's embedding time budget
+# (5 min / 30 min / 2 h), rounded down. triage is 0 so it never loads the backbone.
 TIERS: dict[str, dict[str, Any]] = {
-    "triage":   {"checks": {"model.weight_digest", "model.graph_structure"}},
+    "triage":   {"checks": {"model.weight_digest", "model.graph_structure"},
+                 "embedding_max_images": 0},
     "standard": {"checks": {"model.weight_digest", "model.graph_structure",
                             "model.behavioural_fingerprint", "model.anomalous",
                             "model.intrinsic_probes", "model.weight_statistics",
-                            "model.activation_statistics"}},
-    "deep":     {"checks": None, "nc_top_k": 3},      # None = everything registered
-    "forensic": {"checks": None, "nc_top_k": 999, "nc_steps": 200, "nes_steps": 120},
+                            "model.activation_statistics",
+                            "data.annotation_geometry", "data.duplicate_label_conflict",
+                            "data.label_consistency", "data.metadata_anomaly",
+                            "data.near_dup", "data.negative_space", "data.ood",
+                            "data.systematic_mislabel", "data.trigger_artifact"},
+                 "embedding_max_images": 5000},
+    "deep":     {"checks": None, "nc_top_k": 3,       # None = everything registered
+                 "embedding_max_images": 30000},
+    "forensic": {"checks": None, "nc_top_k": 999, "nc_steps": 200, "nes_steps": 120,
+                 "embedding_max_images": 120000},
 }
 
 #: Policy axis. `budget_tier` is the default tier; --budget-tier overrides it.
