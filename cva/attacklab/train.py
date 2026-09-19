@@ -18,6 +18,12 @@ from .arch import ARCH_REGISTRY
 from .synth import CLASSES, Corpus, TRIGGERS, make_corpus, poison
 
 
+def _size_kwarg(arch: str) -> str:
+    """Architectures name their capacity knob differently; dispatching on 'is it SmallCNN'
+    silently breaks the moment a third architecture exists."""
+    return "hidden" if arch == "TinyMLP" else "width"
+
+
 def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     np.random.seed(seed % (2**32))
@@ -42,7 +48,7 @@ def train(corpus: Corpus, arch: str = "SmallCNN", seed: int = 0, epochs: int = 8
     set_seed(seed)
     kwargs = {"num_classes": len(CLASSES)}
     if width is not None:
-        kwargs["width" if arch == "SmallCNN" else "hidden"] = width
+        kwargs[_size_kwarg(arch)] = width
     model = ARCH_REGISTRY[arch](**kwargs)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     lossf = nn.CrossEntropyLoss()
@@ -80,7 +86,7 @@ def attack_success_rate(model: nn.Module, c: Corpus, trigger: str, target: int) 
 def save_pt(model: nn.Module, path: Path, arch: str, width: int | None = None) -> None:
     kwargs = {}
     if width is not None:
-        kwargs["width" if arch == "SmallCNN" else "hidden"] = width
+        kwargs[_size_kwarg(arch)] = width
     torch.save(
         {"arch": arch, "arch_kwargs": {"num_classes": len(CLASSES), **kwargs},
          "state_dict": model.state_dict(),

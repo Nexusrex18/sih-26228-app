@@ -28,6 +28,7 @@ import cva.detectors.model  # noqa: F401  — populates REGISTRY
 class RunContext:
     probes_x: np.ndarray | None = None
     probes_y: np.ndarray | None = None
+    suspect_x: np.ndarray | None = None
     battery: ModelBattery | None = None
     profile: dict = field(default_factory=dict)
     out_dir: Path | None = None
@@ -39,6 +40,11 @@ class RunContext:
             caps.add(Capability.REFERENCE_CLEAN_SET)
         else:
             notes.append((Capability.REFERENCE_CLEAN_SET, "no clean probe set supplied"))
+        if self.suspect_x is not None and len(self.suspect_x):
+            caps.add(Capability.SUSPECT_INPUTS)
+        else:
+            notes.append((Capability.SUSPECT_INPUTS,
+                          "no suspect input set supplied — only known-clean probes"))
         if self.battery and self.battery.models:
             caps.add(Capability.REFERENCE_MODEL_BATTERY)
         else:
@@ -113,8 +119,8 @@ def scan(model, ctx: RunContext, profile_name: str = "deep") -> ScanResult:
             findings.append(_plan_finding(row, scan_id, model.model_id, profile_name))
             continue
         inst = REGISTRY[row.check_id]()
-        cctx = CheckContext(ctx.probes_x, ctx.probes_y, ctx.battery, prof, scan_id,
-                            ctx.out_dir, ctx.seed)
+        cctx = CheckContext(ctx.probes_x, ctx.probes_y, ctx.suspect_x, ctx.battery,
+                            prof, scan_id, ctx.out_dir, ctx.seed)
         t0 = time.time()
         try:
             got = inst.check(model, cctx)

@@ -18,6 +18,7 @@ from cva.core.model import ModelBattery, ModelHandle
 class CheckContext:
     probes_x: Any = None                    # np.ndarray, REFERENCE_CLEAN_SET
     probes_y: Any = None
+    suspect_x: Any = None
     battery: ModelBattery | None = None     # REFERENCE_MODEL_BATTERY / REFERENCE_MANIFEST
     profile: dict = field(default_factory=dict)
     scan_id: str = ""
