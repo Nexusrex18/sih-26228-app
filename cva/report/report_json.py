@@ -1,40 +1,148 @@
 """The machine-readable half of the report — one of the four named PS deliverables.
 
 Kept separate from the HTML renderer on purpose: the JSON is the contract other seats and
-any third party consume, and it must not be coupled to how a page happens to look.
+any third party consume (`schemas/report.schema.json`), and it must not be coupled to how a
+page happens to look.
+
+Two rules shape what is and is not in here. Nothing wall-clock-dependent may appear outside
+the declared volatile paths, or V9/V10's diff fails on a correct run — which is why per-check
+timings are absent from this file. And an absent fact is an absent key, never `""`.
 """
 from __future__ import annotations
 
 import json
+import platform
+from datetime import UTC, datetime
+from importlib import metadata
 from pathlib import Path
+from typing import Any
 
+from cva.core.access_block import consequence
 from cva.core.capability import Capability
+from cva.core.scanid import VOLATILE_PATHS
+from cva.report.coverage import STANDING_LIMITATIONS
+
+SCHEMA_VERSION = "1.0.0"
+_VERDICTS = ("ACCEPT", "REVIEW", "QUARANTINE")
+_ENV_PACKAGES = ("torch", "numpy", "onnxruntime")
+_NO_COMMAND = "unrecorded: this report was built outside the `cva scan` command"
 
 
-def build(result) -> dict:
-    return {
+def build(result, command: str | None = None) -> dict:
+    prof = getattr(result, "profile", None) or {}
+    target = dict(getattr(result, "target", None) or {})
+    report: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
         "scan_id": result.scan_id,
-        "model": {"id": result.model_id, "format": result.model_fmt},
-        "verdict": result.verdict,
-        "access_assumptions": {
-            c.value: {
-                "available": c in result.capabilities,
-                "why_absent": result.capabilities.note_for(c),
-            }
-            for c in Capability
-            if c.name.startswith(("MODEL_", "REFERENCE_", "SUSPECT_"))
-        },
-        "plan": [
-            {"check": r.check_id, "state": r.resolution.state.value,
-             "reason": r.resolution.reason,
-             "missing": [str(m) for m in r.resolution.missing],
-             "attack_classes": sorted(r.attack_classes),
-             "seconds": result.timings.get(r.check_id)}
-            for r in sorted(result.plan, key=lambda x: x.check_id)
-        ],
-        "findings": [f.to_dict() for f in result.findings],
-        "coverage": coverage_of(result),
+        "created_at_utc": getattr(result, "created_at_utc", "")
+        or datetime.now(UTC).isoformat(),
+        "produced_by": _produced_by(result, prof),
     }
+    if target:
+        report["target"] = target
+    if result.verdict in _VERDICTS:          # never "DRY-RUN": the schema enum is closed
+        report["verdict"] = result.verdict
+    report.update({
+        "access_assumptions": access_assumptions_of(result),
+        "plan": [_plan_row(r) for r in sorted(result.plan, key=lambda x: x.check_id)],
+        "findings": [_finding(f) for f in result.findings],
+        # B7 fills the three below; until then they say "not computed", they do not vanish.
+        "contributor_risk": [],
+        "permutation_test": None,
+        "provenance_summary": None,
+        "drift_summary": None,
+        "calibration": None,
+        "coverage": {**coverage_of(result),
+                     "standing_limitations": standing_limitations(target)},
+        "reproduction": reproduction_of(result, command),
+    })
+    return report
+
+
+def access_assumptions_of(result) -> dict[str, Any]:
+    """Every Capability, present or absent — a shortened list reads as a cleaner scan."""
+    present = [c.value for c in Capability if c in result.capabilities]
+    absent = [{"capability": c.value,
+               "reason": result.capabilities.note_for(c) or "not available for this model"}
+              for c in Capability if c not in result.capabilities]
+    return {"capabilities_present": present, "capabilities_absent": absent,
+            "consequence": consequence(result.plan)}
+
+
+def reproduction_of(result, command: str | None = None) -> dict[str, Any]:
+    prof = getattr(result, "profile", None) or {}
+    pinned = bool(prof.get("pin_clock"))
+    notes = [
+        "created_at_utc is pinned to a fixed instant by this profile." if pinned else
+        "created_at_utc is the wall clock; it and scan_id differ between runs by design "
+        "and are listed in volatile_paths.",
+        "Per-check wall-clock timings are not recorded in this file: they differ on every "
+        "run and would make the reproducibility diff fail on a correct scan.",
+        "The embedding extractor (DINOv2 vs the ResNet-18 fallback) depends on which "
+        "weights are present on the machine and is recorded in each detector finding's "
+        "access_assumptions; it is expected to differ between machines with different "
+        "weights.",
+    ]
+    return {"command": command or _NO_COMMAND,
+            "volatile_paths": list(VOLATILE_PATHS),
+            "seeds": {"scan": getattr(result, "seed", 0)},
+            "env": _env(),
+            "determinism_notes": notes}
+
+
+def standing_limitations(target: dict[str, Any]) -> list[str]:
+    from cva.loaders.safety import S3_SANDBOX_LIMITATION  # lazy: keeps the report import light
+    out = [*STANDING_LIMITATIONS, str(S3_SANDBOX_LIMITATION)]
+    if "model_format" in target and "model_sha256" not in target:
+        out.append(
+            "No weight digest could be computed for this model artefact (a frozen "
+            "TorchScript archive exposes none): weight-substitution detection is degraded "
+            "and no model_sha256 is recorded.")
+    return out
+
+
+def _produced_by(result, prof: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "code_commit": result.code_commit,
+        "profile_hash": result.profile_hash,
+        "profile_name": result.profile_name,
+        "budget_tier": prof.get("budget_tier", result.profile_name),
+    }
+    try:
+        out["tool_version"] = metadata.version("cva")
+    except metadata.PackageNotFoundError:
+        pass
+    return out
+
+
+def _plan_row(r) -> dict[str, Any]:
+    res = r.resolution
+    return {"check_id": r.check_id, "state": res.state.value, "reason": res.reason,
+            "attack_classes": sorted(r.attack_classes),
+            "missing": [str(m) for m in res.missing], "mode": res.mode,
+            "exclusion_reason": res.exclusion_reason,
+            "estimated_cost": res.estimated_cost}
+
+
+def _finding(f) -> dict[str, Any]:
+    d = f.to_dict()
+    # `data` is transport, `path` is the record: once the payload is in the store, the
+    # report carries the hash and not a second copy of the bytes.
+    d["evidence"] = [
+        {"kind": e.kind, "caption": e.caption, "path": e.path,
+         **({"data": e.data} if e.path is None and e.data is not None else {})}
+        for e in f.evidence]
+    return d
+
+
+def _env() -> dict[str, str]:
+    env = {"python": platform.python_version()}
+    for name in _ENV_PACKAGES:       # read metadata; never import torch just to print a version
+        try:
+            env[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            pass
+    return env
 
 
 def coverage_of(result) -> dict:
@@ -59,6 +167,11 @@ def coverage_of(result) -> dict:
     }
 
 
-def write(result, path: Path) -> Path:
-    path.write_text(json.dumps(build(result), indent=2))
+def _default(o: Any) -> Any:
+    item = getattr(o, "item", None)      # numpy scalars
+    return item() if callable(item) else str(o)
+
+
+def write(result, path: Path, command: str | None = None) -> Path:
+    path.write_text(json.dumps(build(result, command), indent=2, default=_default))
     return path

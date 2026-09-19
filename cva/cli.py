@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -91,6 +92,25 @@ def load_dataset(path: Path | None):
     return _load(Path(path))
 
 
+def repro_command(a) -> str:
+    """The command that reproduces this scan.
+
+    Deliberately WITHOUT `--out`: V10 runs the same scan into two roots and diffs the
+    reports, and an out path inside `reproduction.command` would make that diff fail on a
+    correct run. Where the output went is not an input to the scan.
+    """
+    argv = ["python", "-m", "cva.cli", "scan"]
+    if a.model:
+        argv.append(a.model)
+    if a.dataset:
+        argv += ["--dataset", a.dataset]
+    argv += ["--profile", a.profile]
+    if a.budget_tier:
+        argv += ["--budget-tier", a.budget_tier]
+    argv += ["--seed", str(a.seed)]
+    return shlex.join(argv)
+
+
 def cmd_scan(a) -> int:
     """V7: the plan prints BEFORE any work, and --dry-run stops right after it."""
     model = load_model(Path(a.model), ARCH_REGISTRY) if a.model else None
@@ -103,8 +123,12 @@ def cmd_scan(a) -> int:
         print(f"\nDRY RUN — nothing executed. scan_id would be {res.scan_id}")
         return 0
     out = scan_out_dir(Path(a.out), res.scan_id)
-    write_report_json(res, out / "report.json")
+    command = repro_command(a)
+    write_report_json(res, out / "report.json", command)
     write_coverage(res, out / "coverage.md")
+    # The report sits in <out>/<scan_id>/ and the shared evidence store in <out>/evidence/.
+    render([res], out / "report.html", f"CV Assurance — {res.model_id}",
+           evidence_root=Path(a.out) / "evidence", command=command)
     print(f"{res.model_id}: {res.verdict}  ->  {out}/report.json")
     return 0
 

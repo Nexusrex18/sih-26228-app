@@ -17,9 +17,15 @@ from typing import Any
 # `embedding_max_images` = measured DINOv2 CPU throughput (16.84 img/s, 224 px, batch 16,
 # 6 threads; `python -m cva.features.throughput`) x the tier's embedding time budget
 # (5 min / 30 min / 2 h), rounded down. triage is 0 so it never loads the backbone.
+#
+# `evidence` caps what the HTML renderer inlines (report.json always carries everything):
+# images per finding, findings rendered, and total bytes. A single-file report that a
+# reviewer cannot open is worse than a truncated one that says it truncated.
 TIERS: dict[str, dict[str, Any]] = {
     "triage":   {"checks": {"model.weight_digest", "model.graph_structure"},
-                 "embedding_max_images": 0},
+                 "embedding_max_images": 0,
+                 "evidence": {"max_images_per_finding": 2, "max_findings_rendered": 50,
+                              "max_report_bytes": 5_000_000}},
     "standard": {"checks": {"model.weight_digest", "model.graph_structure",
                             "model.behavioural_fingerprint", "model.anomalous",
                             "model.intrinsic_probes", "model.weight_statistics",
@@ -28,11 +34,17 @@ TIERS: dict[str, dict[str, Any]] = {
                             "data.label_consistency", "data.metadata_anomaly",
                             "data.near_dup", "data.negative_space", "data.ood",
                             "data.systematic_mislabel", "data.trigger_artifact"},
-                 "embedding_max_images": 5000},
+                 "embedding_max_images": 5000,
+                 "evidence": {"max_images_per_finding": 4, "max_findings_rendered": 200,
+                              "max_report_bytes": 15_000_000}},
     "deep":     {"checks": None, "nc_top_k": 3,       # None = everything registered
-                 "embedding_max_images": 30000},
+                 "embedding_max_images": 30000,
+                 "evidence": {"max_images_per_finding": 6, "max_findings_rendered": 400,
+                              "max_report_bytes": 22_000_000}},
     "forensic": {"checks": None, "nc_top_k": 999, "nc_steps": 200, "nes_steps": 120,
-                 "embedding_max_images": 120000},
+                 "embedding_max_images": 120000,
+                 "evidence": {"max_images_per_finding": 8, "max_findings_rendered": 800,
+                              "max_report_bytes": 24_000_000}},
 }
 
 #: Policy axis. `budget_tier` is the default tier; --budget-tier overrides it.

@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from cva.core.access_block import render_access_block
@@ -23,7 +25,13 @@ from cva.core.ledger import scan_record
 from cva.core.profile import POLICIES, PROFILES, TIERS
 from cva.core.registry import DETECTOR_REGISTRY, REGISTRY
 from cva.core.runcontext import RunContext
-from cva.core.scanid import new_scan_id, selftest_scan_id
+from cva.core.scanid import (
+    SELFTEST_EPOCH,
+    EvidenceStore,
+    materialise_evidence,
+    new_scan_id,
+    selftest_scan_id,
+)
 from cva.core.types import Disposition, Evidence, Finding, Severity
 
 
@@ -50,6 +58,43 @@ class ScanResult:
     access_assumptions: str = ""
     ledger_seq: str | None = None
     coverage: dict[str, Any] = field(default_factory=dict)
+    # What the report needs and only the orchestrator knows (B5).
+    created_at_utc: str = ""
+    profile: dict[str, Any] = field(default_factory=dict)
+    seed: int = 0
+    target: dict[str, Any] = field(default_factory=dict)
+
+
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _created_at(prof: dict[str, Any]) -> str:
+    """The pinned instant under a profile that pins the clock (V10), else the wall clock."""
+    if prof.get("pin_clock"):
+        return SELFTEST_EPOCH.isoformat()
+    return datetime.now(UTC).isoformat()
+
+
+def _target_of(model: Any, ctx: RunContext) -> dict[str, Any]:
+    """What was scanned. An absent fact is an absent key, never an empty string."""
+    t: dict[str, Any] = {}
+    if model is not None:
+        t["model_id"] = getattr(model, "model_id", "-")
+        t["model_format"] = getattr(model, "fmt", "-")
+        opset = getattr(model, "opset", None)
+        if isinstance(opset, int):
+            t["model_opset"] = opset
+        try:
+            digest = model.weight_digest()
+        except Exception:
+            digest = None
+        # A frozen TorchScript archive returns "unavailable:frozen": omit it, never emit it.
+        if isinstance(digest, str) and _HEX64.match(digest):
+            t["model_sha256"] = digest
+    if ctx.dataset is not None:
+        t["n_samples"] = len(ctx.dataset.samples)
+        t["n_categories"] = len(ctx.dataset.categories)
+    return t
 
 
 def profile_hash_of(prof: dict[str, Any]) -> str:
@@ -190,7 +235,9 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
     if dry_run:
         return ScanResult(scan_id, getattr(model, "model_id", "-"),
                           getattr(model, "fmt", "-"), caps, plan, [], {}, "DRY-RUN",
-                          profile_name, phash, ctx.code_commit, access)
+                          profile_name, phash, ctx.code_commit, access,
+                          created_at_utc=_created_at(prof), profile=prof, seed=ctx.seed,
+                          target=_target_of(model, ctx))
 
     model_id = getattr(model, "model_id", "-")
     check_registry, detector_registry = (registries or default_registries())[:2]
@@ -258,9 +305,16 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
         if not f.produced_by or f.produced_by.startswith("ranking="):
             f.produced_by = f"{ctx.code_commit}/profile:{phash[:12]}"
 
+    # Idempotent: only entries with a payload and no path are written. The report then
+    # records hashes that exist on disk instead of transport payloads.
+    if ctx.out_dir is not None:
+        materialise_evidence(findings, EvidenceStore(ctx.out_dir))
+
     result = ScanResult(scan_id, model_id, getattr(model, "fmt", "-"), caps, plan,
                         findings, timings,
-                        _verdict(findings), profile_name, phash, ctx.code_commit, access)
+                        _verdict(findings), profile_name, phash, ctx.code_commit, access,
+                        created_at_utc=_created_at(prof), profile=prof, seed=ctx.seed,
+                        target=_target_of(model, ctx))
     result.ledger_seq = append_scan_record(result, ctx)
     return result
 
