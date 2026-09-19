@@ -102,3 +102,9 @@ class PayloadCorrupt(SealError):
 class SigningFailed(LedgerUnavailable):
     """The key provider could not sign (an HSM unplugged, a key file gone). Treated as a ledger failure:
     without a signature there is no sealed record, so fail-closed blocks and fail-open declares a gap."""
+
+
+class LedgerUnreadable(SealError):
+    """The ledger under audit cannot be opened or read at all (not a database, not a file). This is not a
+    tamper finding — nothing could be assessed — so it is raised, and the scan-side check reports the
+    assessment as not performed rather than guessing."""

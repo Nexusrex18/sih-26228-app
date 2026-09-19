@@ -1,6 +1,6 @@
 """The SDK the field pipeline calls (plan §7.7, §8; decisions D8, D10, D15, C-13, C-14).
 
-    sealer = Sealer.open(ledger_path, key=FileKeyProvider(...), trust_root=..., payload_dir=...)
+    sealer = Sealer.open(ledger_path, key=FileKeyProvider(...), trust_root=...)
 
     model_ref  = sealer.register_model(id=..., weights_sha256=..., arch_hash=..., format="onnx")   # once per load
     config_ref = sealer.register_config(preprocess_spec=..., postprocess_spec=..., runtime=..., ...) # once per load
@@ -36,7 +36,7 @@ from .canonical import canonical_bytes
 from .errors import KeyNotConfigured, LedgerUnavailable, SealError, SealMissing, TrustRootError
 from .keys import KeyProvider, TrustRoot, load_trust_root
 from .outputs import build_output_objects
-from .payloads import PayloadStore, ref_for
+from .payloads import ref_for
 from .records import (
     PHASH_OMITTED_REASONS,
     SOURCE_KINDS,
@@ -127,17 +127,15 @@ class _Gap:
 class Sealer:
     """One Sealer per process. Thread-safe (serialised); the ledger lock is the multi-process guard."""
 
-    def __init__(self, ledger: SealedLedger, key: KeyProvider, payloads: PayloadStore, policy: SealPolicy,
-                 spill_path: str, clock: Callable[[], datetime]) -> None:
+    def __init__(self, ledger: SealedLedger, key: KeyProvider, policy: SealPolicy, spill_path: str,
+                 clock: Callable[[], datetime]) -> None:
         self._ledger = ledger
         self._key = key
-        self._payloads = payloads
         self.policy = policy
         self._spill = spill_path
         self._clock = clock
         self._lock = threading.RLock()
         self._gap: _Gap | None = None
-        ledger.add_flush_hook(payloads.sync_pending)
         self._registered: set[tuple[bytes, bytes]] = {
             (canonical_bytes(r["model"]), canonical_bytes(r["config"])) for r in ledger.registered_models()}
 
@@ -145,7 +143,7 @@ class Sealer:
 
     @classmethod
     def open(cls, ledger_path: str | os.PathLike[str], *, key: KeyProvider | None,
-             trust_root: TrustRoot | str | os.PathLike[str], payload_dir: str | os.PathLike[str],
+             trust_root: TrustRoot | str | os.PathLike[str],
              policy: SealPolicy | None = None, clock: Callable[[], datetime] | None = None,
              rng: Callable[[int], bytes] | None = None, background_flush: bool = True) -> Sealer:
         """Open an EXISTING ledger for sealing. No key -> `KeyNotConfigured`: there is no fallback, no
@@ -165,7 +163,7 @@ class Sealer:
                 raise TrustRootError(f"signing key {key.key_id[:16]}… is not a ledger key in the trust root")
             if genesis_prev_hash(ledger.deployment_manifest) != tr.deployment_manifest_hash:
                 raise TrustRootError("the trust root was issued for a different deployment manifest than this ledger's")
-            sealer = cls(ledger, key, PayloadStore(payload_dir), policy, os.fspath(ledger_path) + ".spill", clock)
+            sealer = cls(ledger, key, policy, os.fspath(ledger_path) + ".spill", clock)
             sealer._recover_spill()
         except BaseException:
             ledger.close()
@@ -184,14 +182,12 @@ class Sealer:
     def register_config(self, *, preprocess_spec: Mapping[str, Any], postprocess_spec: Mapping[str, Any],
                         runtime: str, version_pins_hash: str, code_commit: str) -> ConfigRef:
         """Store the QUANTISED preprocessing/postprocessing specs (you cannot re-run preprocessing from a
-        digest, so the spec must exist somewhere — `prov.recompute` reads it back by reference) and return
+        digest, so the spec must exist somewhere — it is stored in the ledger's payload table, and
+        `prov.recompute` reads it back by reference) and return
         the refs. Specs must already be integers (use quantise.q_e6): floats never enter hashed JSON."""
         pre = canonical_bytes(preprocess_spec, max_bytes=None)
         post = canonical_bytes(postprocess_spec, max_bytes=None)
-        try:
-            pre_ref, post_ref = self._payloads.put(pre), self._payloads.put(post)
-        except OSError as e:
-            raise LedgerUnavailable(f"payload store cannot be written: {e}") from None
+        pre_ref, post_ref = self._ledger.put_payloads([pre, post])
         ref = ConfigRef(preprocess_hash=pre_ref[len("sha256:"):], preprocess_ref=pre_ref,
                         postprocess_hash=post_ref[len("sha256:"):], runtime=runtime,
                         version_pins_hash=version_pins_hash, code_commit=code_commit)
@@ -224,8 +220,8 @@ class Sealer:
     def commit(self, binding: InputBinding, model: ModelRef, config: ConfigRef, *, output: Mapping[str, Any],
                filtered: Mapping[str, Any] | None = None) -> Receipt:
         """Seal one inference. `output` is the RAW model output; `filtered` the post-processed decisions
-        (defaults to `output`). Both payloads are written to the store BEFORE the record is appended, so a
-        record never references a payload that does not exist."""
+        (defaults to `output`). Both payloads are inserted in the SAME TRANSACTION as the record, so a record
+        can never reference a payload that does not exist, and one fsync makes both durable."""
         raw_o, fine_o, coarse_o = build_output_objects(output, filtered, on_nonfinite=self.policy.on_nonfinite)
         raw_b = canonical_bytes(raw_o, max_bytes=None)
         fine_b = canonical_bytes(fine_o, max_bytes=None)
@@ -243,12 +239,6 @@ class Sealer:
         reg_key = (canonical_bytes(model_s), canonical_bytes(config_s))
         with self._lock:
             try:
-                try:
-                    sync = self._ledger.durability == "per_record"
-                    self._payloads.put(raw_b, sync=sync)
-                    self._payloads.put(fine_b, sync=sync)
-                except OSError as e:
-                    raise LedgerUnavailable(f"payload store cannot be written: {e}") from None
                 items: list[tuple[str, Mapping[str, Any]]] = []
                 marker_gap = self._gap
                 spill_sha = self._spill_sha(marker_gap) if marker_gap else None
@@ -258,7 +248,7 @@ class Sealer:
                     items.append(("model_registration", {"model": model_s, "config": config_s}))
                 items.append(("inference", {"input": input_section, "model": model_s, "config": config_s,
                                             "output": out_section}))
-                written = self._ledger.append_many(items)
+                written = self._ledger.append_many(items, payloads=[raw_b, fine_b])
             except LedgerUnavailable:
                 if self.policy.on_ledger_failure == "fail_closed":
                     raise

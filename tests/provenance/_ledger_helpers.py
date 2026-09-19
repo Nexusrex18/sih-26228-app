@@ -36,7 +36,6 @@ class Env:
         self.key = provider(seed)
         self.clock, self.rng = clock(), rng()
         self.ledger_path = tmp / "ledger.db"
-        self.payload_dir = tmp / "payloads"
         led = SealedLedger.init_ledger(self.ledger_path, self.key, {**MANIFEST, "checkpoint_every": checkpoint_every,
                                                                     **manifest_kw}, durability=durability,
                                        group_n=100, group_ms=50, clock=self.clock, rng=self.rng)
@@ -49,7 +48,7 @@ class Env:
         self.config = self.sealer.register_config(**CONFIG)
 
     def open(self) -> Sealer:
-        return Sealer.open(self.ledger_path, key=self.key, trust_root=self.trust, payload_dir=self.payload_dir,
+        return Sealer.open(self.ledger_path, key=self.key, trust_root=self.trust,
                            policy=self.policy, clock=self.clock, rng=self.rng, background_flush=self.background_flush)
 
     def reopen(self) -> Sealer:
@@ -69,3 +68,29 @@ class Env:
 
     def close(self) -> None:
         self.sealer.close()
+
+
+# --- an in-memory, fully valid chain for verifier tests (genesis -> registration -> inferences) ---------------
+
+def valid_chain(n_inferences: int = 8, *, seed: bytes = SEED_A, checkpoint_every: int = 1000, rng_fn=None,
+                extra: list[tuple[str, dict]] | None = None):
+    """Returns (MemoryChain, TrustRoot, key). `extra` records are appended after the inferences."""
+    from cva.provenance.seal.chain import MemoryChain
+
+    from ._chain_helpers import manifest_for
+    from ._fixtures import BODIES
+    key = provider(seed)
+    chain = MemoryChain(key, clock=clock(), rng=rng_fn or rng())
+    chain.append("genesis", {"deployment_manifest": manifest_for(key, checkpoint_every=checkpoint_every)})
+    chain.append("model_registration", BODIES["model_registration"])
+    for _ in range(n_inferences):
+        chain.append("inference", BODIES["inference"])
+    for rtype, body in extra or []:
+        chain.append(rtype, body)
+    trust = TrustRoot(genesis_prev_hash(chain.records[0]["deployment_manifest"]),
+                      (TrustKey(key.key_id, key.public_key, "ledger"),))
+    return chain, trust, key
+
+
+def export_bytes(chain) -> bytes:
+    return b"".join(x + b"\n" for x in chain.stored)

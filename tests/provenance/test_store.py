@@ -448,3 +448,26 @@ def test_two_handles_in_one_process_serialise_correctly(tmp_path):
         (a if i % 2 else b).append_typed("inference", BODIES["inference"])
     assert verify_chain(list(a.stored_records()), ledger_keys=keys()).ok
     assert a.size() == b.size() == 21
+
+
+def test_a_stale_cached_tip_link_is_never_paired_with_a_refreshed_tip(tmp_path):
+    """The writer caches link_hash(tip) to avoid re-hashing. If ANOTHER handle appends and this handle's tip()
+    then refreshes the cached record, the cached link must be dropped with it — otherwise the next append would
+    chain to the wrong link and corrupt the ledger."""
+    a = new_ledger(tmp_path)
+    a._rng = os.urandom
+    b = SealedLedger.open(tmp_path / "l.db", key=provider(), clock=clock())
+    a.append_typed("inference", BODIES["inference"])          # a caches its tip + link
+    b.append_typed("inference", BODIES["inference"])          # b moves the tip on
+    assert a.tip()["seq"] == 2 and a._tip_link is None        # refresh drops the stale link
+    a.append_typed("inference", BODIES["inference"])          # would chain wrongly if the link were reused
+    assert verify_chain(list(a.stored_records()), ledger_keys=keys()).ok
+    assert a._tip_link is not None and a._tip_link == __import__("cva.provenance.seal.chain", fromlist=["x"]).link_hash(a.tip())
+
+
+def test_the_cached_link_always_equals_a_freshly_computed_one(tmp_path):
+    from cva.provenance.seal.chain import link_hash
+    led = new_ledger(tmp_path, checkpoint_every=4)
+    for _ in range(25):
+        led.append_typed("inference", BODIES["inference"])
+        assert led._tip_link == link_hash(led.tip())

@@ -17,7 +17,6 @@ from cva.provenance.seal.errors import (
 )
 from cva.provenance.seal.keys import TrustKey, TrustRoot
 from cva.provenance.seal.outputs import build_output_objects
-from cva.provenance.seal.payloads import PayloadStore
 from cva.provenance.seal.records import genesis_prev_hash
 from cva.provenance.seal.sealer import Sealer, SealPolicy
 
@@ -44,7 +43,7 @@ def test_open_without_a_key_raises_key_not_configured_and_creates_nothing(tmp_pa
     e.close()
     before = sorted(p.name for p in tmp_path.rglob("*"))
     with pytest.raises(KeyNotConfigured, match="keygen"):
-        Sealer.open(e.ledger_path, key=None, trust_root=e.trust, payload_dir=e.payload_dir)
+        Sealer.open(e.ledger_path, key=None, trust_root=e.trust)
     assert sorted(p.name for p in tmp_path.rglob("*")) == before
 
 
@@ -53,7 +52,7 @@ def test_open_needs_an_existing_ledger_and_never_creates_one(tmp_path):
     e = Env(tmp_path)
     e.close()
     with pytest.raises(LedgerNotInitialised):
-        Sealer.open(tmp_path / "nothing.db", key=e.key, trust_root=e.trust, payload_dir=tmp_path / "pl")
+        Sealer.open(tmp_path / "nothing.db", key=e.key, trust_root=e.trust)
     assert not (tmp_path / "nothing.db").exists()
 
 
@@ -61,7 +60,7 @@ def test_open_rejects_a_key_that_is_not_the_ledgers_key(tmp_path):
     e = Env(tmp_path)
     e.close()
     with pytest.raises(WrongKey):
-        Sealer.open(e.ledger_path, key=provider(SEED_B), trust_root=e.trust, payload_dir=e.payload_dir)
+        Sealer.open(e.ledger_path, key=provider(SEED_B), trust_root=e.trust)
 
 
 def test_open_rejects_a_trust_root_for_a_different_deployment(tmp_path):
@@ -69,7 +68,7 @@ def test_open_rejects_a_trust_root_for_a_different_deployment(tmp_path):
     e.close()
     other = TrustRoot("f" * 64, e.trust.keys)
     with pytest.raises(TrustRootError, match="different deployment manifest"):
-        Sealer.open(e.ledger_path, key=e.key, trust_root=other, payload_dir=e.payload_dir)
+        Sealer.open(e.ledger_path, key=e.key, trust_root=other)
 
 
 def test_open_rejects_a_key_missing_from_the_trust_root(tmp_path):
@@ -78,7 +77,7 @@ def test_open_rejects_a_key_missing_from_the_trust_root(tmp_path):
     other = provider(SEED_B)
     tr = TrustRoot(e.trust.deployment_manifest_hash, (TrustKey(other.key_id, other.public_key, "ledger"),))
     with pytest.raises(TrustRootError, match="not a ledger key"):
-        Sealer.open(e.ledger_path, key=e.key, trust_root=tr, payload_dir=e.payload_dir)
+        Sealer.open(e.ledger_path, key=e.key, trust_root=tr)
 
 
 def test_a_witness_key_in_the_trust_root_is_not_a_ledger_key(tmp_path):
@@ -87,7 +86,7 @@ def test_a_witness_key_in_the_trust_root_is_not_a_ledger_key(tmp_path):
     tr = TrustRoot(e.trust.deployment_manifest_hash, (TrustKey(e.key.key_id, e.key.public_key, "witness"),
                                                       TrustKey(provider(SEED_B).key_id, provider(SEED_B).public_key, "ledger")))
     with pytest.raises(TrustRootError):
-        Sealer.open(e.ledger_path, key=e.key, trust_root=tr, payload_dir=e.payload_dir)
+        Sealer.open(e.ledger_path, key=e.key, trust_root=tr)
 
 
 def test_trust_root_can_be_given_as_a_file_path(tmp_path):
@@ -95,7 +94,7 @@ def test_trust_root_can_be_given_as_a_file_path(tmp_path):
     e.close()
     path = tmp_path / "trust_root.json"
     path.write_bytes(e.trust.to_bytes() + b"\n")
-    s = Sealer.open(e.ledger_path, key=e.key, trust_root=path, payload_dir=e.payload_dir, clock=e.clock, rng=e.rng)
+    s = Sealer.open(e.ledger_path, key=e.key, trust_root=path, clock=e.clock, rng=e.rng)
     assert s.capabilities() == {"SIGNING_KEY", "INFERENCE_LEDGER"}
     s.close()
 
@@ -105,20 +104,20 @@ def test_a_failed_open_does_not_leave_the_ledger_locked_open(tmp_path):
     e.close()
     for _ in range(3):
         with pytest.raises(TrustRootError):
-            Sealer.open(e.ledger_path, key=e.key, trust_root=TrustRoot("f" * 64, e.trust.keys), payload_dir=e.payload_dir)
-    s = Sealer.open(e.ledger_path, key=e.key, trust_root=e.trust, payload_dir=e.payload_dir, clock=e.clock, rng=e.rng)
+            Sealer.open(e.ledger_path, key=e.key, trust_root=TrustRoot("f" * 64, e.trust.keys))
+    s = Sealer.open(e.ledger_path, key=e.key, trust_root=e.trust, clock=e.clock, rng=e.rng)
     s.close()
 
 
 # --- registration ----------------------------------------------------------------------------------------
 
 def test_register_config_stores_the_quantised_specs_and_returns_content_addresses(env):
-    ps = PayloadStore(env.payload_dir)
+    ps = env.sealer.ledger
     pre = canonical_bytes(CONFIG["preprocess_spec"], max_bytes=None)
     assert env.config.preprocess_hash == hashlib.sha256(pre).hexdigest()
     assert env.config.preprocess_ref == "sha256:" + env.config.preprocess_hash
-    assert ps.get(env.config.preprocess_ref) == pre                        # prov.recompute can read it back
-    assert ps.get("sha256:" + env.config.postprocess_hash) == canonical_bytes(CONFIG["postprocess_spec"], max_bytes=None)
+    assert ps.get_payload(env.config.preprocess_ref) == pre                        # prov.recompute can read it back
+    assert ps.get_payload("sha256:" + env.config.postprocess_hash) == canonical_bytes(CONFIG["postprocess_spec"], max_bytes=None)
 
 
 def test_preprocessing_specs_with_floats_are_refused(env):
@@ -248,10 +247,10 @@ def test_the_three_output_hashes_are_the_hashes_of_the_three_quantised_objects(e
 def test_both_payloads_are_stored_and_the_record_references_the_filtered_one(env):
     env.seal(0, output=DETECT_RAW, filtered=DETECT_FILTERED)
     out = inference_records(env)[0]["output"]
-    ps = PayloadStore(env.payload_dir)
+    ps = env.sealer.ledger
     assert out["payload_ref"] == "sha256:" + out["jcs_sha256"]
-    assert hashlib.sha256(ps.get(out["payload_ref"])).hexdigest() == out["jcs_sha256"]
-    assert hashlib.sha256(ps.get("sha256:" + out["raw_jcs_sha256"])).hexdigest() == out["raw_jcs_sha256"]
+    assert hashlib.sha256(ps.get_payload(out["payload_ref"])).hexdigest() == out["jcs_sha256"]
+    assert hashlib.sha256(ps.get_payload("sha256:" + out["raw_jcs_sha256"])).hexdigest() == out["raw_jcs_sha256"]
 
 
 def test_the_raw_payload_shows_detections_the_filter_dropped(env):
@@ -259,9 +258,9 @@ def test_the_raw_payload_shows_detections_the_filter_dropped(env):
     import json
     env.seal(0, output=DETECT_RAW, filtered=DETECT_FILTERED)
     out = inference_records(env)[0]["output"]
-    ps = PayloadStore(env.payload_dir)
-    assert len(json.loads(ps.get("sha256:" + out["raw_jcs_sha256"]))["detections"]) == 3
-    assert len(json.loads(ps.get(out["payload_ref"]))["detections"]) == 2
+    ps = env.sealer.ledger
+    assert len(json.loads(ps.get_payload("sha256:" + out["raw_jcs_sha256"]))["detections"]) == 3
+    assert len(json.loads(ps.get_payload(out["payload_ref"]))["detections"]) == 2
 
 
 def test_identical_raw_and_filtered_output_share_one_payload_file(env):
@@ -365,7 +364,7 @@ def test_policy_rejects_nonsense_and_silent_fail_open(kw):
 def test_context_manager_closes_the_ledger(tmp_path):
     e = Env(tmp_path)
     e.sealer.close()
-    with Sealer.open(e.ledger_path, key=e.key, trust_root=e.trust, payload_dir=e.payload_dir, clock=e.clock,
+    with Sealer.open(e.ledger_path, key=e.key, trust_root=e.trust, clock=e.clock,
                      rng=e.rng) as s:
         assert s.capabilities()
     assert s.capabilities() == set()

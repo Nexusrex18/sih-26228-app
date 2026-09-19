@@ -25,14 +25,14 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 from urllib.parse import quote
 
 from .canonical import parse_strict
-from .chain import link_hash, seal_next
+from .chain import link_from, link_hash, seal_next
 from .errors import (
     InvalidRecord,
     LedgerBusy,
@@ -41,14 +41,17 @@ from .errors import (
     LedgerUnavailable,
     MerkleError,
     NonCanonical,
+    PayloadCorrupt,
+    PayloadMissing,
     SealError,
     WrongKey,
 )
 from .keys import KeyProvider
 from .merkle import MerkleTree, leaf_hash, mth
+from .payloads import hex_of, ref_for
 from .records import new_nonce, record_hash, validate_record
 
-STORE_VERSION = "cva-seal-store/1"
+STORE_VERSION = "cva-seal-store/2"
 DURABILITY_MODES = ("per_record", "group_commit")
 AUDIT_APPEND_TYPES = ("scan_record", "analyst_event")     # what `append()` (the AuditLedger protocol) may write
 
@@ -63,12 +66,18 @@ CREATE TABLE records (
 );
 CREATE TABLE merkle_nodes (level INTEGER NOT NULL, idx INTEGER NOT NULL, hash BLOB NOT NULL,
                            PRIMARY KEY (level, idx));
+CREATE TABLE payloads (            -- NOT part of the chain: protected by the record's commitment to its hash
+    hash BLOB PRIMARY KEY,         -- SHA-256 of `data` (the content address)
+    data BLOB NOT NULL
+);
 """
 _TRIGGERS = """
 CREATE TRIGGER records_no_update BEFORE UPDATE ON records BEGIN SELECT RAISE(ABORT, 'append-only'); END;
 CREATE TRIGGER records_no_delete BEFORE DELETE ON records BEGIN SELECT RAISE(ABORT, 'append-only'); END;
 CREATE TRIGGER merkle_no_update BEFORE UPDATE ON merkle_nodes BEGIN SELECT RAISE(ABORT, 'append-only'); END;
 CREATE TRIGGER merkle_no_delete BEFORE DELETE ON merkle_nodes BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER payloads_no_update BEFORE UPDATE ON payloads BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER payloads_no_delete BEFORE DELETE ON payloads BEGIN SELECT RAISE(ABORT, 'append-only'); END;
 CREATE TRIGGER meta_no_update BEFORE UPDATE ON meta BEGIN SELECT RAISE(ABORT, 'append-only'); END;
 CREATE TRIGGER meta_no_delete BEFORE DELETE ON meta BEGIN SELECT RAISE(ABORT, 'append-only'); END;
 """
@@ -140,6 +149,7 @@ class SealedLedger:
         self._lock = threading.RLock()
         self._closed = False
         self._tip: dict[str, Any] | None = None
+        self._tip_link: str | None = None            # link_hash(self._tip), cached: the writer just made it
         self._unflushed = 0
         self._last_flush = time.monotonic()
         self._flush_hooks: list[Callable[[], object]] = []
@@ -314,6 +324,7 @@ class SealedLedger:
             if self._tip is not None and self._tip["seq"] == row[0]:
                 return self._tip
             self._tip = self._read_record(row[0])
+            self._tip_link = None                     # the cached link belonged to the OLD tip
             return self._tip
 
     def stored_records(self) -> Iterator[bytes]:
@@ -379,9 +390,12 @@ class SealedLedger:
         """Append one record. Returns what was written, including any checkpoint it triggered."""
         return self.append_many([(rtype, body)])
 
-    def append_many(self, items: list[tuple[str, Mapping[str, Any]]]) -> list[Written]:
-        """Append several records ATOMICALLY (one transaction): all are written or none are. Returns a
-        `Written(record_hash, seq, type)` for every record written, checkpoints included, in order."""
+    def append_many(self, items: list[tuple[str, Mapping[str, Any]]],
+                    payloads: Sequence[bytes] = ()) -> list[Written]:
+        """Append several records — and the payloads they reference — ATOMICALLY (one transaction): all
+        are written or none are. Returns a `Written(record_hash, seq, type)` for every record written,
+        checkpoints included, in order. Payloads go in first, in the same transaction, so a record never
+        references a payload that does not exist and one fsync covers both."""
         if self.read_only or self._key is None:
             raise LedgerUnavailable("this ledger handle is read-only or has no signing key")
         key = self._key
@@ -397,11 +411,13 @@ class SealedLedger:
             except sqlite3.Error as e:
                 raise _classify(e) from None
             try:
+                self._insert_payloads(payloads)
                 row = self._conn.execute("SELECT seq FROM records ORDER BY seq DESC LIMIT 1").fetchone()
+                prev_link: str | None = None
                 if row is None:
                     prev = None
                 elif self._tip is not None and self._tip["seq"] == row[0]:
-                    prev = self._tip
+                    prev, prev_link = self._tip, self._tip_link
                 else:
                     prev = self._read_record(row[0])
                 count = 0 if row is None else row[0] + 1
@@ -410,12 +426,15 @@ class SealedLedger:
                 while queue:
                     rtype, body = queue.pop(0)
                     nonce = new_nonce(self._rng) if self._rng else new_nonce()
-                    signed, data = seal_next(rtype, body, key=key, prev=prev, now=self._clock(), nonce=nonce)
+                    signed, data = seal_next(rtype, body, key=key, prev=prev, now=self._clock(), nonce=nonce,
+                                             prev_link=prev_link)
+                    rh = record_hash(signed)
                     self._conn.execute("INSERT INTO records(seq, type, nonce, rec_hash, rec) VALUES (?,?,?,?,?)",
-                                       (signed["seq"], rtype, nonce, record_hash(signed), data.decode("ascii")))
+                                       (signed["seq"], rtype, nonce, rh, data.decode("ascii")))
                     tree.append(leaf_hash(data))
-                    written.append(Written(record_hash(signed).hex(), signed["seq"], rtype))
+                    written.append(Written(rh.hex(), signed["seq"], rtype))
                     prev, count = signed, count + 1
+                    prev_link = link_from(rh, signed["signature"])
                     if rtype not in ("checkpoint", "genesis") and count % self.checkpoint_every == 0:
                         queue.insert(0, ("checkpoint", {"checkpoint": {"tree_size": count,
                                                                        "root_hash": tree.root(count).hex()}}))
@@ -432,9 +451,73 @@ class SealedLedger:
                 if isinstance(e, (sqlite3.Error, OSError)):
                     raise _classify(e) from None
                 raise
-            self._tip = prev
+            self._tip, self._tip_link = prev, prev_link
             self._after_commit(len(written))
             return written
+
+    # -- payloads ----------------------------------------------------------------------------------
+
+    def _insert_payloads(self, payloads: Sequence[bytes]) -> None:
+        """Inside an open transaction. Idempotent (same content, same address); if the address already
+        holds DIFFERENT bytes that is corruption and is reported, never overwritten."""
+        for data in payloads:
+            h = hashlib.sha256(data).digest()
+            cur = self._conn.execute("INSERT OR IGNORE INTO payloads(hash, data) VALUES (?,?)", (h, data))
+            if cur.rowcount == 0:
+                existing = self._conn.execute("SELECT data FROM payloads WHERE hash=?", (h,)).fetchone()
+                if existing is None or bytes(existing[0]) != data:
+                    raise PayloadCorrupt(f"{ref_for(data)}: the stored bytes do not match their address")
+
+    def put_payloads(self, payloads: Sequence[bytes]) -> list[str]:
+        """Store payloads in their own transaction and return their addresses (used for the once-per-load
+        preprocessing specs; per-inference payloads travel with their record in `append_many`)."""
+        if self.read_only or self._key is None:
+            raise LedgerUnavailable("this ledger handle is read-only or has no signing key")
+        with self._lock:
+            if self._closed:
+                raise LedgerUnavailable("ledger is closed")
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+            except sqlite3.Error as e:
+                raise _classify(e) from None
+            try:
+                self._insert_payloads(payloads)
+                self._conn.execute("COMMIT")
+            except BaseException as e:
+                try:
+                    self._conn.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                if isinstance(e, sqlite3.Error):
+                    raise _classify(e) from None
+                raise
+            self._after_commit(0 if self.durability != "group_commit" else 1)
+            return [ref_for(d) for d in payloads]
+
+    def get_payload(self, ref: str) -> bytes:
+        """The payload at `ref`, re-verified against its address. `PayloadMissing` if absent,
+        `PayloadCorrupt` if the stored bytes no longer hash to it — never a silent wrong answer."""
+        h = bytes.fromhex(hex_of(ref))
+        with self._lock:
+            try:
+                row = self._conn.execute("SELECT data FROM payloads WHERE hash=?", (h,)).fetchone()
+            except sqlite3.Error as e:
+                raise _classify(e) from None
+        if row is None:
+            raise PayloadMissing(f"{ref} is not in the ledger's payload table")
+        data = bytes(row[0])
+        if hashlib.sha256(data).digest() != h:
+            raise PayloadCorrupt(f"{ref}: stored bytes hash to {ref_for(data)}")
+        return data
+
+    def has_payload(self, ref: str) -> bool:
+        h = bytes.fromhex(hex_of(ref))
+        with self._lock:
+            return self._conn.execute("SELECT 1 FROM payloads WHERE hash=?", (h,)).fetchone() is not None
+
+    def payload_count(self) -> int:
+        with self._lock:
+            return int(self._conn.execute("SELECT COUNT(*) FROM payloads").fetchone()[0])
 
     def _after_commit(self, n: int) -> None:
         """Group-commit accounting. Under `group_commit` a commit is acknowledged before it is fsynced;

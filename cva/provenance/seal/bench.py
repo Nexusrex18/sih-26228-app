@@ -56,7 +56,7 @@ def measure_mode(directory: Path, durability: str, n: int, input_bytes: int, gro
                                    group_n=group_n, group_ms=group_ms)
     tr = TrustRoot(genesis_prev_hash(led.deployment_manifest), (TrustKey(key.key_id, key.public_key, "ledger"),))
     led.close()
-    s = Sealer.open(led_path, key=key, trust_root=tr, payload_dir=directory / f"bench-{durability}-payloads")
+    s = Sealer.open(led_path, key=key, trust_root=tr)
     m = s.register_model(id="bench", weights_sha256="a" * 64, arch_hash="b" * 64, format="onnx")
     c = s.register_config(preprocess_spec={"mean_e6": [485000]}, postprocess_spec={"conf_thr_e6": 250000},
                           runtime="bench 0", version_pins_hash="c" * 64, code_commit="0" * 40)

@@ -67,6 +67,35 @@ def mth(leaf_hashes: Sequence[bytes]) -> bytes:
     return root
 
 
+class RootAccumulator:
+    """Streaming MTH: append leaf hashes one at a time and read the root of everything appended so far in
+    O(log n), holding only the perfect subtrees of the current prefix. The verifier uses it to check every
+    checkpoint's `root_hash` as it walks the ledger — O(n) in total, not O(n) per checkpoint."""
+
+    def __init__(self) -> None:
+        self._stack: list[tuple[int, bytes]] = []
+        self._size = 0
+
+    def size(self) -> int:
+        return self._size
+
+    def append(self, leaf_h: bytes) -> None:
+        level, cur = 0, bytes(leaf_h)
+        while self._stack and self._stack[-1][0] == level:
+            cur = node_hash(self._stack.pop()[1], cur)
+            level += 1
+        self._stack.append((level, cur))
+        self._size += 1
+
+    def root(self) -> bytes:
+        if not self._stack:
+            return EMPTY_ROOT
+        root = self._stack[-1][1]
+        for _, h in reversed(self._stack[:-1]):
+            root = node_hash(h, root)
+        return root
+
+
 class NodeStore(Protocol):
     """Where completed perfect subtrees live. `put` must be idempotent (SQLite: INSERT OR IGNORE)."""
 

@@ -11,9 +11,10 @@ production. Two rules from the plan shape this file:
     logic is honest, rather than pretending per_record always fits.
 
 Measured on the development machine (ext4 on NVMe, cryptography 50, Python 3.11), 2 MB encoded frame,
-typical of several runs — hash 1.0 ms; two fsync'd payload files 2.3 ms; ledger commit 2.0 ms:
-    per_record     mean 5.7 ms   p99 7.6-9.5 ms      (misses the budget: three fsyncs per inference)
-    group_commit   mean 2.5 ms   p99 3.4-3.8 ms      (loss window: up to 100 records / 50 ms)
+typical of several runs. Payloads live in the ledger database (decision C4-12), so one fsync covers a record
+and its payloads:
+    per_record     mean ~4.0 ms   p99 ~5.6-5.8 ms   (mean inside the budget; the fsync tail is slightly over it)
+    group_commit   mean ~3.0 ms   p99 ~4.0-4.6 ms   (loss window: up to 100 records / 50 ms)
 """
 from __future__ import annotations
 

@@ -48,7 +48,7 @@ def test_init_creates_a_ledger_and_a_trust_root_that_a_sealer_can_use(tmp_path, 
     assert code == 0 and info["durability"] == "per_record" and info["loss_window"] == "0 records"
     tr = load_trust_root(trust)
     assert tr.deployment_manifest_hash == info["deployment_manifest_hash"]
-    with Sealer.open(ledger, key=FileKeyProvider(key), trust_root=trust, payload_dir=tmp_path / "pl") as s:
+    with Sealer.open(ledger, key=FileKeyProvider(key), trust_root=trust) as s:
         m = s.register_model(id="m", weights_sha256="a" * 64, arch_hash="b" * 64, format="onnx")
         c = s.register_config(preprocess_spec={"m": 1}, postprocess_spec={"t": 1}, runtime="r", version_pins_hash="c" * 64,
                               code_commit="0" * 40)

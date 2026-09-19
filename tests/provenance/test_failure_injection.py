@@ -150,32 +150,31 @@ def test_an_unplugged_key_fails_closed_with_a_signing_error(tmp_path):
     e.close()
 
 
-def test_an_unwritable_payload_store_fails_closed_and_appends_nothing(tmp_path):
-    if os.geteuid() == 0:
-        pytest.skip("root ignores file permissions")
+def test_a_failed_seal_leaves_neither_a_record_nor_a_payload_behind(tmp_path):
+    """Payloads travel in the SAME transaction as their record, so there is no half-written state: no record
+    pointing at a missing payload, and no orphan payload from a record that never landed."""
     e = Env(tmp_path)
     e.seal(0)
-    size = e.sealer.ledger.size()
-    e.payload_dir.chmod(0o500)
-    try:
-        with pytest.raises(LedgerUnavailable, match="payload store"):
-            e.seal(1, output={"task": "classify", "top": [{"cls": 5, "conf": 0.42}]})     # a NEW payload
-    finally:
-        e.payload_dir.chmod(0o755)
-    assert e.sealer.ledger.size() == size
+    led = e.sealer.ledger
+    fill_disk(e)
+    size, pays = led.size(), led.payload_count()
+    with pytest.raises(LedgerUnavailable):
+        e.seal(1, output={"task": "detect", "detections": [
+            {"cls": i % 7, "conf": 0.5, "box": [1.0 + i, 2.0, 3.0 + i, 4.0] } for i in range(4000)]})   # a big NEW payload
+    assert led.size() == size and led.payload_count() == pays
+    assert not led._conn.in_transaction
     e.close()
 
 
 def test_a_record_never_references_a_payload_that_does_not_exist(tmp_path):
-    from cva.provenance.seal.payloads import PayloadStore
     e = Env(tmp_path)
     for i in range(8):
         e.seal(i, output={"task": "classify", "top": [{"cls": i, "conf": 0.5}]})
-    ps = PayloadStore(e.payload_dir)
-    for rec in e.sealer.ledger.records():
+    led = e.sealer.ledger
+    for rec in led.records():
         if rec["type"] == "inference":
-            assert ps.has(rec["output"]["payload_ref"]) and ps.has("sha256:" + rec["output"]["raw_jcs_sha256"])
-            assert ps.has(rec["config"]["preprocess_ref"])
+            assert led.has_payload(rec["output"]["payload_ref"]) and led.has_payload("sha256:" + rec["output"]["raw_jcs_sha256"])
+            assert led.has_payload(rec["config"]["preprocess_ref"])
     e.close()
 
 
@@ -198,7 +197,7 @@ def test_fail_open_needs_an_explicit_allow_and_a_key_that_can_sign(tmp_path):
     e = Env(tmp_path)
     e.close()
     with pytest.raises(SealError, match="signable"):
-        Sealer.open(e.ledger_path, key=_DeadKey(e.key), trust_root=e.trust, payload_dir=e.payload_dir,
+        Sealer.open(e.ledger_path, key=_DeadKey(e.key), trust_root=e.trust,
                     policy=FAIL_OPEN)
 
 
@@ -407,21 +406,23 @@ def test_group_commit_receipts_are_not_durable_until_a_flush(tmp_path):
     e.close()
 
 
-def test_group_commit_defers_payload_fsyncs_until_the_flush(tmp_path):
+def test_group_commit_payloads_and_records_share_one_durability_window(tmp_path):
+    """Nothing is fsynced per payload any more: a payload rides in its record's transaction, so a flush makes
+    both durable and a power cut loses both or neither."""
     e = Env(tmp_path, durability="group_commit", background_flush=False)
-    ps = e.sealer._payloads
     for i in range(6):
         e.seal(i, output={"task": "classify", "top": [{"cls": i, "conf": 0.5}]})
-    assert ps.pending > 0                                                     # written, not yet fsynced
-    e.sealer.flush()
-    assert ps.pending == 0
+    led = e.sealer.ledger
+    assert led.durable is False and led.payload_count() >= 6
+    led.flush()
+    assert led.durable is True
     e.close()
 
 
-def test_per_record_never_defers_anything(tmp_path):
+def test_per_record_makes_the_record_and_its_payloads_durable_at_once(tmp_path):
     e = Env(tmp_path, durability="per_record")
-    e.seal(0, output={"task": "classify", "top": [{"cls": 3, "conf": 0.5}]})
-    assert e.sealer._payloads.pending == 0 and e.sealer.ledger.durable is True
+    r = e.seal(0, output={"task": "classify", "top": [{"cls": 3, "conf": 0.5}]})
+    assert r.durable is True and e.sealer.ledger.durable is True
     e.close()
 
 
@@ -489,15 +490,12 @@ def test_a_group_commit_ledger_is_still_a_valid_chain(tmp_path):
     e.close()
 
 
-def test_the_flusher_really_fsyncs_the_wal_and_the_deferred_payloads(tmp_path, monkeypatch):
-    """Group commit is only honest if the flush actually reaches storage. Spy on the syscalls: the flush
-    must open the `-wal` file and fsync it, and must fsync the deferred payload files."""
-    from cva.provenance.seal import store as store_mod
-
+def test_the_flusher_really_fsyncs_the_wal(tmp_path, monkeypatch):
+    """Group commit is only honest if the flush actually reaches storage. Spy on the syscalls: the flush must
+    open the `-wal` file (where every committed frame lives until a checkpoint) and fsync it."""
     e = Env(tmp_path, durability="group_commit", background_flush=False)
     for i in range(5):
         e.seal(i, output={"task": "classify", "top": [{"cls": i, "conf": 0.5}]})
-    assert e.sealer._payloads.pending > 0
     opened: dict[int, str] = {}
     synced: list[str] = []
     real_open, real_fsync = os.open, os.fsync
@@ -515,8 +513,6 @@ def test_the_flusher_really_fsyncs_the_wal_and_the_deferred_payloads(tmp_path, m
     monkeypatch.setattr(os, "fsync", spy_fsync)
     e.sealer.ledger._sync_now()
     assert any(p.endswith("-wal") for p in synced), f"the WAL was never fsynced: {synced}"
-    assert any(str(e.payload_dir) in p for p in synced), "deferred payloads were never fsynced"
-    assert store_mod is not None
     monkeypatch.undo()
     e.close()
 

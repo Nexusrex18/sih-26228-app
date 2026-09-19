@@ -400,3 +400,13 @@ def test_verifiers_return_false_on_malformed_input_instead_of_raising():
     assert verify_consistency(3, 6, b"short", root, proof) is False
     assert verify_consistency(6, 6, root, root, [root]) is False       # same size must carry no proof
     assert verify_consistency(6, 6, root, root, []) is True
+
+
+def test_the_streaming_root_accumulator_equals_the_reference_at_every_size():
+    from cva.provenance.seal.merkle import RootAccumulator
+    leaves = leaves_for(700)
+    acc = RootAccumulator()
+    assert acc.root() == EMPTY_ROOT == ref.mth([]) and acc.size() == 0
+    for n, lh in enumerate(leaves, start=1):
+        acc.append(lh)
+        assert acc.size() == n and acc.root() == ref.mth(leaves[:n]) == mth(leaves[:n]), f"size {n}"
