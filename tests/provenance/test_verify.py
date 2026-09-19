@@ -129,7 +129,8 @@ def test_every_class_that_must_quarantine_is_high_or_critical():
     """backend_plan §7.9 D1 floors on severity >= high: a certain tamper class left at `medium` is silently
     downgraded to `review`."""
     floor = SEVERITY_ORDER.index("high")
-    exempt = {"boundary_flip": "medium", "degraded_gap": "low", "clock_regression": "info"}
+    exempt = {"boundary_flip": "medium", "degraded_gap": "low", "clock_regression": "info",
+              "anchor_invalid": "medium"}          # a bad ARTEFACT, not evidence about the ledger: review, not quarantine
     for cls, (sev, _) in CLASS_PROFILE.items():
         if cls in exempt:
             assert sev == exempt[cls], cls
@@ -239,10 +240,17 @@ def anchor_body(checkpoint_seq):
 
 
 def test_an_anchor_event_is_counted_and_shrinks_the_unwitnessed_window():
-    chain, trust, _ = valid_chain(4, extra=[("anchor_event", anchor_body(1)), ("inference", BODIES["inference"]),
-                                            ("inference", BODIES["inference"])])
+    chain, trust, _ = valid_chain(4)
+    chain.anchor_now(label="shift-change")
+    chain.append("inference", BODIES["inference"])
+    chain.append("inference", BODIES["inference"])
     r = verify_ledger(export_bytes(chain), trust_root=trust)
-    assert r.clean and r.anchors_in_chain == 1 and r.last_anchor_seq == 6 and r.unwitnessed_records == 2
+    assert r.clean and r.anchors_in_chain == 1 and r.last_anchor_seq == 7 and r.unwitnessed_records == 2
+
+
+def test_an_anchor_event_that_names_a_checkpoint_the_ledger_does_not_hold_is_a_mismatch():
+    chain, trust, _ = valid_chain(3, extra=[("anchor_event", anchor_body(1))])
+    assert "checkpoint_mismatch" in classes(verify_ledger(export_bytes(chain), trust_root=trust))
 
 
 def test_an_anchor_closes_the_nonce_window_reuse_across_it_is_allowed_within_it_is_not():
@@ -255,13 +263,14 @@ def test_an_anchor_closes_the_nonce_window_reuse_across_it_is_allowed_within_it_
             n = state["n"]
             if n == 3:
                 return bytes([7]) * k                                      # first inference's nonce
-            if n == (8 if reuse_after_anchor else 5):
+            if n == (9 if reuse_after_anchor else 5):
                 return bytes([7]) * k                                      # reused
             return n.to_bytes(k, "big")
         return draw
-    across, trust, _ = valid_chain(2, rng_fn=draw_factory(True),
-                                   extra=[("anchor_event", anchor_body(1)), ("inference", BODIES["inference"]),
-                                          ("inference", BODIES["inference"]), ("inference", BODIES["inference"])])
+    across, trust, _ = valid_chain(2, rng_fn=draw_factory(True))
+    across.anchor_now()                                                    # nonces 5 (checkpoint) and 6 (event) drawn here
+    for _ in range(3):
+        across.append("inference", BODIES["inference"])
     assert verify_ledger(export_bytes(across), trust_root=trust).clean
     within, trust2, _ = valid_chain(4, rng_fn=draw_factory(False))
     assert classes(verify_ledger(export_bytes(within), trust_root=trust2)) == ["nonce_reuse"]
@@ -425,16 +434,6 @@ def test_the_first_record_must_be_genesis():
     lines = chain.stored[1:]
     r = verify_ledger(b"".join(x + b"\n" for x in lines), trust_root=trust)
     assert "genesis_mismatch" in classes(r) or "record_delete" in classes(r)
-
-
-def test_a_key_rotation_record_is_declared_a_limitation_until_c7(tmp_path):
-    from ._fixtures import BODIES as B
-    rot = json.loads(json.dumps(B["key_rotation"]))
-    chain, trust, _ = valid_chain(3)
-    rot["rotation"]["effective_seq"] = len(chain.records) + 1
-    chain.append("key_rotation", rot)
-    r = verify_ledger(export_bytes(chain), trust_root=trust)
-    assert r.limitations and "gate C7" in r.limitations[0]
 
 
 def test_payloads_are_absent_from_an_export_and_that_is_a_count_not_an_accusation(tmp_path):

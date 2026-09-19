@@ -39,7 +39,9 @@ WHAT IS REPORTED, AND HOW
 """
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import os
 import sqlite3
 from collections import Counter
@@ -49,9 +51,10 @@ from functools import lru_cache
 from typing import Any
 from urllib.parse import quote
 
+from .anchor import AnchorResult, load_anchor, verify_anchor
 from .canonical import parse_strict
-from .chain import link_from, verify_signature
-from .errors import InvalidRecord, LedgerUnreadable, NonCanonical
+from .chain import link_from, rotation_pop_valid, verify_signature
+from .errors import AnchorError, InvalidRecord, LedgerUnreadable, NonCanonical
 from .keys import TrustRoot, load_trust_root
 from .merkle import RootAccumulator, leaf_hash
 from .records import genesis_prev_hash, record_hash, validate_record
@@ -75,6 +78,7 @@ CLASS_PROFILE: dict[str, tuple[str, str]] = {
     "tail_truncation": ("high", "indeterminate"),
     "ledger_fork": ("critical", "adversarial"),
     "key_unauthorised": ("high", "indeterminate"),
+    "anchor_invalid": ("medium", "indeterminate"),
     "chain_broken": ("high", "indeterminate"),
     "nonce_reuse": ("high", "indeterminate"),
     "genesis_mismatch": ("high", "indeterminate"),
@@ -124,7 +128,13 @@ class VerifyReport:
     count_by_type: Counter[str] = field(default_factory=Counter)
     checkpoints_verified: int = 0
     anchors_in_chain: int = 0
-    anchors_verified: int = 0                   # external anchor artefacts — verified from gate C7
+    anchors_verified: int = 0                   # external anchor artefacts that verified AND match this ledger
+    anchors_invalid: int = 0                    # supplied anchors that could not be used (bad signature, malformed)
+    anchor_results: list[AnchorResult] = field(default_factory=list)
+    anchored_records: int = 0                   # leading records fixed by the strongest verified anchor
+    attested_not_after: str | None = None       # witness-bounded time for those records (boundary clock, not host)
+    rotations: int = 0
+    active_key_id: str | None = None
     last_anchor_seq: int | None = None
     unwitnessed_records: int = 0                # records after the last anchor: the window that still trusts the key holder
     declared_gaps: int = 0
@@ -269,6 +279,44 @@ def open_source(source: Any, payloads: Mapping[str, bytes] | None = None) -> Sql
     return JsonlSource(head + rest, payloads)
 
 
+def export_payloads(ledger_path: str | os.PathLike[str], out_path: str | os.PathLike[str]) -> int:
+    """Write the payload SIDECAR for an export: one JSON object per line, `{"address": <sha256 hex>, "b64": ...}`.
+    A JSONL export carries records only; without this the payload checks (`output_payload_mismatch`) and
+    `prov.recompute` have nothing to compare against. The address is what the record committed to, so the
+    sidecar needs no trust of its own: a wrong payload simply fails to hash to its address."""
+    src = SqliteSource(ledger_path)
+    try:
+        n = 0
+        with open(out_path, "wb") as f:
+            for h, data in src._conn.execute("SELECT hash, data FROM payloads ORDER BY hash").fetchall():
+                f.write(json.dumps({"address": _as_bytes(h).hex(), "b64": base64.b64encode(_as_bytes(data)).decode("ascii")},
+                                   separators=(",", ":"), sort_keys=True).encode("ascii") + b"\n")
+                n += 1
+        return n
+    except sqlite3.Error as e:
+        raise LedgerUnreadable(f"payloads cannot be read: {e}") from None
+    finally:
+        src.close()
+
+
+def load_payloads(path: str | os.PathLike[str]) -> dict[str, bytes]:
+    """Read a payload sidecar (address hex -> bytes). Strict: a malformed line raises `LedgerUnreadable`."""
+    out: dict[str, bytes] = {}
+    try:
+        with open(path, "rb") as f:
+            for i, line in enumerate(f, 1):
+                try:
+                    obj = json.loads(line)
+                    if set(obj) != {"address", "b64"}:
+                        raise ValueError("keys")
+                    out[str(obj["address"])] = base64.b64decode(obj["b64"], validate=True)
+                except (ValueError, TypeError, KeyError):
+                    raise LedgerUnreadable(f"{path}: line {i} is not a payload sidecar entry") from None
+    except OSError as e:
+        raise LedgerUnreadable(f"{path}: {e.strerror}") from None
+    return out
+
+
 def export_records(ledger_path: str | os.PathLike[str], out_path: str | os.PathLike[str]) -> int:
     """Write the strict JSONL export (each line = the stored record bytes verbatim, `\\n`-terminated).
     Returns the number of records. This is what makes verification possible with the live database absent."""
@@ -332,8 +380,15 @@ def verify_ledger(source: Any, *, trust_root: TrustRoot | str | os.PathLike[str]
                   expect_deployment: str | Mapping[str, Any] | None = None,
                   reference_manifest: Mapping[str, Iterable[str]] | None = None,
                   input_resolver: Callable[[Mapping[str, Any]], bytes | None] | None = None,
-                  expected_count: int | None = None) -> VerifyReport:
+                  expected_count: int | None = None,
+                  anchors: Iterable[Any] | None = None,
+                  payloads: Mapping[str, bytes] | None = None) -> VerifyReport:
     """Verify a ledger. See the module docstring for the procedure.
+
+    `anchors` are external anchor artefacts (dicts, bytes, paths, or `logbook_anchor(...)` dicts): each is
+    verified against the trust root and then against the ledger — a tree size beyond the ledger's length is
+    `tail_truncation` (D11), a root that does not match is `ledger_fork` (or is folded into the tamper that
+    explains it). Without anchors those two are invisible in-band, and the report says so.
 
     `reference_manifest` maps model id -> the weight digests that are legitimate for it (an EXTERNAL
     registry; without one, model changes are only visible as in-chain re-registrations, reported `info`).
@@ -341,9 +396,10 @@ def verify_ledger(source: Any, *, trust_root: TrustRoot | str | os.PathLike[str]
     `expected_count` is the operator's independent count of sealed inferences (selective-logging check).
     """
     tr = trust_root if isinstance(trust_root, TrustRoot) else load_trust_root(trust_root)
-    src = open_source(source)
+    src = open_source(source, payloads)
     try:
-        return _Verifier(src, tr, expect_deployment, reference_manifest, input_resolver, expected_count).run()
+        return _Verifier(src, tr, expect_deployment, reference_manifest, input_resolver, expected_count,
+                         list(anchors or ())).run()
     finally:
         src.close()
 
@@ -352,8 +408,17 @@ class _Verifier:
     def __init__(self, src: SqliteSource | JsonlSource, tr: TrustRoot, expect_deployment: Any,
                  reference_manifest: Mapping[str, Iterable[str]] | None,
                  input_resolver: Callable[[Mapping[str, Any]], bytes | None] | None,
-                 expected_count: int | None) -> None:
+                 expected_count: int | None, anchors: list[Any]) -> None:
         self.src, self.tr = src, tr
+        self.anchors = anchors
+        # key_id -> (public key, role). Trust-root keys, plus keys introduced by a VERIFIED rotation.
+        self.keys: dict[str, tuple[bytes, str]] = {k.key_id: (k.public_key, k.role) for k in tr.keys}
+        self.rotated_in: dict[str, bytes] = {}
+        self.retired: set[str] = set()
+        self.active_key: str | None = None
+        self.rejected: dict[str, VerifyFinding] = {}     # key ids introduced by a rotation that did not verify
+        self.checkpoints: dict[int, dict[str, Any]] = {}
+        self.prefix_roots: dict[int, str] = {}
         self.expect_deployment = expect_deployment
         self.manifest = None if reference_manifest is None else {k: set(v) for k, v in reference_manifest.items()}
         self.input_resolver = input_resolver
@@ -416,14 +481,16 @@ class _Verifier:
         shift, shift_before_reorder = 0, 0
         pending: dict[int, VerifyFinding] = {}
         prev_link: str | None = None
-        active_key: str | None = None
         nonces: set[str] = set()
         last_created: str | None = None
         registrations: dict[str, dict[str, Any]] = {}
         sealed_ok: list[tuple[int, dict[str, Any]]] = []          # rows whose signature verified
 
+        needed = self._anchor_sizes()
         for p, (rec, err, link, rh) in enumerate(parsed):
             row = rows[p]
+            if p in needed:
+                self.prefix_roots[p] = acc.root().hex()
             try:
                 if rec is None:                                   # 1 PARSE
                     code, detail = err  # type: ignore[misc]
@@ -485,7 +552,7 @@ class _Verifier:
                         earlier = [q for q in seq_positions.get(rec["seq"], []) if q < p]
                         if earlier:
                             same = rows[earlier[0]].data == row.data
-                            forked = (not same and active_key is not None and self._sig_ok(row.data, active_key))
+                            forked = (not same and self.active_key is not None and self._sig_ok(row.data, self.active_key))
                             if same:
                                 f = self.emit("record_replay", rec, p,
                                               f"Record {_describe(rec)} is a byte-identical copy of the record already "
@@ -519,33 +586,41 @@ class _Verifier:
 
                 # 4 KEY (and 5 SIGNATURE)
                 sig_ok = False
-                if active_key is None and p == 0:
-                    active_key = rec["key_id"]
+                if self.active_key is None and p == 0:
+                    self.active_key = rec["key_id"]
                 if p == 0 and rec["key_id"] not in self.tr.ledger_keys():
                     self.emit("key_unauthorised", rec, p,
                               f"The genesis record is signed by key {_short(rec['key_id'])}, which is not a ledger key "
                               "in the trust root shipped with this deployment.", "key_authorised")
-                elif rec["key_id"] != active_key:
-                    known = self.tr.public_key(rec["key_id"])
+                elif rec["key_id"] in self.rejected:
+                    # signed by the incoming key of a rotation that did not verify: the same cause, already reported
+                    self.cascade(self.rejected[rec["key_id"]], "Later records signed by the key that rotation named")
+                    self.last_primary, self.last_primary_pos = self.rejected[rec["key_id"]], p
+                elif rec["key_id"] != self.active_key:
+                    known = self.pub(rec["key_id"])
                     if known is not None and _sig_valid(row.data, known):
-                        role = next(k.role for k in self.tr.keys if k.key_id == rec["key_id"])
-                        self.emit("key_unauthorised", rec, p,
-                                  f"Record {_describe(rec)} verifies under key {_short(rec['key_id'])}, a trust-root "
-                                  f"'{role}' key that is not authorised to sign ledger records here (the active key is "
-                                  f"{_short(active_key or '')}). A holder of that key wrote this. Certain.",
-                                  "key_authorised", nature="adversarial")
+                        role = self.keys[rec["key_id"]][1]
+                        origin = ("rotated-out (retired)" if rec["key_id"] in self.retired else
+                                  "trust-root" if rec["key_id"] in {k.key_id for k in self.tr.keys} else "known")
+                        f = self.emit("key_unauthorised", rec, p,
+                                      f"Record {_describe(rec)} verifies under key {_short(rec['key_id'])}, a {origin} "
+                                      f"'{role}' key that is not authorised to sign ledger records here (the active key is "
+                                      f"{_short(self.active_key or '')}). A holder of that key wrote this. Certain.",
+                                      "key_authorised", nature="adversarial")
+                        self._reject_rotation_target(rec, f)
                     elif known is not None:
                         self.emit("record_edit", rec, p,
                                   f"Record {_describe(rec)} names key {_short(rec['key_id'])} but does not verify under "
                                   "it: the record was changed or re-keyed after signing.", "ed25519_signature")
                     else:
-                        self.emit("key_unauthorised", rec, p,
+                        f = self.emit("key_unauthorised", rec, p,
                                   f"Record {_describe(rec)} is signed under key {_short(rec['key_id'])}, which is not "
                                   "in the trust root. The arithmetic cannot say whether an attacker signed it with "
                                   "their own key or a bit of key_id was damaged, so the cause is left indeterminate.",
                                   "key_authorised")
+                        self._reject_rotation_target(rec, f)
                 else:
-                    sig_ok = self._sig_ok(row.data, active_key)
+                    sig_ok = self._sig_ok(row.data, self.active_key)
                     prev_edit = self.last_primary
                     if (not sig_ok and prev_edit is not None and prev_edit.attack_class == "record_edit"
                             and self.last_primary_pos == p - 1):
@@ -606,9 +681,101 @@ class _Verifier:
             finally:
                 acc.append(leaf_hash(row.data))
 
+        if len(rows) in needed:
+            self.prefix_roots[len(rows)] = acc.root().hex()
         rep.verified_seqs = {rec["seq"] for _, rec in sealed_ok}
+        rep.active_key_id = self.active_key
         self._finish(rows, sealed_ok)
         return rep
+
+    # -- anchors ----------------------------------------------------------------------------------------
+
+    def _anchor_sizes(self) -> set[int]:
+        """Parse the supplied anchors up front and return the tree sizes whose ledger prefix root is needed."""
+        self._loaded: list[tuple[int, dict[str, Any] | None, str]] = []
+        sizes: set[int] = set()
+        for i, raw in enumerate(self.anchors):
+            try:
+                a = load_anchor(raw)
+                size = int(a["tree_size"]) if a.get("kind") == "logbook" else int(a["checkpoint"]["checkpoint"]["tree_size"])
+                if size < 0:
+                    raise ValueError("negative tree size")
+            except (AnchorError, KeyError, TypeError, ValueError) as e:
+                self._loaded.append((i, None, str(e) or type(e).__name__))
+                continue
+            self._loaded.append((i, a, ""))
+            sizes.add(size)
+        return sizes
+
+    def _tainted_before(self, size: int) -> bool:
+        """Did a byte-changing finding occur inside the first `size` records — i.e. does it explain an anchor mismatch?"""
+        t = self.tree_taint
+        return t is not None and t.position is not None and t.position < size
+
+    def _check_anchors(self, rows: list[Row]) -> None:
+        rep, n = self.report, len(rows)
+        for i, a, err in self._loaded:
+            label = f"anchor #{i + 1}"
+            if a is None:
+                rep.anchors_invalid += 1
+                self.emit("anchor_invalid", None, n, f"{label} cannot be used: {err}. It says nothing about the ledger "
+                          "either way; without a usable anchor, tail truncation and a rewritten history stay invisible.",
+                          "anchor_verify", primary=False, seq=None)
+                continue
+            try:
+                res = verify_anchor(a, self.tr, extra_ledger_keys=self.rotated_in)
+            except AnchorError as e:
+                rep.anchors_invalid += 1
+                self.emit("anchor_invalid", None, n, f"{label} cannot be used: {e}", "anchor_verify", primary=False, seq=None)
+                continue
+            rep.anchor_results.append(res)
+            if not res.valid:
+                rep.anchors_invalid += 1
+                self.emit("anchor_invalid", None, n, f"{label} did not verify, so it is not used: "
+                          + "; ".join(res.problems) + ". An anchor that fails its own signatures says nothing about "
+                          "the ledger either way.", "anchor_verify", primary=False, seq=None,
+                          evidence=(("json", "anchor problems", res.problems),))
+                continue
+            t = res.tree_size
+            if n < res.records_covered:
+                self.emit("tail_truncation", None, n,
+                          f"{label} fixes the first {res.records_covered} records (tree size {t}"
+                          f"{', plus its checkpoint' if res.checkpoint_bytes else ''}), but the ledger holds only {n}: "
+                          f"at least {res.records_covered - n} record(s) sealed at the tail are missing. Certain "
+                          "relative to the anchor; the chain alone could not show this.", "anchor_size",
+                          primary=False, evidence=(("table", "anchor vs ledger", {
+                              "anchor_tree_size": t, "anchor_records": res.records_covered, "ledger_records": n}),))
+                continue
+            root = self.prefix_roots.get(t)
+            if root != res.root_hash:
+                if self._tainted_before(t):
+                    self.cascade(self.tree_taint, "Anchors whose fixed root no longer matches the ledger")
+                else:
+                    self.emit("ledger_fork", None, n,
+                              f"{label} fixes root {res.root_hash[:12]}… for the first {t} records, but this ledger's "
+                              f"first {t} records hash to {(root or '')[:12]}…, and every record in it verifies: two "
+                              "different, individually valid histories exist, and only the key holder could have "
+                              "signed both. Certain.", "anchor_root", primary=False, nature="adversarial",
+                              evidence=(("hash", "merkle root at the anchored size", {
+                                  "anchor": res.root_hash, "ledger": root, "tree_size": t}),))
+                continue
+            if res.checkpoint_bytes is not None and rows[t].data != res.checkpoint_bytes:
+                if self._tainted_before(t + 1):
+                    self.cascade(self.tree_taint, "Anchors whose checkpoint record no longer matches the ledger")
+                else:
+                    self.emit("ledger_fork", None, n,
+                              f"{label}'s prefix matches, but the checkpoint record it carries is not the record at "
+                              f"index {t} of this ledger: the checkpoint was re-signed or replaced. Certain.",
+                              "anchor_checkpoint", primary=False, nature="adversarial")
+                continue
+            rep.anchors_verified += 1
+            if res.records_covered > rep.anchored_records:
+                rep.anchored_records = res.records_covered
+                rep.attested_not_after = res.time_bound_utc
+            elif res.records_covered == rep.anchored_records and res.time_bound_utc:
+                rep.attested_not_after = min(filter(None, [rep.attested_not_after, res.time_bound_utc]))
+        if rep.anchors_verified:
+            rep.unwitnessed_records = max(0, n - rep.anchored_records)
 
     # -- pieces -----------------------------------------------------------------------------------------
 
@@ -632,8 +799,12 @@ class _Verifier:
             bad.append("rec_hash")
         return bad
 
+    def pub(self, key_id: str | None) -> bytes | None:
+        entry = None if key_id is None else self.keys.get(key_id)
+        return None if entry is None else entry[0]
+
     def _sig_ok(self, data: bytes, key_id: str | None) -> bool:
-        pub = None if key_id is None else self.tr.public_key(key_id)
+        pub = self.pub(key_id)
         return pub is not None and _sig_valid(data, pub)
 
     def _check_expect_deployment(self, genesis: Mapping[str, Any]) -> None:
@@ -655,6 +826,7 @@ class _Verifier:
             root_now = acc.root().hex()
             if cp["tree_size"] == acc.size() and cp["root_hash"] == root_now:
                 rep.checkpoints_verified += 1
+                self.checkpoints[rec["seq"]] = cp
             elif self.tree_taint is not None:
                 self.cascade(self.tree_taint, "Later Merkle checkpoints whose roots no longer match")
             else:
@@ -666,6 +838,16 @@ class _Verifier:
                                                             "tree_size_claimed": cp["tree_size"],
                                                             "tree_size_actual": acc.size()}),))
         elif t == "anchor_event":
+            a = rec["anchor"]
+            seen = self.checkpoints.get(a["checkpoint_seq"])
+            if (seen is None or (seen["tree_size"], seen["root_hash"]) != (a["tree_size"], a["root_hash"])):
+                if self.tree_taint is not None:
+                    self.cascade(self.tree_taint, "Later anchor events whose checkpoints no longer match")
+                else:
+                    self.emit("checkpoint_mismatch", rec, p,
+                              f"Anchor event {_describe(rec)} names a checkpoint (seq {a['checkpoint_seq']}, tree size "
+                              f"{a['tree_size']}) that the ledger does not contain as stated. Certain.", "anchor_event",
+                              primary=False, evidence=(("json", "anchor event", a),))
             rep.anchors_in_chain += 1
             rep.last_anchor_seq = rec["seq"]
             nonces.clear()                                         # D9: an anchor closes the nonce window
@@ -683,9 +865,33 @@ class _Verifier:
         elif t == "inference":
             self._inference_model(rec, p, registrations)
         elif t == "key_rotation":
-            lim = f"key rotation at seq {rec['seq']} is not verified before gate C7"
-            if lim not in rep.limitations:
-                rep.limitations.append(lim)
+            self._rotation(rec, p)
+
+    def _reject_rotation_target(self, rec: dict[str, Any], owner: VerifyFinding) -> None:
+        """A `key_rotation` that the active key did not sign never takes effect, so records signed by the key it
+        names would each look unauthorised: they are the SAME finding, folded into this one."""
+        if rec["type"] == "key_rotation":
+            self.rejected[rec["rotation"]["new_key_id"]] = owner
+
+    def _rotation(self, rec: dict[str, Any], p: int) -> None:
+        """A rotation is valid iff the ACTIVE key signed it (already established: only records that passed the key
+        and signature checks reach here) and the incoming key proves possession. Only then does the incoming key
+        become active — at `effective_seq`, which the schema pins to seq + 1."""
+        rot = rec["rotation"]
+        if not rotation_pop_valid(rec):
+            f = self.emit("key_unauthorised", rec, p,
+                          f"Key rotation {_describe(rec)} names incoming key {_short(rot['new_key_id'])}, but that key's "
+                          "proof-of-possession does not verify: whoever signed this rotation could not show that the "
+                          "new key is held by the party rotating to it. The rotation is not applied.",
+                          "rotation_pop", evidence=(("json", "rotation", rot),))
+            self.rejected[rot["new_key_id"]] = f
+            return
+        self.keys[rot["new_key_id"]] = (bytes.fromhex(rot["new_public_key"]), "ledger")
+        self.rotated_in[rot["new_key_id"]] = bytes.fromhex(rot["new_public_key"])
+        if self.active_key is not None:
+            self.retired.add(self.active_key)
+        self.active_key = rot["new_key_id"]
+        self.report.rotations += 1
 
     def _registration(self, rec: dict[str, Any], p: int, registrations: dict[str, dict[str, Any]]) -> None:
         m = rec["model"]
@@ -723,6 +929,7 @@ class _Verifier:
         rep = self.report
         n = len(rows)
         rep.unwitnessed_records = n if rep.last_anchor_seq is None else max(0, n - 1 - rep.last_anchor_seq)
+        self._check_anchors(rows)
 
         if self.expected_count is not None:
             got = rep.count_by_type["inference"]

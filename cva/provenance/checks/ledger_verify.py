@@ -66,13 +66,14 @@ class LedgerVerify:
                produced_by: str = "", reference_manifest: Mapping[str, Iterable[str]] | None = None,
                input_resolver: Callable[[Mapping[str, Any]], bytes | None] | None = None,
                expected_count: int | None = None,
-               expect_deployment: str | Mapping[str, Any] | None = None) -> list[Finding]:
+               expect_deployment: str | Mapping[str, Any] | None = None,
+               anchors: Iterable[Any] | None = None) -> list[Finding]:
         """Verify a ledger and return findings: one per problem, then the always-present summary."""
         degraded = reference_manifest is None
         try:
             report = verify_ledger(source, trust_root=trust_root, reference_manifest=reference_manifest,
                                    input_resolver=input_resolver, expected_count=expected_count,
-                                   expect_deployment=expect_deployment)
+                                   expect_deployment=expect_deployment, anchors=anchors)
         except LedgerUnreadable as e:
             return [self._not_assessed(str(e), scan_id, produced_by)]
         out = [self._map(f, report, scan_id, produced_by) for f in report.findings]
@@ -84,7 +85,9 @@ class LedgerVerify:
     def _access(self, report: VerifyReport) -> list[str]:
         return [f"INFERENCE_LEDGER read from a {report.source_kind} source",
                 "trust root supplied out of band (not self-signed)",
-                f"no external anchor verified: {report.unwitnessed_records} record(s) sit in the unwitnessed window"]
+                (f"{report.anchors_verified} external anchor(s) verified; {report.unwitnessed_records} record(s) sit "
+                 "after the newest one, in the unwitnessed window" if report.anchors_verified else
+                 f"no external anchor verified: {report.unwitnessed_records} record(s) sit in the unwitnessed window")]
 
     def _map(self, f: VerifyFinding, report: VerifyReport, scan_id: str, produced_by: str) -> Finding:
         sev = Severity(f.severity)
@@ -106,8 +109,13 @@ class LedgerVerify:
         stats = {
             "records_verified": report.records_checked, "checkpoints_verified": report.checkpoints_verified,
             "anchors_verified": report.anchors_verified, "anchors_recorded_in_chain": report.anchors_in_chain,
+            "anchors_unusable": report.anchors_invalid, "records_fixed_by_anchor": report.anchored_records,
+            "sealed_not_after_utc": report.attested_not_after, "key_rotations": report.rotations,
             "declared_degraded_intervals": report.declared_gaps,
             "records_after_last_anchor": report.unwitnessed_records,
+            "unwitnessed_window": ("records after the newest verified EXTERNAL anchor" if report.anchors_verified
+                                   else "no external anchor was verified: records after the last in-chain anchor "
+                                        "event, which the key holder wrote itself"),
             "payloads_checked": report.payloads_checked, "payloads_missing": report.payloads_missing,
             "durability": report.durability or "not recorded in this source",
             "loss_window": report.loss_window or "not recorded in this source",

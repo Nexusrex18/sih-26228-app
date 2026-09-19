@@ -418,12 +418,49 @@ def test_the_first_failure_is_the_one_reported_and_later_damage_is_not_a_second_
     assert res.failure.position == 2 and res.records_checked == 2
 
 
-def test_a_key_rotation_record_is_not_silently_accepted_before_c7():
+def test_a_key_rotation_hands_signing_to_the_new_key_and_the_chain_still_verifies():
+    from cva.provenance.seal.chain import rotation_body
     c = make_chain(2)
-    c.append("key_rotation", BODIES["key_rotation"] | {"rotation": {**BODIES["key_rotation"]["rotation"],
-                                                                     "effective_seq": len(c.records) + 1}})
+    new = provider(bytes(range(50, 82)))
+    c.rotate_key(new)
+    c.append("inference", BODIES["inference"])
+    c.append("inference", BODIES["inference"])
+    assert c.verify().ok
+    assert c.records[3]["key_id"] == KEY.key_id and c.records[4]["key_id"] == new.key_id
+    assert c.records[3]["rotation"] == rotation_body(KEY, new, 3)["rotation"]
+
+
+def test_the_outgoing_key_cannot_sign_after_its_own_rotation():
+    """effective_seq == seq + 1: the record right after the rotation is the new key's."""
+    c = make_chain(2)
+    new = provider(bytes(range(50, 82)))
+    c.rotate_key(new)
+    c._key = KEY                                             # the old key keeps signing: a rotation that did not happen
+    c.append("inference", BODIES["inference"])
     res = c.verify()
-    assert not res.ok and code(res) == "unsupported"
+    assert not res.ok and code(res) == "key_unauthorised" and res.failure.position == 4
+
+
+def test_a_rotation_whose_incoming_key_never_proved_possession_is_refused():
+    c = make_chain(2)
+    new, other = provider(bytes(range(50, 82))), provider(bytes(range(60, 92)))
+    from cva.provenance.seal.chain import rotation_body
+    body = rotation_body(KEY, new, 3)
+    body["rotation"]["new_key_pop"] = other.sign(b"anything").hex()       # a PoP by someone else's key
+    c.append("key_rotation", body)
+    res = c.verify()
+    assert not res.ok and code(res) == "bad_rotation_pop"
+
+
+def test_a_proof_of_possession_cannot_be_replayed_into_a_different_rotation():
+    """The PoP binds the outgoing key and the position, so copying it elsewhere fails."""
+    from cva.provenance.seal.chain import rotation_body, rotation_pop_valid
+    new = provider(bytes(range(50, 82)))
+    good = rotation_body(KEY, new, 3)["rotation"]
+    rec = {"key_id": KEY.key_id, "rotation": good}
+    assert rotation_pop_valid(rec)
+    assert not rotation_pop_valid({"key_id": provider(SEED_B).key_id, "rotation": good})
+    assert not rotation_pop_valid({"key_id": KEY.key_id, "rotation": {**good, "effective_seq": 9}})
 
 
 # --- what the chain cannot see (documented limitation, plan §14) -------------------------------------------------

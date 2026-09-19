@@ -108,3 +108,8 @@ class LedgerUnreadable(SealError):
     """The ledger under audit cannot be opened or read at all (not a database, not a file). This is not a
     tamper finding — nothing could be assessed — so it is raised, and the scan-side check reports the
     assessment as not performed rather than guessing."""
+
+
+class AnchorError(SealError, ValueError):
+    """An anchor artefact that cannot be built, or is not a well-formed anchor at all (as opposed to a
+    well-formed anchor whose signatures fail, which `verify_anchor` reports as data, not an exception)."""

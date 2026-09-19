@@ -15,8 +15,9 @@ Two of these scenarios are deliberately tests of what is NOT detectable in-band 
 selective logging): the expected outcome is silence, and it is asserted, so the limitation in the coverage
 statement is a measured fact rather than prose.
 
-Out of scope for gate C5, built at C7 with anchoring and key rotation: T8 (fork against an anchor) and T10
-(rotation abuse).
+Gate C7 adds the two that need anchoring and key rotation — T8 (a fork, caught only against an anchor from the
+other branch) and T10 (rotation abuse, three ways) — and gives T4c its second half: silent without an anchor,
+`tail_truncation` with one.
 """
 from __future__ import annotations
 
@@ -45,6 +46,14 @@ DEVICE = {"device_id": "tamper-lab-01", "unit": "lab", "profile_hash": "7" * 64}
 T0 = datetime(2026, 9, 19, 2, 0, 0, tzinfo=UTC)
 MODEL_ID = "resnet50-v3"
 TS_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+def _read_records(path: Path) -> list[dict[str, Any]]:
+    c = sqlite3.connect(path)
+    try:
+        return [json.loads(r[0]) for r in c.execute("SELECT rec FROM records ORDER BY rowid")]
+    finally:
+        c.close()
 
 
 # --- deterministic building blocks ------------------------------------------------------------------
@@ -86,6 +95,9 @@ class Fixture:
     seed: int
     checkpoint_every: int
     swap_registration_seq: int | None = None
+    anchor: Path | None = None                 # an anchor exported after the last inference (covers the whole ledger)
+    key_after: EnvKeyProvider | None = None    # the key that took over at `rotated_at_seq`, if the ledger was rotated
+    rotated_at_seq: int | None = None
 
     def records(self) -> list[dict[str, Any]]:
         c = sqlite3.connect(self.ledger)
@@ -99,9 +111,13 @@ class Fixture:
 
 
 def build_clean_ledger(directory: str | Path, *, n: int = 60, seed: int = 1, checkpoint_every: int = 16,
-                       model_swap_at: int | None = None) -> Fixture:
+                       model_swap_at: int | None = None, anchor: bool = False, diverge_at: int | None = None,
+                       rotate_at: int | None = None) -> Fixture:
     """Seal `n` deterministic inferences. `model_swap_at=m` re-registers the SAME model id with different
-    weights after `m` inferences — a legitimate-looking reload (T7a)."""
+    weights after `m` inferences — a legitimate-looking reload (T7a). `anchor` exports an anchor after the last
+    inference. `diverge_at=k` seals different inputs from inference k on: the same key, manifest, clock and
+    nonces, so the first k inferences are byte-identical to the undiverged build and the histories fork
+    there (T8). `rotate_at=m` rotates the signing key after m inferences."""
     d = Path(directory)
     d.mkdir(parents=True, exist_ok=True)
     key, attacker = make_key(f"ledger/{seed}"), make_key(f"attacker/{seed}")
@@ -113,6 +129,8 @@ def build_clean_ledger(directory: str | Path, *, n: int = 60, seed: int = 1, che
     led.close()
     r = random.Random(seed * 7919)
     inputs: dict[int, bytes] = {}
+    key_after = make_key(f"ledger-rotated/{seed}") if rotate_at is not None else None
+    rotated_at_seq: int | None = None
     with Sealer.open(path, key=key, trust_root=trust, clock=clock, rng=rng) as s:
         model = s.register_model(id=MODEL_ID, weights_sha256=_weights("A"), arch_hash=_weights("arch"), format="onnx")
         cfg = s.register_config(preprocess_spec={"mean_e6": [485000, 456000, 406000]},
@@ -122,12 +140,24 @@ def build_clean_ledger(directory: str | Path, *, n: int = 60, seed: int = 1, che
             if model_swap_at is not None and i == model_swap_at:
                 model = s.register_model(id=MODEL_ID, weights_sha256=_weights("B"), arch_hash=_weights("arch"),
                                          format="onnx")
-            frame = hashlib.sha256(f"frame/{seed}/{i}".encode()).digest() * 8
+            if rotate_at is not None and i == rotate_at:
+                assert key_after is not None
+                s.rotate_key(key_after)
+                rotated_at_seq = max(x["seq"] for x in _read_records(path) if x["type"] == "key_rotation")
+            forked = diverge_at is not None and i >= diverge_at
+            frame = hashlib.sha256(f"frame/{seed}/{i}{'/fork' if forked else ''}".encode()).digest() * 8
             out = {"task": "classify", "top": [{"cls": r.randrange(10), "conf": round(r.uniform(0.5, 0.99), 6)}]}
             rec = s.seal(frame, model, cfg, output=out, dims=(64, 64))
             assert rec.seq is not None
             inputs[rec.seq] = frame
-    fx = Fixture(d, path, trust, key, attacker, inputs, n, seed, checkpoint_every)
+    anchor_path: Path | None = None
+    if anchor:
+        from cva.provenance.seal.anchor import export_anchor
+        with SealedLedger.open(path, key=key_after or key, clock=clock, rng=rng, background_flush=False) as led:
+            anchor_path = d / "anchor.json"
+            export_anchor(led, anchor_path, label="lab")
+    fx = Fixture(d, path, trust, key, attacker, inputs, n, seed, checkpoint_every, anchor=anchor_path,
+                 key_after=key_after, rotated_at_seq=rotated_at_seq)
     if model_swap_at is not None:
         regs = [x for x in fx.records() if x["type"] == "model_registration"]
         fx.swap_registration_seq = regs[-1]["seq"]
@@ -162,6 +192,7 @@ class Outcome:
     expected: Expected
     reconcile: Expected | None = None            # the "only detectable against an independent count" scenarios:
     reconcile_kwargs: dict[str, Any] = field(default_factory=dict)      # ... what to pass to see it
+    reconcile_more: tuple[tuple[str, Expected, dict[str, Any]], ...] = ()   # further (name, expectation, kwargs)
 
     def verify(self, form: str, **override: Any) -> VerifyReport:
         path = self.db if form == "db" else self.export
@@ -242,13 +273,14 @@ def _tampered_db(fx: Fixture, workdir: Path) -> TamperDb:
 
 def _finish_db(fx: Fixture, t: TamperDb, workdir: Path, name: str, seed: int, expected: Expected, *,
                kwargs: dict[str, Any] | None = None, export: bool = True, trust: TrustRoot | None = None,
-               reconcile: Expected | None = None, reconcile_kwargs: dict[str, Any] | None = None) -> Outcome:
+               reconcile: Expected | None = None, reconcile_kwargs: dict[str, Any] | None = None,
+               reconcile_more: tuple[tuple[str, Expected, dict[str, Any]], ...] = ()) -> Outcome:
     t.close()
     exp = workdir / "tampered.jsonl"
     if export:
         export_records(t.path, exp)
     return Outcome(name, seed, trust or fx.trust, t.path, exp if export else None, kwargs or {}, expected,
-                   reconcile, reconcile_kwargs or {})
+                   reconcile, reconcile_kwargs or {}, reconcile_more)
 
 
 def _finish_export(fx: Fixture, lines: list[bytes], workdir: Path, name: str, seed: int, expected: Expected, *,
@@ -396,6 +428,7 @@ def t4c_tail_truncation(fx: Fixture, w: Path, seed: int) -> Outcome:
     """Delete the LAST m records. Nothing follows them to disagree: the chain is perfectly intact. NOT
     detectable in-band — only against an independent count (or, from C7, an anchor). The expected outcome
     without one is silence, and that is the point."""
+    assert fx.anchor is not None, "build the fixture with anchor=True"
     m = random.Random(seed).randrange(3, 8)
     t = _tampered_db(fx, w)
     last = t.last_seq()
@@ -406,7 +439,10 @@ def t4c_tail_truncation(fx: Fixture, w: Path, seed: int) -> Outcome:
                       Expected((), note="undetectable in-band: no successor exists to disagree"),
                       reconcile=Expected(("ledger_incomplete",), None, "high", "indeterminate", "count_reconcile",
                                          note=f"{dropped_inferences} inference(s) gone"),
-                      reconcile_kwargs={"expected_count": fx.n_inferences})
+                      reconcile_kwargs={"expected_count": fx.n_inferences},
+                      reconcile_more=(("anchor", Expected(("tail_truncation",), None, "high", "indeterminate",
+                                                          "anchor_size", note="the anchor fixes records that are gone"),
+                                       {"anchors": [fx.anchor]}),))
 
 
 def t5a_reorder(fx: Fixture, w: Path, seed: int) -> Outcome:
@@ -557,17 +593,94 @@ def t15_derived_column_only(fx: Fixture, w: Path, seed: int) -> Outcome:
                                                         "derived_columns", note=f"column {col}"), export=False)
 
 
+def t8_ledger_fork(fx: Fixture, w: Path, seed: int) -> Outcome:
+    """Two valid histories that diverge at k, both signed by the key holder. Each is perfectly consistent, so
+    neither verifies as anything but clean ON ITS OWN; an anchor taken from the honest branch is what shows the
+    other one is not the history that was witnessed."""
+    assert fx.anchor is not None, "build the fixture with anchor=True"
+    k = random.Random(seed).randrange(10, fx.n_inferences - 5)
+    forked = build_clean_ledger(w / "fork", n=fx.n_inferences, seed=fx.seed, checkpoint_every=fx.checkpoint_every,
+                                anchor=True, diverge_at=k)
+    exp = w / "tampered.jsonl"
+    export_records(forked.ledger, exp)
+    clean_alone = Expected((), note="each branch is internally valid: nothing in-band distinguishes them")
+    return Outcome("T8", seed, fx.trust, forked.ledger, exp, {"anchors": [fx.anchor]},
+                   Expected(("ledger_fork",), None, "critical", "adversarial", "anchor_root"),
+                   reconcile=clean_alone, reconcile_kwargs={"anchors": []})
+
+
+def _append_forged(t: TamperDb, key: EnvKeyProvider, rtype: str, body: Mapping[str, Any]) -> dict[str, Any]:
+    """Append a record signed by `key` at the tip of an attacker's copy, keeping every derived column consistent."""
+    last = t.rec(t.last_seq())
+    signed, _ = seal_next(rtype, body, key=key, prev=last, now=_stamp(last["created_at_utc"]) + timedelta(seconds=1),
+                          nonce=hashlib.sha256(f"forged/{last['seq']}/{rtype}".encode()).hexdigest()[:32])
+    unsigned = {k: v for k, v in signed.items() if k != "signature"}
+    t.c.execute("INSERT INTO records(seq, type, nonce, rec_hash, rec) VALUES (?,?,?,?,?)",
+                (signed["seq"], rtype, signed["nonce"], hashlib.sha256(canonical_bytes(unsigned)).digest(),
+                 canonical_bytes(signed).decode("ascii")))
+    return signed
+
+
+def t10a_rotation_by_unknown_key(fx: Fixture, w: Path, seed: int) -> Outcome:
+    """The attacker signs a `key_rotation` with THEIR key — which is not the active key — naming a second key of
+    theirs, then continues writing as that second key. The key state machine refuses the rotation; the records
+    after it are the same cause and fold into it."""
+    from cva.provenance.seal.chain import rotation_body
+    t = _tampered_db(fx, w)
+    a1, a2 = fx.attacker, make_key(f"attacker2/{seed}")
+    seq = t.last_seq() + 1
+    _append_forged(t, a1, "key_rotation", rotation_body(a1, a2, seq))
+    for _ in range(3):
+        _append_forged(t, a2, "inference", {s: t.rec(3)[s] for s in SECTIONS["inference"]})
+    return _finish_db(fx, t, w, "T10a", seed, Expected(("key_unauthorised",), seq, "high", "indeterminate",
+                                                         "key_authorised", cascade_min=3,
+                                                         note="an unknown key is never called adversarial"))
+
+
+def t10b_rotation_without_proof_of_possession(fx: Fixture, w: Path, seed: int) -> Outcome:
+    """The ACTIVE key signs a rotation to a key whose holder never proved possession (the PoP is another key's).
+    Whoever holds the outgoing key cannot smuggle in a key they cannot show they hold... or hand the ledger to
+    a key nobody consented to. The rotation is not applied; later records by that key fold into the finding."""
+    from cva.provenance.seal.chain import rotation_body
+    t = _tampered_db(fx, w)
+    newk = make_key(f"unproven/{seed}")
+    seq = t.last_seq() + 1
+    body = rotation_body(fx.key, newk, seq)
+    body["rotation"]["new_key_pop"] = fx.attacker.sign(b"not the proof").hex()
+    _append_forged(t, fx.key, "key_rotation", body)
+    for _ in range(2):
+        _append_forged(t, newk, "inference", {s: t.rec(3)[s] for s in SECTIONS["inference"]})
+    return _finish_db(fx, t, w, "T10b", seed, Expected(("key_unauthorised",), seq, "high", "indeterminate",
+                                                         "rotation_pop", cascade_min=2))
+
+
+def t10c_retired_key_resumes(fx: Fixture, w: Path, seed: int) -> Outcome:
+    """After a legitimate rotation the OLD key's holder appends a record. The key is known and its signature
+    verifies, so this one IS attributable: adversarial. (A retired key is exactly what a stolen backup holds.)"""
+    assert fx.rotated_at_seq is not None, "build the fixture with rotate_at"
+    t = _tampered_db(fx, w)
+    seq = t.last_seq() + 1
+    _append_forged(t, fx.key, "inference", {s: t.rec(t.last_seq() - 3)[s] for s in SECTIONS["inference"]
+                                            if s in t.rec(t.last_seq() - 3)})
+    return _finish_db(fx, t, w, "T10c", seed, Expected(("key_unauthorised",), seq, "high", "adversarial",
+                                                         "key_authorised"))
+
+
 SCENARIOS: dict[str, Scenario] = {
     "T1a": t1a_edit_output, "T1b": t1b_edit_payload, "T1c": t1c_edit_and_relink,
     "T2a": t2a_replace_with_attacker_key, "T2b": t2b_forged_signature_under_real_key_id,
     "T3a": t3a_replay_copy_at_tip, "T3b": t3b_replay_with_seq_rewritten,
     "T4a": t4a_delete_interior, "T4b": t4b_delete_and_renumber, "T4c": t4c_tail_truncation,
     "T5a": t5a_reorder, "T5b": t5b_reorder_and_renumber, "T6": t6_swap_input_image,
-    "T7a": t7a_swap_model, "T7b": t7b_edit_ledger_to_show_old_digest, "T9": t9_genesis_splice,
+    "T7a": t7a_swap_model, "T7b": t7b_edit_ledger_to_show_old_digest, "T8": t8_ledger_fork, "T9": t9_genesis_splice,
+    "T10a": t10a_rotation_by_unknown_key, "T10b": t10b_rotation_without_proof_of_possession,
+    "T10c": t10c_retired_key_resumes,
     "T11": t11_nonce_reuse, "T12": t12_selective_logging, "T13": t13_noncanonical_encoding,
     "T14": t14_uppercase_hex, "T15": t15_derived_column_only,
 }
 NEEDS_MODEL_SWAP = {"T7a", "T7b"}
+NEEDS_ANCHOR = {"T4c", "T8"}
+NEEDS_ROTATION = {"T10c"}
 
 
 def run_scenario(scenario_id: str, directory: str | Path, *, seed: int = 1, n: int = 60,
@@ -575,7 +688,9 @@ def run_scenario(scenario_id: str, directory: str | Path, *, seed: int = 1, n: i
     """Build the clean ledger for `seed` and apply one scenario to a copy of it."""
     d = Path(directory)
     fx = build_clean_ledger(d / "clean", n=n, seed=seed, checkpoint_every=checkpoint_every,
-                            model_swap_at=n // 2 if scenario_id in NEEDS_MODEL_SWAP else None)
+                            model_swap_at=n // 2 if scenario_id in NEEDS_MODEL_SWAP else None,
+                            anchor=scenario_id in NEEDS_ANCHOR,
+                            rotate_at=n // 2 if scenario_id in NEEDS_ROTATION else None)
     return fx, SCENARIOS[scenario_id](fx, d / "attack", seed)
 
 

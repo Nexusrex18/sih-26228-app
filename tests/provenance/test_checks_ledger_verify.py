@@ -90,16 +90,6 @@ def test_the_summary_is_degraded_without_a_reference_manifest_and_ok_with_one(tm
     assert not any("REFERENCE_MANIFEST" in x for x in ok.limitations)
 
 
-def test_a_summary_states_what_it_could_not_verify():
-    from ._fixtures import BODIES
-    chain, trust, _ = valid_chain(3)
-    rot = json.loads(json.dumps(BODIES["key_rotation"]))
-    rot["rotation"]["effective_seq"] = len(chain.records) + 1
-    chain.append("key_rotation", rot)
-    s = summary(CHECK.verify(export_bytes(chain), trust))
-    assert any("Not verified" in x and "C7" in x for x in s.limitations)
-
-
 # --- mapping a real problem --------------------------------------------------------------------------------------
 
 def test_a_tamper_finding_is_mapped_with_certainty_and_a_provisional_quarantine(tmp_path):
@@ -202,3 +192,41 @@ def test_the_standing_limitations_name_what_the_check_cannot_see():
 def test_all_documented_classes_the_verifier_can_emit_are_in_the_profile_table():
     assert set(CLASS_PROFILE) <= set(LedgerVerify.attack_classes)
     assert export_records is not None
+
+
+# --- anchors through the scan-side wrapper (gate C7) -----------------------------------------------------------------
+
+def test_anchors_flow_through_and_the_summary_reports_the_verified_window(tmp_path):
+    from ._anchor_helpers import AnchorEnv
+    e = AnchorEnv(tmp_path)
+    for i in range(6):
+        e.seal(i)
+    a = e.anchor()
+    e.seal(70)
+    e.close()
+    out = CHECK.verify(e.ledger_path, e.trust, scan_id="s", produced_by="t", anchors=[a])
+    s = summary(out)
+    d = s.evidence[0].data
+    assert d["anchors_verified"] == 1 and d["records_fixed_by_anchor"] == a["checkpoint"]["seq"] + 1
+    assert "records after the newest verified EXTERNAL anchor" in d["unwitnessed_window"]
+    assert any("1 external anchor(s) verified" in x for x in s.access_assumptions)
+
+
+def test_truncation_against_an_anchor_quarantines_and_an_unusable_anchor_only_asks_for_review(tmp_path):
+    import sqlite3
+
+    from ._anchor_helpers import AnchorEnv
+    e = AnchorEnv(tmp_path)
+    for i in range(6):
+        e.seal(i)
+    a = e.anchor()
+    e.close()
+    c = sqlite3.connect(e.ledger_path, isolation_level=None)
+    for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger'").fetchall():
+        c.execute(f"DROP TRIGGER {name}")
+    c.execute("DELETE FROM records WHERE seq>=5")
+    c.close()
+    out = CHECK.verify(e.ledger_path, e.trust, scan_id="s", produced_by="t", anchors=[a, b"not an anchor"])
+    by = {f.attack_class: f for f in out}
+    assert by["tail_truncation"].disposition == Disposition.QUARANTINE and by["tail_truncation"].confidence == 1.0
+    assert by["anchor_invalid"].disposition == Disposition.REVIEW and by["anchor_invalid"].severity == Severity.MEDIUM
