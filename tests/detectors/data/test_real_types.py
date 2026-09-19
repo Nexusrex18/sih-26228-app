@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from attacklab.coco_export import export_coco
+from attacklab._types import strict
 from attacklab.contributor_metadata import assign_contributors
 from attacklab.label_flip_attack import flip_labels
 from attacklab.near_dup_ood_attack import inject_near_duplicates
@@ -52,12 +53,21 @@ def test_static_guard_detectors_use_only_the_dataset_contract():
     assert not bad, "non-contract Dataset use (real datasets lack it): " + "; ".join(bad)
 
 
-def test_fixtures_are_the_real_dataset_type_with_no_conveniences(clean):
-    assert isinstance(clean, InMemoryDataset) and isinstance(clean, Dataset)
+def test_fixtures_are_contract_only_datasets_with_no_conveniences(clean):
+    """The concrete InMemoryDataset now offers sample(), category_name() and len() — but the frozen
+    Dataset Protocol does not promise them. Test datasets must expose ONLY the Protocol, or a detector
+    that quietly depends on a convenience would pass here and fail on any other implementation."""
+    assert isinstance(clean, Dataset)                              # satisfies the frozen Protocol
     assert isinstance(clean.samples[0], Sample)
     for attr in ("sample", "category_name", "__len__"):
         assert not hasattr(clean, attr), f"the test dataset must not offer {attr}()"
     assert not hasattr(type(clean), "__len__")
+
+
+def test_the_contract_only_dataset_delegates_to_the_real_implementation(clean):
+    real = InMemoryDataset(samples=clean.samples, categories=clean.categories)
+    assert clean.capabilities() == real.capabilities()
+    assert clean.annotations() == real.annotations()
 
 
 def test_the_dataset_capability_probe_is_the_real_one(clean):
@@ -80,11 +90,11 @@ def test_attack_lab_sidecar_is_in_the_format_the_real_loader_reads(tmp_path):
 @pytest.fixture(scope="module")
 def coco_clean(clean, tmp_path_factory):
     root = export_coco(clean, tmp_path_factory.mktemp("coco_clean"))
-    return COCOLoader().load(root)
+    return strict(COCOLoader().load(root))
 
 
 def test_coco_round_trip_preserves_what_detectors_read(clean, coco_clean):
-    assert isinstance(coco_clean, InMemoryDataset)
+    assert isinstance(coco_clean, Dataset)
     assert len(coco_clean.samples) == len(clean.samples)
     a = {s.sample_id: s for s in clean.samples}
     for s in coco_clean.samples:
@@ -105,7 +115,7 @@ def test_detectors_run_clean_on_a_dataset_loaded_by_the_real_loader(coco_clean):
 
 
 def _through_coco(ds, root):
-    return COCOLoader().load(export_coco(ds, root))
+    return strict(COCOLoader().load(export_coco(ds, root)))
 
 
 def test_label_flips_are_found_on_a_real_loaded_dataset(clean, tmp_path):
