@@ -4,10 +4,12 @@
     appends via NullAuditLedger; a deliberately-raising stub plug-in resolves ERROR, not
     DEGRADED; the access-assumptions block matches §7.4's shape.
 
-WRITTEN BUT NEVER RUN — the session that authored it could not execute pytest. Treat every
-assertion here as a claim, not a result.
+"appends" is now `seal_report` (plan §7.9), called by the entrypoint after report.json is
+written: `scan()` itself no longer touches the ledger.
 """
 from __future__ import annotations
+
+import hashlib
 
 import pytest
 
@@ -20,9 +22,11 @@ from cva.core.orchestrator import (
     plan_text,
     resolve_profile,
     scan,
+    seal_report,
 )
 from cva.core.runcontext import RunContext
 from cva.core.types import Finding, Severity
+from cva.report.report_json import write as write_report_json
 
 EMPTY: tuple[dict, ...] = ({}, {})
 
@@ -64,7 +68,7 @@ class _Needs(OkCheck):
     requires = frozenset({Capability.MODEL_GRADIENTS})
 
 
-def test_scan_runs_end_to_end_with_zero_detectors_registered():
+def test_scan_runs_end_to_end_with_zero_detectors_registered(tmp_path):
     ledger = NullAuditLedger()
     ctx = RunContext(audit_ledger=ledger, code_commit="cafe123")
     res = scan(FakeModel(), ctx, "deep", registries=EMPTY)
@@ -73,11 +77,23 @@ def test_scan_runs_end_to_end_with_zero_detectors_registered():
     assert res.findings == []
     assert res.verdict == "ACCEPT"
     assert "no checks registered" in plan_text(res)
-    # ...and it appended. UNAVAILABLE is not a skip; neither is an empty scan.
+
+    # Sealing moved out of scan() (plan §7.9): the scan record binds sha256(report.json),
+    # and report.json does not exist until the caller has written it. So scan() itself
+    # appends nothing and leaves ledger_seq unset...
+    assert ledger.records_seen == []
+    assert res.ledger_seq is None
+
+    # ...and the caller writes the report, THEN seals it. An empty scan still appends:
+    # UNAVAILABLE is not a skip, and neither is a scan that assessed nothing.
+    report = write_report_json(res, tmp_path / "report.json")
+    seq = seal_report(res, ctx, report)
     assert len(ledger.records_seen) == 1
-    assert ledger.records_seen[0]["scan"]["scan_id"] == res.scan_id
-    assert ledger.records_seen[0]["type"] == "scan_record"
-    assert res.ledger_seq == "unsealed-1"
+    (rec,) = ledger.records_seen
+    assert rec["type"] == "scan_record"
+    assert rec["scan"]["scan_id"] == res.scan_id
+    assert rec["scan"]["report_sha256"] == hashlib.sha256(report.read_bytes()).hexdigest()
+    assert seq == res.ledger_seq == "unsealed-1"
 
 
 def test_zero_detector_scan_says_it_assessed_nothing():

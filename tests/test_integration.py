@@ -17,7 +17,7 @@ from cva.core.capability import Availability, Capability, CapabilitySet
 from cva.core.model import ModelBattery
 from cva.core.orchestrator import RunContext, scan
 from cva.core.types import Severity
-from cva.detectors.base import REGISTRY
+from cva.detectors.base import DETECTOR_REGISTRY, REGISTRY
 from cva.loaders.models import load_model
 
 CORPUS = Path("artifacts/corpus")
@@ -73,9 +73,13 @@ def test_unavailable_is_never_a_silent_skip(man, probes):
     ctx = RunContext(probes_x=probes[0], probes_y=probes[1],
                      battery=ModelBattery(), seed=1)
     res = scan(m, ctx, "deep")
-    assert {r.check_id for r in res.plan} == set(REGISTRY)
+    # The default registries are (model checks, data detectors), resolved at call time: once
+    # any test in the session imports `cva.detectors.data.registry` the plan holds the data.*
+    # rows too (UNAVAILABLE here: no dataset), and they must be accounted for like any other.
+    expected = set(REGISTRY) | set(DETECTOR_REGISTRY)
+    assert {r.check_id for r in res.plan} == expected
     covered = {f.detector_id for f in res.findings}
-    assert covered == set(REGISTRY), f"checks vanished: {set(REGISTRY) - covered}"
+    assert covered == expected, f"checks vanished: {expected - covered}"
 
 
 def test_error_is_not_degraded(man, probes):
