@@ -163,7 +163,30 @@ def _sandbox_child(qualname: str, path_str: str, sys_path: list[str], conn: Any)
         def _no_network(*_args: Any, **_kwargs: Any) -> Any:
             raise OSError(_S3_NETWORK_BLOCKED)
 
-        socket.socket = _no_network  # type: ignore[assignment]
+        # Block EGRESS, not socket construction.
+        #
+        # The blunt version — `socket.socket = _no_network` — was here first and it does
+        # stop egress, by stopping everything: importing torch constructs a socket during
+        # module init, so the child died before it could read a single byte and S3 made the
+        # one library this module exists to load unimportable. A control that cannot be
+        # switched on is worse than an absent one, because the call site quietly grows a
+        # `sandboxed=False`.
+        #
+        # Creating a socket reaches nothing. `connect`, `connect_ex` and `sendto` are the
+        # operations that leave the machine, so those are what raise — and they raise the
+        # sandbox's own sentinel, which is what lets the test tell rejection apart from an
+        # ordinary failed connection to a closed port.
+        class _NoEgressSocket(socket.socket):
+            def connect(self, *_a: Any, **_k: Any) -> Any:
+                raise OSError(_S3_NETWORK_BLOCKED)
+
+            def connect_ex(self, *_a: Any, **_k: Any) -> Any:
+                raise OSError(_S3_NETWORK_BLOCKED)
+
+            def sendto(self, *_a: Any, **_k: Any) -> Any:
+                raise OSError(_S3_NETWORK_BLOCKED)
+
+        socket.socket = _NoEgressSocket  # type: ignore[assignment]
         socket.create_connection = _no_network  # type: ignore[assignment]
 
         mod_name, _, attr = qualname.partition(":")

@@ -15,8 +15,67 @@ import torch.nn as nn
 
 from cva.core.capability import Capability, CapabilitySet
 from cva.loaders.safety import check_torch_version as _check_torch_version
+from cva.loaders.safety import load_in_sandbox as _load_in_sandbox
 
 from .base import ProbeLog, arch_hash_of, digest_weights, softmax
+
+
+def load_checkpoint_untrusted(path: str | Path) -> bytes:
+    """The S3 sandbox entry point. Imported BY NAME in a fresh subprocess, so it must be
+    module-level and must not close over anything.
+
+    It returns BYTES, never tensors, and that is not a convenience — it is the only thing
+    that works and it is also the right shape for a sandbox boundary.
+
+    A `torch.Tensor` does not travel through a `multiprocessing.Pipe` by value. Its
+    reduction hands over shared memory by PASSING A FILE DESCRIPTOR, which opens a second
+    Unix-domain socket back to the parent's resource sharer. Inside this sandbox that
+    cannot work — the child has chdir'd into a temp directory that is deleted on exit — and
+    it fails as a clean exit with an empty pipe, which the caller can only report as "died,
+    treated as hostile".
+
+    Even where it worked it would be wrong. The point of the boundary is that nothing live
+    crosses it; handing the parent a descriptor into memory the untrusted load just
+    populated gives back a share of exactly what was isolated. Re-serialising costs one
+    extra copy and keeps the boundary a boundary.
+    """
+    import io
+
+    _check_torch_version()
+    blob = torch.load(Path(path), map_location="cpu", weights_only=True)
+    buf = io.BytesIO()
+    torch.save(blob, buf)
+    return buf.getvalue()
+
+
+def _read_checkpoint(path: Path, sandboxed: bool = True) -> dict:
+    """S2 + S3 together, which is the only way either of them is worth much.
+
+    `weights_only=True` (S2) is what stops the pickle executing a payload, and it is
+    mandatory rather than advisory — CVE-2025-32434, closed properly in 2.6.0. But it
+    only constrains the PICKLE opcodes. The zip reader and the tensor deserialiser beneath
+    it are ordinary C code parsing an attacker-supplied file, and a memory-safety bug there
+    is reached before any opcode is interpreted. S3 is the answer to that one: the read
+    happens in a spawned subprocess, so a decoder that dies takes a child with it and not
+    the process holding the ledger.
+
+    `sandboxed=False` exists for the in-process path where the file is already trusted —
+    a battery of reference models we generated ourselves. It is not the default, because
+    the premise of this whole module is that the supplier is not trusted.
+
+    Note the honest limit, stated in full at safety.S3_SANDBOX_LIMITATION: this is a
+    Python-level sandbox, not an OS-level one.
+    """
+    if not sandboxed:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    import io
+
+    raw = _load_in_sandbox(
+        "cva.loaders.models.pytorch:load_checkpoint_untrusted", path)
+    # weights_only again on the way back in. These bytes were written by our own
+    # torch.save in the child from already-sanitised tensors, so nothing hostile should
+    # remain — but "should" is not a control, and the flag costs nothing.
+    return torch.load(io.BytesIO(raw), map_location="cpu", weights_only=True)
 
 
 class TorchModelHandle:
@@ -169,9 +228,10 @@ class PyTorchLoader:
         except Exception:
             return False
 
-    def load(self, path: Path, model_id: str | None = None) -> TorchModelHandle:
+    def load(self, path: Path, model_id: str | None = None,
+             sandboxed: bool = True) -> TorchModelHandle:
         _check_torch_version()
-        blob = torch.load(path, map_location="cpu", weights_only=True)  # MANDATORY
+        blob = _read_checkpoint(path, sandboxed=sandboxed)
         if isinstance(blob, dict) and "state_dict" in blob:
             arch = blob.get("arch")
             state = blob["state_dict"]

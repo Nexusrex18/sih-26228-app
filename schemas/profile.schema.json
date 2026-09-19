@@ -7,7 +7,7 @@
   "type": "object",
   "required": ["schema_version", "name", "budget_tier", "thresholds", "disposition"],
 
-  "//unevaluatedProperties": "unevaluatedProperties, NOT additionalProperties. The latter is evaluated against sibling `properties` only and DOES NOT COMPOSE under allOf/oneOf — which is exactly how a base schema plus four variants wants to be written. Getting it wrong fails in the flattering direction: the baseline validates, the strict variant does not, and the obvious 'fix' is to delete the constraint.",
+  "$comment": "unevaluatedProperties, NOT additionalProperties. The latter is evaluated against sibling `properties` only and DOES NOT COMPOSE under allOf/oneOf — which is exactly how a base schema plus four variants wants to be written. Getting it wrong fails in the flattering direction: the baseline validates, the strict variant does not, and the obvious 'fix' is to delete the constraint.",
   "unevaluatedProperties": false,
 
   "properties": {
@@ -146,14 +146,14 @@
 
     "determinism": {
       "type": "object",
+      "$comment": "CUBLAS_WORKSPACE_CONFIG is GPU-OVERLAY ONLY and has no place in a CPU profile.",
       "unevaluatedProperties": false,
       "properties": {
         "seed": { "type": "integer" },
         "torch_deterministic": { "type": "boolean" },
         "ort_intra_op_num_threads": { "type": "integer", "minimum": 1 },
         "ort_inter_op_num_threads": { "type": "integer", "minimum": 1 },
-        "ort_execution_mode": { "enum": ["ORT_SEQUENTIAL", "ORT_PARALLEL"] },
-        "//cublas": "CUBLAS_WORKSPACE_CONFIG is GPU-OVERLAY ONLY and has no place in a CPU profile."
+        "ort_execution_mode": { "enum": ["ORT_SEQUENTIAL", "ORT_PARALLEL"] }
       }
     }
   }
