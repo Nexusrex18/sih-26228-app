@@ -63,7 +63,10 @@ def test_required_n_grows_as_the_effect_shrinks(p0, gap):
 
 @given(a=st.lists(st.floats(-50, 50), min_size=2, max_size=30),
        b=st.lists(st.floats(-50, 50), min_size=2, max_size=30))
-@settings(max_examples=50)
+# deadline=None: `separation` is O(len(a)*len(b)) and hypothesis times the FIRST call of a
+# fresh example against a 200 ms budget, so the numpy import and the largest 30x30 draws
+# trip DeadlineExceeded on a loaded machine. That measures the machine, not the property.
+@settings(max_examples=50, deadline=None)
 def test_auroc_is_in_range_and_symmetric(a, b):
     s1 = separation(a, b)["auroc"]
     s2 = separation(b, a)["auroc"]
