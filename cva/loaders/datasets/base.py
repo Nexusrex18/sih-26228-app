@@ -3,11 +3,36 @@
 `Dataset` is a Protocol in `core/types.py`; this is the one implementation the loaders
 return. Keeping it here rather than in `core/` is the plug-in boundary doing its job —
 `core/` declares the shape every seat builds against, `loaders/` owns how it gets filled.
+
+PS §2.2.1 names three grouping levels, and this module is where a loader learns all three.
+
+Contributor (`Sample.contributor`, with its tier in `contributor_source`) is resolved by
+`resolve_contributor`, in this order: 1 `contributors.yaml` sidecar, 2 a `contrib_*` /
+`contributor_*` directory, 3 the format's own field (COCO `images[].source`), 5 nothing. Tier 4
+(EXIF clustering) is a dataset-wide operation and lives with its detector.
+
+Batch (`Sample.batch`) and source (`Sample.source_meta["source"]`) are resolved by
+`resolve_grouping`, in the same spirit as tier 2: a directory is evidence only if it SAYS it is.
+- a path component starting `batch_` or `batch-` (case-insensitive, non-empty remainder) sets the
+  batch to the remainder; one starting `source_` or `source-` sets the source;
+- only components BELOW the dataset root and above the file name are read, so the root's own
+  name (`/data/batch_root`) and the file name never count;
+- when several components match, the one NEAREST the file wins (`batch_a/batch_b/x.png` is batch
+  `b`): the innermost folder is the most specific statement about where the file came from;
+- COCO `images[].batch` sets the batch and WINS over a `batch_*` directory, being an explicit
+  field on the record rather than an inference from layout;
+- COCO `images[].source` is NOT read into `source_meta["source"]`. It is already the contributor's
+  tier 3 declaration, and mapping it twice would emit identical contributor and source rows.
+- the three mechanisms are independent: one file may sit under `contrib_x/batch_a/source_s/`.
+A value derived this way is supplier-controlled text that becomes a report `group_value`, so it
+is kept as a plain string, control and format characters are replaced with `_`, it is trimmed,
+and it is cut to `GROUPING_MAX_LEN` characters. A remainder that is empty after that is ignored.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,6 +50,14 @@ SIDECAR_NAME = "contributors.yaml"
 #: (train/val, class folders) says nothing about who sent what, and reading a contributor
 #: out of `images/` would invent one for every dataset on earth.
 CONTRIB_DIR_PREFIXES = ("contrib_", "contrib-", "contributor_", "contributor-")
+
+#: The batch and source levels, by the same rule as tier 2: the directory must say so itself.
+BATCH_DIR_PREFIXES = ("batch_", "batch-")
+SOURCE_DIR_PREFIXES = ("source_", "source-")
+
+#: A batch or source value is a `group_value` in the report, taken from a name the supplier
+#: chose; the cap keeps one hostile directory name from becoming a page-wide row label.
+GROUPING_MAX_LEN = 128
 
 
 def sha256_file(path: Path) -> str:
@@ -171,6 +204,55 @@ def _from_directory(root: Path, path: Path) -> str | None:
             if low.startswith(pref) and len(part) > len(pref):
                 return part[len(pref):]
     return None
+
+
+def _clean_grouping_value(raw: str) -> str | None:
+    """Make supplier-controlled text safe to carry as a `group_value`, or None if nothing is left.
+
+    Control characters (category Cc), format characters (Cf, which includes bidi overrides and
+    zero-width spaces), unassigned and private-use code points, and the line and paragraph
+    separators are REPLACED with `_` rather than dropped: replacing keeps two different names
+    different, and the value stays a readable plain string. Then trimmed and capped."""
+    cleaned = "".join(
+        "_" if unicodedata.category(c)[0] == "C" or c in "  " else c for c in raw)
+    return cleaned.strip()[:GROUPING_MAX_LEN].rstrip() or None
+
+
+def _from_prefixed_component(part: str, prefixes: tuple[str, ...]) -> str | None:
+    """The cleaned remainder of one path component if it starts with one of `prefixes`."""
+    for pref in prefixes:
+        if part[:len(pref)].lower() == pref and len(part) > len(pref):
+            return _clean_grouping_value(part[len(pref):])
+    return None
+
+
+def resolve_grouping(
+    root: Path, path: Path, declared_batch: object = None,
+) -> tuple[str | None, str | None]:
+    """`(batch, source)` for one file: see the module docstring for the convention.
+
+    `declared_batch` is a format's own batch field (COCO `images[].batch`); a string or a
+    number counts (a number becomes its string), anything else, `bool` included, does not, and
+    it beats a directory. Components are read from the file outwards, so the nearest match wins
+    and a component whose remainder is empty after cleaning is passed over for the next one out.
+    """
+    batch: str | None = None
+    if isinstance(declared_batch, str):
+        batch = _clean_grouping_value(declared_batch)
+    elif isinstance(declared_batch, int | float) and not isinstance(declared_batch, bool):
+        batch = _clean_grouping_value(str(declared_batch))
+
+    try:
+        rel = path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return batch, None
+    source: str | None = None
+    for part in reversed(rel.parts[:-1]):
+        if batch is None:
+            batch = _from_prefixed_component(part, BATCH_DIR_PREFIXES)
+        if source is None:
+            source = _from_prefixed_component(part, SOURCE_DIR_PREFIXES)
+    return batch, source
 
 
 def resolve_contributor(

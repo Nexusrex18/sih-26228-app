@@ -184,19 +184,62 @@ def build_model(path: Path, seed: int = 42) -> Path:
     return path
 
 
+def build_frozen_model(path: Path, seed: int = 42) -> Path:
+    """A FROZEN TorchScript archive of the same tiny net (plan V7's `demo/frozen.pt`).
+
+    `torch.jit.freeze` inlines the parameters as graph constants, so the loader has to discover
+    "no gradients" by ATTEMPTING a backward pass, and there are no named weights to digest:
+    `weight_digest()` is "unavailable:frozen". That is the path a real supplier's exported
+    archive takes, and nothing else in the generator exercises it. The input shape travels in
+    `_extra_files` because a TorchScript graph does not reliably carry it.
+    """
+    import torch
+    from torch import nn
+
+    torch.manual_seed(seed)
+    net = nn.Sequential(
+        nn.Conv2d(3, 4, 3, stride=2, padding=1), nn.ReLU(), nn.AdaptiveAvgPool2d(2),
+        nn.Flatten(), nn.Linear(16, len(CATEGORIES))).eval()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    meta = {"cva_meta.json": json.dumps({"input_shape": [3, SIZE, SIZE]})}
+    torch.jit.freeze(torch.jit.script(net).eval()).save(str(path), _extra_files=meta)
+    return path
+
+
+def build_preprocess_sidecar(model: Path) -> Path:
+    """`<model>.preprocess.json`: the DECLARED preprocessing of the demo model — identity
+    normalisation, because the generator feeds it raw [0, 1] pixels. It exists so that
+    `cva selftest` exercises the `preprocess_hash` path end to end. Constant content, so two
+    selftest runs write the same bytes and the report's hash cannot differ (V10)."""
+    from cva.loaders.preprocess import sidecar_path
+
+    spec = {"mean": [0.0, 0.0, 0.0], "std": [1.0, 1.0, 1.0], "layout": "CHW",
+            "dtype": "float32", "value_range": [0.0, 1.0], "input_shape": [3, SIZE, SIZE]}
+    path = sidecar_path(model)
+    path.write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n")
+    return path
+
+
 def build(out: Path, seed: int = 42) -> Fixtures:
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    return Fixtures(out, build_dataset(out, seed), build_model(out / "demo_model.onnx", seed))
+    model = build_model(out / "demo_model.onnx", seed)
+    build_preprocess_sidecar(model)
+    return Fixtures(out, build_dataset(out, seed), model)
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="cva.fixtures")
     ap.add_argument("--out", default="artifacts/fixtures")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--kind", choices=("demo", "mixed_contributors"), default="demo",
-                    help="demo: selftest corpus + model; mixed_contributors: the V15 dataset")
+    ap.add_argument("--kind", choices=("demo", "mixed_contributors", "frozen"), default="demo",
+                    help="demo: selftest corpus + model; mixed_contributors: the V15 dataset; "
+                         "frozen: a frozen TorchScript model (V7)")
     a = ap.parse_args(argv)
+    if a.kind == "frozen":
+        model = build_frozen_model(Path(a.out) / "demo_frozen.pt", a.seed)
+        print(f"fixtures -> {model} (frozen TorchScript)")
+        return 0
     if a.kind == "mixed_contributors":
         ds = build_mixed_contributors(Path(a.out), a.seed)
         n = sum(c[1] for c in MIXED_CONTRIBUTORS)

@@ -22,6 +22,7 @@ from .base import (
     build_categories,
     probe_image,
     resolve_contributor,
+    resolve_grouping,
     sha256_file,
 )
 
@@ -99,11 +100,15 @@ class VOCLoader:
             except OSError:
                 continue
             contributor, source = resolve_contributor(root, fpath, sidecar, None)
+            batch, group_source = resolve_grouping(root, fpath)
+            meta = {"file_name": file_name, "format": "voc"}
+            if group_source:
+                meta["source"] = group_source
             samples.append(Sample(
                 sample_id=xml.stem, content_sha256=sha256_file(fpath), path=fpath,
                 width=w, height=h,
                 labels=[Label(category_id=id_map[c], bbox=box, label_id=f"{xml.stem}:{i}")
                         for i, (c, box) in enumerate(objs)],
-                contributor=contributor, contributor_source=source,
-                source_meta={"file_name": file_name, "format": "voc"}))
+                contributor=contributor, contributor_source=source, batch=batch,
+                source_meta=meta))
         return InMemoryDataset(samples=samples, categories=cats, root=root)

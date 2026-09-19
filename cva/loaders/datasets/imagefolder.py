@@ -20,6 +20,7 @@ from .base import (
     build_categories,
     probe_image,
     resolve_contributor,
+    resolve_grouping,
     sha256_file,
 )
 from .yolo import IMAGE_SUFFIXES
@@ -55,10 +56,16 @@ class ImageFolderLoader:
                 except OSError:
                     continue
                 contributor, source = resolve_contributor(root, fpath, sidecar, None)
+                # The class folder is a label, and is batch or source only if it carries the
+                # `batch_` / `source_` prefix itself.
+                batch, group_source = resolve_grouping(root, fpath)
+                meta = {"file_name": f"{d.name}/{img.name}", "format": "imagefolder"}
+                if group_source:
+                    meta["source"] = group_source
                 samples.append(Sample(
                     sample_id=f"{d.name}/{img.stem}", content_sha256=sha256_file(fpath),
                     path=fpath, width=w, height=h,
                     labels=[Label(category_id=id_map[d.name], bbox=None)],
-                    contributor=contributor, contributor_source=source,
-                    source_meta={"file_name": f"{d.name}/{img.name}", "format": "imagefolder"}))
+                    contributor=contributor, contributor_source=source, batch=batch,
+                    source_meta=meta))
         return InMemoryDataset(samples=samples, categories=cats, root=root)

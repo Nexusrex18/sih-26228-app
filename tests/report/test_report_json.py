@@ -86,6 +86,16 @@ class FrozenModel(FakeModel):
         return "unavailable:frozen"
 
 
+class PreprocessedModel(HashedModel):
+    """What a file loader returns when the operator declared a preprocessing spec: the three
+    facts are plain attributes on the handle (`cva.loaders.preprocess.attach_preprocess`)."""
+    preprocess_hash = "cd" * 32
+    preprocess_ref = "cd" * 32 + ".json"
+
+    def arch_hash(self) -> str:
+        return "ef" * 32
+
+
 class FakeDataset:
     def __init__(self, n: int = 3) -> None:
         self.samples = [Sample(f"s{i}", "0" * 64, Path(f"s{i}.png"), 8, 8,
@@ -298,6 +308,48 @@ def test_target_records_dataset_format_but_never_dataset_path():
     _assert_valid(rep)
 
 
+def test_target_carries_the_preprocess_and_structure_facts_when_the_handle_has_them(tmp_path):
+    res = scan(PreprocessedModel(), RunContext(dataset=FakeDataset(3)), "deep", registries=EMPTY)
+    rep = report_json.build(res)
+    assert rep["target"]["preprocess_hash"] == "cd" * 32
+    assert rep["target"]["preprocess_ref"] == "cd" * 32 + ".json"
+    assert rep["target"]["arch_hash"] == "ef" * 32
+    assert all(v not in ("", None) for v in rep["target"].values())
+    _assert_valid(rep)
+    # The file form, which is what Module E and the seal read.
+    path = report_json.write(res, tmp_path / "report.json", "cmd")
+    _assert_valid(json.loads(path.read_text()))
+
+
+def test_target_drops_a_preprocess_or_arch_value_that_is_not_what_it_claims_to_be():
+    class Sloppy(HashedModel):
+        preprocess_hash = "not-a-hash"
+        preprocess_ref = ""
+
+        def arch_hash(self) -> str:
+            return "unavailable:black-box"
+
+    target = report_json.build(scan(Sloppy(), RunContext(), "deep", registries=EMPTY))["target"]
+    assert not {"preprocess_hash", "preprocess_ref", "arch_hash"} & set(target)
+
+    class NoGraph(HashedModel):
+        def arch_hash(self) -> str:
+            raise RuntimeError("no graph")
+
+    target = report_json.build(scan(NoGraph(), RunContext(), "deep", registries=EMPTY))["target"]
+    assert "arch_hash" not in target
+
+
+@pytest.mark.parametrize("member, bad", [
+    ("preprocess_hash", "nothex"), ("preprocess_hash", "AB" * 32), ("arch_hash", "ab" * 31),
+    ("preprocess_ref", ""), ("preprocess_ref", 5), ("unknown_member", "x"),
+], ids=lambda v: str(v))
+def test_the_schema_rejects_a_malformed_preprocess_member_and_still_forbids_extras(member, bad):
+    rep = report_json.build(scan(PreprocessedModel(), RunContext(), "deep", registries=EMPTY))
+    rep["target"][member] = bad
+    assert list(_validator().iter_errors(rep)), (member, bad)
+
+
 def test_a_frozen_torchscript_digest_is_omitted_not_emitted():
     target = report_json.build(scan(FrozenModel(), RunContext(), "deep",
                                     registries=EMPTY))["target"]
@@ -485,7 +537,8 @@ def test_the_base_standing_limitations_are_always_present_plus_the_sandbox_one()
 def test_a_model_with_a_digest_adds_no_weight_digest_limitation_whatever_its_format():
     base = _limits({})
     for fmt in ("onnx", "torchscript", "callable", "http", "subprocess"):
-        assert _limits({"model_format": fmt, "model_sha256": HEX64}) == base, fmt
+        assert _limits({"model_format": fmt, "model_sha256": HEX64,
+                        "preprocess_hash": HEX64}) == base, fmt
 
 
 def test_a_dataset_only_scan_has_no_model_format_limitation():
@@ -494,9 +547,10 @@ def test_a_dataset_only_scan_has_no_model_format_limitation():
 
 def test_the_missing_digest_limitation_depends_on_the_model_format():
     base = _limits({})
-    torchscript = _limits({"model_format": "torchscript"})
-    onnx = _limits({"model_format": "onnx"})
-    query_only = {fmt: _limits({"model_format": fmt})
+    # A declared preprocessing spec is given throughout: its own limitation is tested below.
+    torchscript = _limits({"model_format": "torchscript", "preprocess_hash": HEX64})
+    onnx = _limits({"model_format": "onnx", "preprocess_hash": HEX64})
+    query_only = {fmt: _limits({"model_format": fmt, "preprocess_hash": HEX64})
                   for fmt in ("callable", "http", "subprocess")}
 
     for extra in (torchscript, onnx, *query_only.values()):
@@ -516,9 +570,43 @@ def test_the_limitations_reach_report_json_from_the_target():
     res = scan(FakeModel(), RunContext(), "deep", registries=EMPTY)      # onnx, no digest
     rep = report_json.build(res)
     assert rep["coverage"]["standing_limitations"] == _limits(rep["target"])
-    assert len(rep["coverage"]["standing_limitations"]) == len(STANDING_LIMITATIONS) + 2
+    # sandbox + missing weight digest + no declared preprocessing spec
+    assert len(rep["coverage"]["standing_limitations"]) == len(STANDING_LIMITATIONS) + 3
     hashed = report_json.build(scan(HashedModel(), RunContext(), "deep", registries=EMPTY))
-    assert len(hashed["coverage"]["standing_limitations"]) == len(STANDING_LIMITATIONS) + 1
+    assert len(hashed["coverage"]["standing_limitations"]) == len(STANDING_LIMITATIONS) + 2
+    declared = report_json.build(scan(PreprocessedModel(), RunContext(), "deep",
+                                      registries=EMPTY))
+    assert len(declared["coverage"]["standing_limitations"]) == len(STANDING_LIMITATIONS) + 1
+
+
+NO_SPEC_LIMITATION = ("No preprocessing spec was declared for this model, so prov.recompute "
+                      "cannot be performed for it.")
+
+
+def test_the_no_preprocessing_limitation_appears_iff_a_model_has_no_declared_spec():
+    with_model = _limits({"model_format": "onnx", "model_sha256": HEX64})
+    assert NO_SPEC_LIMITATION in with_model
+    assert with_model.count(NO_SPEC_LIMITATION) == 1
+    # A declared spec removes it, whatever else is (or is not) known about the model.
+    assert NO_SPEC_LIMITATION not in _limits(
+        {"model_format": "onnx", "model_sha256": HEX64, "preprocess_hash": HEX64,
+         "preprocess_ref": f"{HEX64}.json"})
+    # No model at all — dataset-only, or nothing — there is nothing to recompute.
+    assert NO_SPEC_LIMITATION not in _limits({})
+    assert NO_SPEC_LIMITATION not in _limits({"n_samples": 5, "n_categories": 2})
+    # ...and it holds for every format, including the query-only ones.
+    for fmt in ("torchscript", "callable", "http", "subprocess"):
+        assert NO_SPEC_LIMITATION in _limits({"model_format": fmt}), fmt
+
+
+def test_the_no_preprocessing_limitation_reaches_report_json_and_coverage_md(tmp_path):
+    res = scan(HashedModel(), RunContext(), "deep", registries=EMPTY)
+    assert NO_SPEC_LIMITATION in report_json.build(res)["coverage"]["standing_limitations"]
+    assert NO_SPEC_LIMITATION in coverage.write(res, tmp_path / "c.md").read_text()
+    declared = scan(PreprocessedModel(), RunContext(), "deep", registries=EMPTY)
+    assert NO_SPEC_LIMITATION not in report_json.build(declared)[
+        "coverage"]["standing_limitations"]
+    assert NO_SPEC_LIMITATION not in coverage.write(declared, tmp_path / "d.md").read_text()
 
 
 def _md_limitations(md: str) -> list[str]:

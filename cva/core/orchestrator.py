@@ -135,6 +135,22 @@ def _target_of(model: Any, ctx: RunContext) -> dict[str, Any]:
         # A frozen TorchScript archive returns "unavailable:frozen": omit it, never emit it.
         if isinstance(digest, str) and _HEX64.match(digest):
             t["model_sha256"] = digest
+        # The structure digest (a method on the file loaders; a query-only adapter has none).
+        try:
+            arch = getattr(model, "arch_hash", None)
+            arch = arch() if callable(arch) else arch
+        except Exception:
+            arch = None
+        if isinstance(arch, str) and _HEX64.match(arch):
+            t["arch_hash"] = arch
+        # The DECLARED preprocessing spec (`cva.loaders.preprocess`), attached as plain
+        # attributes by the loader layer. Absent when none was declared: never an empty string.
+        pre_hash = getattr(model, "preprocess_hash", None)
+        pre_ref = getattr(model, "preprocess_ref", None)
+        if isinstance(pre_hash, str) and _HEX64.match(pre_hash):
+            t["preprocess_hash"] = pre_hash
+        if isinstance(pre_ref, str) and pre_ref:
+            t["preprocess_ref"] = pre_ref
     if ctx.dataset is not None:
         t["n_samples"] = len(ctx.dataset.samples)
         t["n_categories"] = len(ctx.dataset.categories)

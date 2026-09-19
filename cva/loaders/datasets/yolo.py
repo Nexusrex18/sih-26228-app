@@ -27,6 +27,7 @@ from .base import (
     build_categories,
     probe_image,
     resolve_contributor,
+    resolve_grouping,
     sha256_file,
 )
 
@@ -144,6 +145,10 @@ class YOLOLoader:
 
             contributor, source = resolve_contributor(
                 root, fpath, sidecar, meta.get("contributor"))
+            batch, group_source = resolve_grouping(root, fpath)
+            sample_meta = {"file_name": img.name, "format": "yolo"}
+            if group_source:
+                sample_meta["source"] = group_source
 
             samples.append(Sample(
                 sample_id=img.stem,
@@ -154,7 +159,8 @@ class YOLOLoader:
                 labels=labels,
                 contributor=contributor,
                 contributor_source=source,
-                source_meta={"file_name": img.name, "format": "yolo"},
+                batch=batch,
+                source_meta=sample_meta,
             ))
 
         return InMemoryDataset(samples=samples, categories=cats, root=root)

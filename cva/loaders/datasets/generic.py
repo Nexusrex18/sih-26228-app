@@ -27,6 +27,7 @@ from .base import (
     build_categories,
     probe_image,
     resolve_contributor,
+    resolve_grouping,
     sha256_file,
 )
 from .yolo import IMAGE_SUFFIXES
@@ -78,10 +79,14 @@ class GenericDataset:
             contributor, source = resolve_contributor(root, fpath, sidecar, declared)
             if contributor is None:
                 source = ContributorSource.NONE
+            batch, group_source = resolve_grouping(root, fpath)
+            meta = {"file_name": rel, "format": "generic"}
+            if group_source:
+                meta["source"] = group_source
             samples.append(Sample(
                 sample_id=rel, content_sha256=sha256_file(fpath), path=fpath, width=w, height=h,
                 labels=[Label(category_id=id_map[c], bbox=b, label_id=f"{rel}:{i}")
                         for i, (c, b) in enumerate(pairs)],
-                contributor=contributor, contributor_source=source,
-                source_meta={"file_name": rel, "format": "generic"}))
+                contributor=contributor, contributor_source=source, batch=batch,
+                source_meta=meta))
         return InMemoryDataset(samples=samples, categories=cats, root=root)
