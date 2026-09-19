@@ -1,10 +1,14 @@
 from .callable import CallableHandle
+from .http_model import HTTPModel
+from .keras import KerasLoader, LoaderUnavailable
 from .onnx import OnnxHandle, ONNXLoader
 from .pytorch import PyTorchLoader, TorchModelHandle
+from .subprocess_model import SubprocessModel
 from .torchscript import TorchScriptHandle, TorchScriptLoader
 
-__all__ = ["PyTorchLoader", "TorchScriptLoader", "ONNXLoader", "CallableHandle",
-           "TorchModelHandle", "TorchScriptHandle", "OnnxHandle", "load_model"]
+__all__ = ["PyTorchLoader", "TorchScriptLoader", "ONNXLoader", "KerasLoader", "CallableHandle",
+           "SubprocessModel", "HTTPModel", "LoaderUnavailable", "TorchModelHandle",
+           "TorchScriptHandle", "OnnxHandle", "load_model"]
 
 
 def load_model(path, arch_registry=None, model_id=None, enforce_safety=True):

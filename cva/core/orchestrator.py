@@ -153,15 +153,22 @@ def default_registries() -> Registries:
 
 
 def build_plan(caps: CapabilitySet, prof: dict[str, Any], profile_name: str,
-               registries: Registries | None = None) -> list[PlanRow]:
+               registries: Registries | None = None,
+               model_present: bool = True) -> list[PlanRow]:
     """Resolve every registered check BEFORE anything runs, so coverage is known at
-    minute zero. Budget exclusion is a SECOND axis, not a fifth Availability state."""
+    minute zero. Budget exclusion is a SECOND axis, not a fifth Availability state.
+
+    `model_present=False` (a dataset-only scan) makes every MODEL check unavailable. Some
+    declare no required capability at all — `model.weight_digest` says "file access only" —
+    so capability resolution alone would call them runnable and they would run against
+    nothing. The first registry is the model checks; the second is the data detectors.
+    """
     registries = default_registries() if registries is None else registries
     enabled = prof.get("checks")
     except_checks = set(prof.get("except_checks") or ())
     disabled = set(prof.get("disabled_checks") or ())
     rows: list[PlanRow] = []
-    for reg in registries:
+    for reg_index, reg in enumerate(registries):
         for cid, cls in sorted(reg.items()):
             inst: Any = cls()
             classes = set(inst.attack_classes)
@@ -180,6 +187,11 @@ def build_plan(caps: CapabilitySet, prof: dict[str, Any], profile_name: str,
                 # reported for checks that would otherwise have been runnable.
                 if res.state is Availability.UNAVAILABLE:
                     rows.append(PlanRow(cid, res, classes))
+                elif reg_index == 0 and not model_present:
+                    rows.append(PlanRow(cid, Resolution(
+                        Availability.UNAVAILABLE,
+                        "no model was supplied to this scan, so a model check has nothing "
+                        "to inspect", (), exclusion_reason="capability"), classes))
                 elif (enabled is not None and cid not in enabled) or cid in except_checks:
                     rows.append(PlanRow(cid, budget_excluded(
                         prof.get("budget_tier", profile_name),
@@ -250,7 +262,7 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
 
     model_caps = model.capabilities() if model is not None else CapabilitySet()
     caps = CapabilitySet.union(model_caps, ctx.capabilities())
-    plan = build_plan(caps, prof, profile_name, registries)
+    plan = build_plan(caps, prof, profile_name, registries, model_present=model is not None)
     phash = profile_hash_of(prof)
     access = render_access_block(
         caps,
