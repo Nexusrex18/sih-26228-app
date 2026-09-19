@@ -148,8 +148,8 @@ def test_evidence_is_content_addressed_on_disk_and_independent_of_where_it_is_wr
             for e in f.evidence:
                 if e.path is None:
                     continue
-                assert e.path.startswith("evidence/")
-                fp = root / e.path
+                assert "/" not in e.path, "Evidence.path is the BARE hash, resolved against <out_dir>/evidence/"
+                fp = root / "evidence" / e.path
                 assert fp.exists(), f"{f.detector_id}: evidence file missing on disk: {e.path}"
                 assert fp.stem == hashlib.sha256(fp.read_bytes()).hexdigest(), \
                     f"{e.path} is not named by the sha256 of its content"

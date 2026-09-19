@@ -153,7 +153,11 @@ def category_name(dataset, category_id: int) -> str:
 
 
 class EvidenceStore:
-    """Writes evidence artefacts content-addressed: ``evidence/<sha256>.<ext>``. With no
+    """Writes evidence artefacts content-addressed into ``<out_dir>/evidence/<sha256>.<ext>`` and returns the
+    BARE name ``<sha256>.<ext>`` as ``Evidence.path`` — the convention in ``cva/core/scanid.py`` and
+    ``schemas/report.schema.json`` (resolved against the shared evidence directory). An earlier version
+    returned ``evidence/<sha256>.<ext>``; the renderer tolerated that as a special case, but a consumer
+    following the schema would have looked for ``evidence/evidence/…``. With no
     directory it degrades to inline payloads (or no image), never to a scan-id-prefixed path."""
 
     def __init__(self, root: Path | str | None = None):
@@ -167,7 +171,7 @@ class EvidenceStore:
         p = d / name
         if not p.exists():
             p.write_bytes(data)
-        return f"evidence/{name}"
+        return name
 
     @property
     def enabled(self) -> bool:

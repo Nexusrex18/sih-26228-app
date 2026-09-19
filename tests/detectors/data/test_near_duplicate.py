@@ -62,7 +62,7 @@ def test_evidence_is_content_addressed(clean, workdir, tmp_path):
     b = detect(NearDuplicate, ds, emb, None, out_dir=tmp_path / "e2")
     pa = sorted(e.path for f in a for e in f.evidence if e.path)
     pb = sorted(e.path for f in b for e in f.evidence if e.path)
-    assert pa == pb and pa and all(p.startswith("evidence/") and len(p.split("/")[1]) > 60 for p in pa)
+    assert pa == pb and pa and all("/" not in p and len(p.split(".")[0]) == 64 for p in pa)
 
 
 def test_multi_index_hashing_finds_exactly_what_brute_force_finds():
