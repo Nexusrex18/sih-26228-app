@@ -14,8 +14,9 @@ import numpy as np
 from cva.core.capability import Availability
 from cva.core.model import ModelBattery
 from cva.core.orchestrator import RunContext, scan
+
 from .protocol import Subject, by_slice, nested_evaluate
-from .stats import bootstrap_rate, required_n, separation
+from .stats import required_n, separation
 
 FAMILY_OF = {None: "clean", "patch": "patch", "blended": "blended", "sig": "sig"}
 

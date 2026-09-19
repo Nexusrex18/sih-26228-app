@@ -6,12 +6,12 @@ layer; it loses only the weight- and activation-based checks, and the report say
 """
 from __future__ import annotations
 
-import hashlib
-from typing import Any, Callable
+from collections.abc import Callable
 
 import numpy as np
 
 from cva.core.capability import Capability, CapabilitySet
+
 from .base import ProbeLog, softmax
 
 

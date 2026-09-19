@@ -1,2 +1,6 @@
-from .registry import (DETECTOR_REGISTRY, MODULE_B_CHECKS,  # noqa: F401
-                       MODULE_B_DETECTORS, REGISTRY)
+from .registry import (  # noqa: F401
+                       DETECTOR_REGISTRY,
+                       MODULE_B_CHECKS,
+                       MODULE_B_DETECTORS,
+                       REGISTRY,
+)

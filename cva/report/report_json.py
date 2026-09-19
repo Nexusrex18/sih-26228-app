@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cva.core.capability import Availability, Capability
+from cva.core.capability import Capability
 
 
 def build(result) -> dict:

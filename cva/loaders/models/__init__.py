@@ -1,9 +1,7 @@
-from pathlib import Path
-
-from .pytorch import PyTorchLoader, TorchModelHandle
-from .torchscript import TorchScriptLoader, TorchScriptHandle
-from .onnx import ONNXLoader, OnnxHandle
 from .callable import CallableHandle
+from .onnx import OnnxHandle, ONNXLoader
+from .pytorch import PyTorchLoader, TorchModelHandle
+from .torchscript import TorchScriptHandle, TorchScriptLoader
 
 __all__ = ["PyTorchLoader", "TorchScriptLoader", "ONNXLoader", "CallableHandle",
            "TorchModelHandle", "TorchScriptHandle", "OnnxHandle", "load_model"]

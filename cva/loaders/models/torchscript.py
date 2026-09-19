@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from cva.core.capability import Capability, CapabilitySet
+
 from .base import ProbeLog, digest_weights, softmax
 
 

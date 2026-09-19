@@ -58,7 +58,7 @@ def fine_prune(model, trigger_mask: np.ndarray, trigger_pattern: np.ndarray,
             c = np.asarray(acts_clean[name]); t = np.asarray(acts_trig[name])
             if c.ndim < 2:
                 continue
-            axes = tuple(range(c.ndim))[1:] if c.ndim > 2 else (0,)
+            tuple(range(c.ndim))[1:] if c.ndim > 2 else (0,)
             delta = t.mean(axis=0).reshape(-1) - c.mean(axis=0).reshape(-1)
             k = max(1, int(prune_frac * delta.size))
             idx = np.argsort(-delta)[:k]

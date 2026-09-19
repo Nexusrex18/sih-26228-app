@@ -20,9 +20,9 @@ from __future__ import annotations
 import numpy as np
 
 from cva.core.capability import Capability
-from cva.core.types import (Disposition, Evidence, Finding, Nature, Severity,
-                              unavailable_finding)
+from cva.core.types import Disposition, Evidence, Finding, Nature, Severity, unavailable_finding
 from cva.detectors.base import CheckContext, register
+
 from .neural_cleanse import mad_anomaly_index
 
 
@@ -40,7 +40,7 @@ def noise_prior(model, shape, n=256, seed=0) -> np.ndarray:
 def confusion_asymmetry(model, x, y, K) -> np.ndarray:
     pred = np.asarray(model.predict(x.astype(np.float32))).argmax(1)
     C = np.zeros((K, K), dtype=np.float64)
-    for t, p in zip(y, pred):
+    for t, p in zip(y, pred, strict=False):
         C[t, p] += 1
     row = C.sum(1, keepdims=True)
     C = C / np.maximum(row, 1)
@@ -166,14 +166,15 @@ def _plot(ctx, mid, prior, asym, umarg, score) -> str | None:
     try:
         import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         from pathlib import Path
+
+        import matplotlib.pyplot as plt
         d = Path(ctx.out_dir) / "evidence"; d.mkdir(parents=True, exist_ok=True)
         K = len(prior); xs = np.arange(K)
         fig, axes = plt.subplots(1, 4, figsize=(9.5, 2.1), dpi=130)
         for ax, vals, title in zip(
                 axes, [prior, asym, umarg, score],
-                ["noise prior", "confusion inflow", "universal cost", "suspicion"]):
+                ["noise prior", "confusion inflow", "universal cost", "suspicion"], strict=False):
             cols = ["#e0544c" if v == max(vals) and title == "suspicion" else "#5b8def"
                     for v in vals]
             ax.bar(xs, vals, color=cols); ax.set_title(title, fontsize=8)

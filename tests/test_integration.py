@@ -12,13 +12,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from cva.loaders.models import load_model
 from attacklab.arch import ARCH_REGISTRY
 from cva.core.capability import Availability, Capability, CapabilitySet
-from cva.core.types import Severity
 from cva.core.model import ModelBattery
-from cva.detectors.base import REGISTRY
 from cva.core.orchestrator import RunContext, scan
+from cva.core.types import Severity
+from cva.detectors.base import REGISTRY
+from cva.loaders.models import load_model
 
 CORPUS = Path("artifacts/corpus")
 pytestmark = pytest.mark.skipif(not (CORPUS / "manifest.json").exists(),
@@ -80,7 +80,6 @@ def test_unavailable_is_never_a_silent_skip(man, probes):
 
 def test_error_is_not_degraded(man, probes):
     """A raising check must surface as ERROR, never folded into DEGRADED."""
-    from cva.detectors.base import register
 
     class Exploding:
         id = "model.test_exploding"
@@ -125,9 +124,9 @@ def test_fingerprint_is_deterministic(man):
 def test_benign_reexport_is_not_called_substitution(man, probes):
     """The digest false-positive case: identical behaviour, different bytes.
     The digest may fire; the fingerprint must NOT call it hostile."""
-    from cva.detectors.model.fingerprint import FingerprintCheck, fingerprint
     from cva.core.model import Manifest
     from cva.detectors.base import CheckContext
+    from cva.detectors.model.fingerprint import FingerprintCheck, fingerprint
 
     base = next(x for x in man["models"] if x["id"] == "clean_a")
     var = next((x for x in man["models"] if x.get("benign_variant")), None)

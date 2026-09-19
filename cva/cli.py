@@ -6,11 +6,11 @@ from pathlib import Path
 
 import numpy as np
 
-from cva.loaders.models import load_model
+import cva.detectors.model.registry  # noqa: F401 — registration happens at the entrypoint, never in core
 from attacklab.arch import ARCH_REGISTRY
 from cva.core.model import Manifest, ModelBattery
-import cva.detectors.model.registry  # noqa: F401 — registration happens at the entrypoint, never in core
 from cva.core.orchestrator import RunContext, scan
+from cva.loaders.models import load_model
 from cva.report.coverage import write as write_coverage
 from cva.report.render_html import render
 from cva.report.report_json import write as write_report_json
