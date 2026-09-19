@@ -120,6 +120,11 @@ _C = [_c(n, "C", "attack", f"Provenance verification failure: {n.replace('_', ' 
     # [added by Module C, C5 — flagged for Backend] Open item O9: the report always prints a provenance
     # summary, including when nothing failed, so "no provenance section" can never be mistaken for
     # "provenance was never checked". One `info` finding per scan carries it.
+    # [added by Module C, C6 — flagged for Backend] The recompute counterpart of `ledger_verified`: how many
+    # sealed inferences were re-derived and at which rung of the claim ladder, how many could not be, and why.
+    _c("recompute_verified", "C", "operational",
+       "Summary of a re-derivation run: records re-derived exactly / at decision level / at a boundary, "
+       "mismatches, and those that could not be re-derived (with reasons). Emitted whether or not anything failed"),
     _c("ledger_verified", "C", "operational",
        "Summary of an inference-ledger verification: records checked, anchors, declared gaps, the "
        "unwitnessed window. Emitted whether or not anything failed"),

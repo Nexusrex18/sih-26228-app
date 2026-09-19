@@ -136,6 +136,7 @@ class VerifyReport:
     loss_window: str | None = None
     source_kind: str = ""
     limitations: list[str] = field(default_factory=list)
+    verified_seqs: set[int] = field(default_factory=set)      # records whose signature verified (recompute's eligible set)
 
     @property
     def clean(self) -> bool:
@@ -248,11 +249,14 @@ def _as_bytes(v: Any) -> bytes:
     return b"" if v is None else str(v).encode("utf-8", "replace")
 
 
-def open_source(source: Any) -> SqliteSource | JsonlSource:
+def open_source(source: Any, payloads: Mapping[str, bytes] | None = None) -> SqliteSource | JsonlSource:
+    """Open a ledger from a path (SQLite file or JSONL export) or from export bytes. `payloads` (address hex ->
+    bytes) supplies the payloads a JSONL export does not carry; a SQLite ledger has its own. A prepared source
+    is returned as is — but note `verify_ledger` CLOSES the source it is given, so pass a path to reuse one."""
     if isinstance(source, (SqliteSource, JsonlSource)):
         return source
     if isinstance(source, (bytes, bytearray)):
-        return JsonlSource(bytes(source))
+        return JsonlSource(bytes(source), payloads)
     p = os.fspath(source)
     try:
         with open(p, "rb") as f:
@@ -262,7 +266,7 @@ def open_source(source: Any) -> SqliteSource | JsonlSource:
             rest = f.read()
     except OSError as e:
         raise LedgerUnreadable(f"{p}: {e.strerror}") from None
-    return JsonlSource(head + rest)
+    return JsonlSource(head + rest, payloads)
 
 
 def export_records(ledger_path: str | os.PathLike[str], out_path: str | os.PathLike[str]) -> int:
@@ -602,6 +606,7 @@ class _Verifier:
             finally:
                 acc.append(leaf_hash(row.data))
 
+        rep.verified_seqs = {rec["seq"] for _, rec in sealed_ok}
         self._finish(rows, sealed_ok)
         return rep
 
