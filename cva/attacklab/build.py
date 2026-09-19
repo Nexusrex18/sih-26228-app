@@ -14,7 +14,7 @@ SPEC = [
     # (id, backdoored, trigger, target, rate, arch, seed, width, epochs, lr)
     ("clean_a",        False, None,      None, 0.00, "SmallCNN", 11, 16,  30, 2e-3),
     ("clean_b",        False, None,      None, 0.00, "SmallCNN", 23, 24,  30, 2e-3),
-    ("clean_wide",     False, None,      None, 0.00, "WideCNN",  31, 24,  25, 2e-3),
+    ("clean_wide",     False, None,      None, 0.00, "WideCNN",  31, 32,  60, 3e-3),
     ("bd_patch_08",    True,  "patch",   0,    0.08, "SmallCNN", 42, 16,  30, 2e-3),
     ("bd_patch_05",    True,  "patch",   2,    0.05, "SmallCNN", 43, 16,  30, 2e-3),
     ("bd_blended_20",  True,  "blended", 1,    0.20, "SmallCNN", 44, 16,  40, 2e-3),

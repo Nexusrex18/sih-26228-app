@@ -3,7 +3,7 @@ set -e
 cd "$(dirname "$0")"
 for i in $(seq 1 200); do
   [ -f artifacts/corpus/manifest.json ] && break
-  grep -q "fitness gate failed" /private/tmp/claude-501/-Users-aneesh-Documents-code/027a3cfc-aa64-4dd8-abce-73edb9f308c1/tasks/bceisqiqd.output 2>/dev/null && { echo "GATE FAILED"; tail -6 /private/tmp/claude-501/-Users-aneesh-Documents-code/027a3cfc-aa64-4dd8-abce-73edb9f308c1/tasks/bceisqiqd.output; exit 1; }
+  grep -q "fitness gate failed" /private/tmp/claude-501/-Users-aneesh-Documents-code/027a3cfc-aa64-4dd8-abce-73edb9f308c1/tasks/bp2ra83cc.output 2>/dev/null && { echo "GATE FAILED"; tail -6 /private/tmp/claude-501/-Users-aneesh-Documents-code/027a3cfc-aa64-4dd8-abce-73edb9f308c1/tasks/bp2ra83cc.output; exit 1; }
   sleep 15
 done
 echo "=== CORPUS ==="
