@@ -7,7 +7,8 @@ from typing import Any
 
 from cva.provenance.seal.records import build_record, genesis_prev_hash
 
-H = lambda c: c * 64
+
+def H(c): return c * 64
 KEY_ID = "1" * 64
 PUB = "5" * 64                                # a 32-byte value; only its SHA-256 matters for key_id_of
 SIG = "ab" * 64
