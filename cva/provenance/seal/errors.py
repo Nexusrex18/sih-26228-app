@@ -36,3 +36,30 @@ class QuantiseError(SealError, ValueError):
 
 class NonFiniteValue(QuantiseError):
     """NaN or ±inf reached quantise(). The Sealer's default is to seal a marker instead (plan §8)."""
+
+
+class MerkleError(SealError, ValueError):
+    """A Merkle operation given arguments outside the tree (bad index/size), or a store missing a node
+    that must exist (a corrupted cache — the verifier recomputes from the records instead)."""
+
+
+class KeyNotConfigured(SealError):
+    """No signing key was supplied. There is no fallback, no auto-generate, no "development mode":
+    a tool that quietly creates its own trust anchor has created nothing (plan §5.10, §7.5)."""
+
+
+class InvalidKeyMaterial(SealError, ValueError):
+    """A key source exists but its contents are not a usable Ed25519 private key."""
+
+
+class KeyPermissionError(SealError):
+    """The key file is readable by group/other. Refused unless explicitly allowed (and then logged)."""
+
+
+class KeyExists(SealError):
+    """`generate_keypair` refuses to overwrite an existing file — a silently replaced key is a lost
+    trust anchor."""
+
+
+class TrustRootError(SealError, ValueError):
+    """The trust root is malformed or internally inconsistent."""

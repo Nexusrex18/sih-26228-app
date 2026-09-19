@@ -106,7 +106,8 @@ def _plain(v: Any) -> Any:
     return v
 
 
-def parse_strict(data: bytes, *, max_bytes: int | None = MAX_RECORD_BYTES) -> dict[str, Any]:
+def parse_strict(data: bytes, *, max_bytes: int | None = MAX_RECORD_BYTES,
+                 require_canonical: bool = True) -> dict[str, Any]:
     """Parse stored/exported record bytes. Rejects, rather than tolerates:
 
       duplicate keys (the classic parser-differential attack) · floats · NaN/Infinity · integers
@@ -116,6 +117,10 @@ def parse_strict(data: bytes, *, max_bytes: int | None = MAX_RECORD_BYTES) -> di
 
     That last check is what makes "stored record == its canonical bytes" (§5.1 rule 7) enforceable:
     re-serialisation is itself a finding, code "non_canonical_encoding".
+
+    `require_canonical=False` skips only that last byte-equality check (every other rule still holds).
+    It exists for human-handled files such as the trust root, which are not hashed as bytes; records
+    and ledger exports must always use the default.
     """
     raw = bytes(data)
     if max_bytes is not None and len(raw) > max_bytes:
@@ -156,7 +161,7 @@ def parse_strict(data: bytes, *, max_bytes: int | None = MAX_RECORD_BYTES) -> di
     if not isinstance(obj, dict):
         raise NonCanonical("top level must be an object")
     validate_profile(obj)
-    if canonical_bytes(obj, max_bytes=max_bytes) != raw:
+    if require_canonical and canonical_bytes(obj, max_bytes=max_bytes) != raw:
         raise NonCanonical("valid JSON but not in canonical form (key order, whitespace, escapes, "
                            "or trailing bytes differ)", code="non_canonical_encoding")
     return obj
