@@ -94,3 +94,33 @@ Three surfaces, deliberately separate:
   split). A battery of siblings makes every reference comparison unrealistically easy.
 - A backdoor present since original training, with no manifest and no reference battery,
   remains the largest blind spot. `model.intrinsic_probes` narrows it; it does not close it.
+
+## Module D — drift detection (first implementation increment)
+
+Compare a declared reference image directory with an incoming image directory, offline:
+
+```bash
+python -m cva.drift_cli --reference data/reference --incoming data/incoming --out artifacts/drift
+```
+
+This entrypoint requires NumPy, SciPy and Pillow, but does not import Torch or ONNX.
+It writes `drift.report.json`, `drift.report.html` and `drift.coverage.md`. Missing reference,
+small batches, absent embeddings and unimplemented checks are explicit coverage gaps.
+Material drift requests review; no attack intent or field-calibrated confidence is claimed.
+
+Reproducible smoke demo (use a new/empty output directory):
+
+```bash
+python -m attacklab.photometric_shift --out /tmp/cva-drift-demo
+python -m cva.drift_cli --reference /tmp/cva-drift-demo/reference --incoming /tmp/cva-drift-demo/incoming
+python -m pytest tests/detectors/drift tests/boundaries
+```
+
+Optional `--reference-embeddings` and `--incoming-embeddings` accept NPZ files containing
+`embeddings` (N x D numeric), `sample_ids` (sorted relative image paths), `extractor_id`
+and `extractor_version` (scalar strings). Both caches must use the same independent
+extractor/version. Pickle loading is disabled. The scanner does not generate or download
+embeddings; photometric checks still run without them.
+
+Full sequencing, corrections to the notes, statistical assumptions and remaining MVP
+work: [Module D implementation plan](docs/MODULE_D_IMPLEMENTATION_PLAN.md).

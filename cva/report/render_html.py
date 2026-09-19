@@ -225,7 +225,7 @@ def _verdict_section(doc: _Doc, r) -> None:
 def _access_section(doc: _Doc, r) -> None:
     doc.add("<h2>Access assumptions for this scan</h2><div class=scroll><table>"
             "<tr><th>capability</th><th>state</th><th>why</th></tr>")
-    for cap in Capability:
+    for cap in getattr(r, "relevant_capabilities", tuple(Capability)):
         have = cap in r.capabilities
         note = "" if have else (r.capabilities.note_for(cap) or "not available for this model")
         doc.add(f"<tr><td><code>{cap.value}</code></td>"
@@ -354,7 +354,11 @@ def _provenance_section(doc: _Doc, r) -> None:
     doc.add(f"<div class=lim>Scan record: {state}.</div>")
 
 
-def _shift_section(doc: _Doc) -> None:
+def _shift_section(doc: _Doc, r) -> None:
+    summary = getattr(r, 'drift_summary', None)
+    if summary is not None:
+        doc.add('<h2>Distribution shift</h2><pre>' + _e(json.dumps(summary, indent=2)) + '</pre>')
+        return
     doc.add("<h2>Distribution shift</h2>"
             "<div class=note>Not computed in this build. No drift summary is present in "
             "this report; that is not a finding of no shift.</div>")
@@ -505,14 +509,15 @@ def render(results, out_path: Path, title: str = "CV Assurance — Module B",
 
     for r in results:
         r_caps = _caps_of(r)
-        doc.add(f'<div class="sub">model <code>{_e(r.model_id)}</code> · '
+        asset_kind = getattr(r, 'asset_kind', 'model')
+        doc.add(f'<div class="sub">{_e(asset_kind)} <code>{_e(r.model_id)}</code> · '
                 f'format <code>{_e(r.model_fmt)}</code> · scan <code>{_e(r.scan_id)}</code></div>')
         _verdict_section(doc, r)
         _access_section(doc, r)
         _contributor_section(doc, r)
         _findings_section(doc, r, root, r_caps)
         _provenance_section(doc, r)
-        _shift_section(doc)
+        _shift_section(doc, r)
         _plan_section(doc, r)
         _coverage_section(doc, r)
         _reproduction_section(doc, r, command)
