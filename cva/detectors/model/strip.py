@@ -51,7 +51,7 @@ class StripCheck:
     requires = {Capability.MODEL_PREDICT, Capability.REFERENCE_CLEAN_SET,
                 Capability.SUSPECT_INPUTS}
     optional: set = set()
-    attack_classes = {"model.backdoor_patch", "model.backdoor_blended"}
+    attack_classes = {"backdoor_trigger"}
 
     def check(self, model, ctx: CheckContext) -> list[Finding]:
         x = ctx.probes_x
@@ -63,12 +63,12 @@ class StripCheck:
                 "a trigger. Only a clean probe set was supplied, on which the statistic "
                 "measures the model's general confidence rather than a backdoor. The "
                 "model-level question is covered by model.universal_margin.",
-                (Capability.SUSPECT_INPUTS,), "model.backdoor_patch")]
+                (Capability.SUSPECT_INPUTS,), "backdoor_trigger")]
         if x is None or len(x) < 32:
             return [unavailable_finding(
                 self.id, self.version, model.model_id,
                 "needs at least 32 clean images to superimpose",
-                (Capability.REFERENCE_CLEAN_SET,), "model.backdoor_patch")]
+                (Capability.REFERENCE_CLEAN_SET,), "backdoor_trigger")]
 
         n_test = int(ctx.opt("strip_samples", 96))
         n_ovl = int(ctx.opt("strip_overlays", 16))
@@ -121,7 +121,7 @@ class StripCheck:
                 f"Suspect inputs behave like the clean baseline under superposition "
                 f"({norm_low*100:.1f}% below its 1st percentile, threshold "
                 f"{thr*100:.0f}%). No trigger-carrying inputs identified."),
-            attack_class="model.backdoor_patch", evidence=ev,
+            attack_class="backdoor_trigger", evidence=ev,
             access_assumptions=["query access only",
                                 "a suspect input set was supplied alongside clean probes"],
             limitations=[

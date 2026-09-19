@@ -90,16 +90,38 @@ class Finding:
 # Kept as a flat registry so the coverage statement is GENERATED from what
 # detectors declare, never hand-written. Aligned to NIST AI 100-2 vocabulary
 # where it maps; see Consolidated/18-Corpora-and-External-Validation.md.
-ATTACK_CLASSES: dict[str, str] = {
-    "model.substitution": "Supplied model is not the declared model",
-    "model.weight_modification": "Weights edited after training",
-    "model.backdoor_patch": "Trigger-conditioned backdoor, localised patch",
-    "model.backdoor_blended": "Trigger-conditioned backdoor, global/blended",
-    "model.architectural_backdoor": "Malicious structure in the graph, not the weights",
-    "model.anomalous_behaviour": "Diverges from reference without a known attack signature",
-    "model.quantisation_divergence": "Behaviour changes under deployment quantisation",
-    "model.unsafe_artifact": "Model file is unsafe to load (deserialisation / custom op)",
+ATTACK_CLASSES: dict[str, dict[str, str]] = {
+    # Ratified table — Plan/Module-B-Model-Integrity-Plan.md §5 (2026-09-19).
+    # `kind` matters: the coverage generator counts `attack` ONLY. An `operational`
+    # entry is a true report about the system's own state, not an attack class we
+    # claim to detect, and counting it would inflate the statement.
+    "model_substitution":     {"kind": "attack",      "nature": "adversarial",
+                               "desc": "Supplied model is not the declared model"},
+    "benign_conversion":      {"kind": "operational", "nature": "quality",
+                               "desc": "Digest mismatch, fingerprint inside tolerance — "
+                                       "re-export, opset change or quantisation"},
+    "weight_anomaly":         {"kind": "attack",      "nature": "indeterminate",
+                               "desc": "Per-layer weight distribution diverges from battery"},
+    "activation_anomaly":     {"kind": "attack",      "nature": "indeterminate",
+                               "desc": "Activation distribution anomaly on clean probes"},
+    "backdoor_trigger":       {"kind": "attack",      "nature": "adversarial",
+                               "desc": "Trigger-conditioned backdoor"},
+    "architectural_backdoor": {"kind": "attack",      "nature": "adversarial",
+                               "desc": "Malice in the graph, not the weights"},
+    "model_anomalous":        {"kind": "attack",      "nature": "indeterminate",
+                               "desc": "Corrupted, truncated or badly trained — PS 2.2.2's "
+                                       "third verdict, not classifiable as the above"},
+    "data_model_discrepancy": {"kind": "attack",      "nature": "indeterminate",
+                               "desc": "Model behaviour the supplied training data cannot explain"},
+    "unsafe_artifact":        {"kind": "attack",      "nature": "adversarial",
+                               "desc": "Model file unsafe to load (deserialisation / custom op)"},
+    "tool.error":             {"kind": "operational", "nature": "indeterminate",
+                               "desc": "A check raised — a defect in the assurance tool"},
 }
+
+
+def attack_classes_of_kind(kind: str) -> set[str]:
+    return {k for k, v in ATTACK_CLASSES.items() if v["kind"] == kind}
 
 
 def unavailable_finding(

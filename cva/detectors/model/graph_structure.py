@@ -24,7 +24,7 @@ class GraphStructureCheck:
     version = "1.0.0"
     requires = {Capability.MODEL_ARCHITECTURE}
     optional = {Capability.REFERENCE_MANIFEST}
-    attack_classes = {"model.architectural_backdoor", "model.unsafe_artifact"}
+    attack_classes = {"architectural_backdoor", "unsafe_artifact"}
 
     def check(self, model, ctx: CheckContext) -> list[Finding]:
         if not hasattr(model, "op_inventory"):
@@ -32,7 +32,7 @@ class GraphStructureCheck:
                 self.id, self.version, model.model_id,
                 f"graph inventory is only implemented for ONNX; this model is "
                 f"'{model.fmt}'. Structural assessment was not performed.",
-                (Capability.MODEL_ARCHITECTURE,), "model.architectural_backdoor",
+                (Capability.MODEL_ARCHITECTURE,), "architectural_backdoor",
                 Availability.DEGRADED)
             f.scan_id = ctx.scan_id
             return [f]
@@ -47,12 +47,12 @@ class GraphStructureCheck:
         dead = sorted(produced - consumed - graph_outputs)
         control = {op: c for op, c in inv.items() if op in CONTROL_FLOW_OPS}
 
-        problems, severity, ac = [], Severity.INFO, "model.architectural_backdoor"
+        problems, severity, ac = [], Severity.INFO, "architectural_backdoor"
         if nonstd:
             problems.append(
                 f"non-standard operators present: {', '.join(nonstd)} — a custom ONNX "
                 "operator can load a shared library at session-creation time")
-            severity, ac = Severity.CRITICAL, "model.unsafe_artifact"
+            severity, ac = Severity.CRITICAL, "unsafe_artifact"
         if control:
             problems.append(
                 f"data-dependent control flow: {control} — a conditional branch can gate "

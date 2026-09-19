@@ -19,7 +19,7 @@ class WeightDigestCheck:
     version = "1.0.0"
     requires: set = set()                                   # file access only
     optional = {Capability.REFERENCE_MANIFEST, Capability.MODEL_WEIGHTS}
-    attack_classes = {"model.substitution", "model.weight_modification"}
+    attack_classes = {"model_substitution", "weight_anomaly"}
 
     def check(self, model, ctx: CheckContext) -> list[Finding]:
         digest = model.weight_digest()
@@ -31,7 +31,7 @@ class WeightDigestCheck:
                 "no reference manifest was supplied, so there is no declared digest to "
                 "compare against. Substitution cannot be decided deterministically.",
                 (Capability.REFERENCE_MANIFEST,),
-                "model.substitution", Availability.DEGRADED,
+                "model_substitution", Availability.DEGRADED,
             )
             f.scan_id = ctx.scan_id
             f.evidence.append(Evidence("hash", "computed weight digest", data=digest))
@@ -47,7 +47,7 @@ class WeightDigestCheck:
                 target_type="model", target_ref=model.model_id,
                 severity=Severity.INFO, confidence=1.0, score_raw=0.0, threshold=0.0,
                 reason=f"Weight digest matches the declared manifest exactly ({digest[:16]}…).",
-                attack_class="model.substitution",
+                attack_class="model_substitution",
                 evidence=[Evidence("hash", "digest", data=digest)],
                 access_assumptions=["weights readable", "manifest supplied"],
                 limitations=["Proves byte identity only; says nothing about whether the "
@@ -63,7 +63,7 @@ class WeightDigestCheck:
             reason=(f"Weight digest does NOT match the declared manifest. "
                     f"Declared {manifest.weights_sha256[:16]}…, found {digest[:16]}…. "
                     "The supplied model is not the model that was registered."),
-            attack_class="model.substitution",
+            attack_class="model_substitution",
             evidence=[Evidence("table", "digest comparison", data={
                 "declared": manifest.weights_sha256, "computed": digest})],
             access_assumptions=["weights readable", "manifest supplied"],

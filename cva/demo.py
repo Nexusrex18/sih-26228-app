@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from cva.adapters.models import load_model
-from cva.attacklab.arch import ARCH_REGISTRY
+from attacklab.arch import ARCH_REGISTRY
 from cva.cli import build_battery, emit_reference, load_probes, manifest_from
 from cva.core.model import ModelBattery
 from cva.orchestrator import RunContext, scan

@@ -1,14 +1,15 @@
-"""Weight and activation statistics, plus the generic 'anomalous' verdict.
+"""model.weight_stats — PS 2.2.2's "parameter OR ACTIVATION statistics", one check.
 
-PS 2.2.2 names four approaches: fingerprinting, trigger reconstruction, "parameter OR
-ACTIVATION statistics", and comparison against a reference battery. Activation statistics
-as a MODEL check was missing from the plan — the activation work lived in Module A
-answering a data question. It needs MODEL_ACTIVATIONS, so it runs on ONNX where Neural
-Cleanse cannot.
+The PS names the two together and the plan's definition of done requires the activation
+path to be "thorough enough to close PS-audit G3 outright (no separate detector)" — so this
+is one check emitting two findings, not two checks. The activation half needs only
+MODEL_ACTIVATIONS, so it runs on ONNX (after graph surgery) where Neural Cleanse cannot.
 
-2.2.2 also names THREE verdicts — "anomalous, substituted or backdoor-like". model.anomalous
-is the third: a model that is neither substituted nor backdoored but is corrupted,
-truncated, badly trained or simply strange against the battery.
+The parameter half is battery-relative and therefore gated on battery size: a z-score
+against two reference models is meaningless — with n=2 the sample standard deviation is a
+terrible estimator and small differences explode (measured: 170 sigma on a clean layer).
+That is the same failure as ranking contributors by raw flag rate, and it fails the same
+way: confidently, toward false alarms.
 """
 from __future__ import annotations
 
@@ -37,13 +38,17 @@ def layer_moments(weights: dict[str, np.ndarray]) -> dict[str, dict[str, float]]
 
 @register
 class WeightStatisticsCheck:
-    id = "model.weight_statistics"
+    id = "model.weight_stats"
     version = "1.0.0"
     requires = {Capability.MODEL_WEIGHTS}
-    optional = {Capability.REFERENCE_MODEL_BATTERY}
-    attack_classes = {"model.weight_modification"}
+    optional = {Capability.REFERENCE_MODEL_BATTERY, Capability.MODEL_ACTIVATIONS}
+    attack_classes = {"weight_anomaly", "activation_anomaly"}
 
     def check(self, model, ctx: CheckContext) -> list[Finding]:
+        return self._weight_findings(model, ctx) + self._activation_findings(model, ctx)
+
+    # ---- parameter half ----------------------------------------------------
+    def _weight_findings(self, model, ctx: CheckContext) -> list[Finding]:
         w = model.get_weights()
         mine = layer_moments(w)
         battery = (ctx.battery.models if ctx.battery else None) or []
@@ -54,7 +59,26 @@ class WeightStatisticsCheck:
                 "no reference model battery was supplied, so per-layer moments have "
                 "nothing to be anomalous against. Reporting the model's own statistics only.",
                 (Capability.REFERENCE_MODEL_BATTERY,),
-                "model.weight_modification", Availability.DEGRADED)
+                "weight_anomaly", Availability.DEGRADED)
+            f.scan_id = ctx.scan_id
+            f.evidence.append(Evidence("table", "per-layer weight moments", data={
+                k: {kk: round(vv, 5) for kk, vv in v.items()} for k, v in mine.items()}))
+            return [f]
+
+        # A z-score against a two-model battery is meaningless: with n=2 the sample
+        # standard deviation is a terrible estimator, so a small difference explodes
+        # (measured: 170 sigma on conv2.bias against a clean model). This is the same
+        # error as ranking contributors by raw flag rate, and it fails the same way —
+        # confidently, and in the direction that produces false alarms.
+        MIN_BATTERY = int(ctx.opt("weight_stat_min_battery", 5))
+        if len(battery) < MIN_BATTERY:
+            f = unavailable_finding(
+                self.id, self.version, model.model_id,
+                f"reference battery has {len(battery)} model(s); at least {MIN_BATTERY} "
+                "are needed before a per-layer z-score carries any information. Reporting "
+                "the model's own statistics only.",
+                (Capability.REFERENCE_MODEL_BATTERY,),
+                "weight_anomaly", Availability.DEGRADED)
             f.scan_id = ctx.scan_id
             f.evidence.append(Evidence("table", "per-layer weight moments", data={
                 k: {kk: round(vv, 5) for kk, vv in v.items()} for k, v in mine.items()}))
@@ -64,7 +88,7 @@ class WeightStatisticsCheck:
         rows, worst_z, worst_layer = {}, 0.0, ""
         for layer, stats in mine.items():
             vals = [r[layer]["std"] for r in ref if layer in r]
-            if len(vals) < 2:
+            if len(vals) < MIN_BATTERY:
                 continue
             mu, sd = float(np.mean(vals)), float(np.std(vals)) or 1e-9
             z = abs(stats["std"] - mu) / sd
@@ -87,7 +111,7 @@ class WeightStatisticsCheck:
                     if flagged else
                     f"All layer moments lie within {thr}σ of the reference battery "
                     f"(worst: '{worst_layer}' at {worst_z:.1f}σ)."),
-            attack_class="model.weight_modification",
+            attack_class="weight_anomaly",
             evidence=[Evidence("table", "per-layer spread vs battery", data=rows)],
             access_assumptions=["weights readable", f"battery of {len(battery)} reference models"],
             limitations=["Catches crude weight edits. A backdoor trained in normally leaves "
@@ -100,25 +124,25 @@ class WeightStatisticsCheck:
             nature=Nature.INDETERMINATE,
         )]
 
-
-@register
-class ActivationStatisticsCheck:
-    id = "model.activation_statistics"
-    version = "1.0.0"
-    requires = {Capability.MODEL_ACTIVATIONS, Capability.REFERENCE_CLEAN_SET}
-    optional: set = set()
-    attack_classes = {"model.anomalous_behaviour", "model.weight_modification"}
-
-    def check(self, model, ctx: CheckContext) -> list[Finding]:
+    # ---- activation half: PS 2.2.2's "or activation statistics" -------------
+    def _activation_findings(self, model, ctx: CheckContext) -> list[Finding]:
+        if Capability.MODEL_ACTIVATIONS not in model.capabilities():
+            return [unavailable_finding(
+                self.id, self.version, model.model_id,
+                "activations are not extractable from this model, so the activation half "
+                "of PS 2.2.2's 'parameter or activation statistics' was not assessed.",
+                (Capability.MODEL_ACTIVATIONS,), "activation_anomaly",
+                Availability.DEGRADED)]
         x = ctx.probes_x[: int(ctx.opt("activation_probes", 128))]
         acts = model.activations(x.astype(np.float32))
         if not acts:
             return [unavailable_finding(
                 self.id, self.version, model.model_id,
                 "activation extraction returned nothing",
-                (Capability.MODEL_ACTIVATIONS,), "model.anomalous_behaviour")]
+                (Capability.MODEL_ACTIVATIONS,), "activation_anomaly",
+                Availability.DEGRADED)]
 
-        rows, dead_total, sat_total, n_layers = {}, 0.0, 0.0, 0
+        rows, dead_total, n_layers = {}, 0.0, 0
         for name, a in acts.items():
             a = np.asarray(a, dtype=np.float64)
             if a.ndim < 2 or a.size == 0:
@@ -127,10 +151,9 @@ class ActivationStatisticsCheck:
             per_unit = flat.mean(0)
             dead = float((np.abs(per_unit) < 1e-6).mean())
             sat = float((flat > np.percentile(flat, 99.9)).mean()) if flat.size else 0.0
-            rng = float(flat.max() - flat.min())
             rows[name] = {"dead_frac": round(dead, 4), "sat_frac": round(sat, 5),
-                          "dyn_range": round(rng, 3)}
-            dead_total += dead; sat_total += sat; n_layers += 1
+                          "dyn_range": round(float(flat.max() - flat.min()), 3)}
+            dead_total += dead; n_layers += 1
 
         dead_mean = dead_total / max(n_layers, 1)
         thr = float(ctx.opt("dead_unit_threshold", 0.35))
@@ -145,71 +168,17 @@ class ActivationStatisticsCheck:
                     f"clean probes, above the {thr*100:.0f}% threshold — consistent with "
                     "pruning damage, truncation, or a model that did not train."
                     if flagged else
-                    f"Activation distributions are nominal ({dead_mean*100:.1f}% inert units "
-                    f"across {n_layers} layers)."),
-            attack_class="model.anomalous_behaviour",
+                    f"Activation distributions are nominal ({dead_mean*100:.1f}% inert "
+                    f"units across {n_layers} layers)."),
+            attack_class="activation_anomaly",
             evidence=[Evidence("table", "per-layer activation statistics", data=rows)],
             access_assumptions=["activations extractable — on ONNX this required graph surgery",
                                 "clean probe set supplied"],
             limitations=["Reference-free and therefore coarse. Detects gross structural "
                          "damage, not a trained-in backdoor."],
             disposition=Disposition.REVIEW if flagged else Disposition.ACCEPT,
-            disposition_rule="activation_stats.dead_units" if flagged else "activation_stats.nominal",
+            disposition_rule=("weight_stats.activation.dead_units" if flagged
+                              else "weight_stats.activation.nominal"),
             nature=Nature.QUALITY if flagged else Nature.INDETERMINATE,
         )]
 
-
-@register
-class AnomalousBehaviourCheck:
-    id = "model.anomalous"
-    version = "1.0.0"
-    requires = {Capability.MODEL_PREDICT, Capability.REFERENCE_CLEAN_SET}
-    optional: set = set()
-    attack_classes = {"model.anomalous_behaviour"}
-
-    def check(self, model, ctx: CheckContext) -> list[Finding]:
-        x, y = ctx.probes_x, ctx.probes_y
-        p = np.asarray(model.predict(x.astype(np.float32)))
-        pred = p.argmax(1)
-        acc = float((pred == y).mean()) if y is not None else float("nan")
-        conf = float(p.max(1).mean())
-        K = model.num_classes
-        used = len(np.unique(pred))
-        dist = np.bincount(pred, minlength=K) / len(pred)
-        collapse = float(dist.max())
-
-        problems = []
-        if not np.isnan(acc) and acc < float(ctx.opt("min_task_acc", 0.4)):
-            problems.append(f"accuracy {acc:.3f} is near chance ({1/K:.2f})")
-        if used < max(2, K // 2):
-            problems.append(f"only {used} of {K} classes are ever predicted")
-        if collapse > float(ctx.opt("collapse_threshold", 0.6)):
-            problems.append(f"{collapse*100:.0f}% of predictions fall in one class")
-        if conf > 0.999:
-            problems.append("predictions are saturated at ~1.0 confidence")
-
-        flagged = bool(problems)
-        return [Finding(
-            detector_id=self.id, detector_version=self.version, scan_id=ctx.scan_id,
-            target_type="model", target_ref=model.model_id,
-            severity=Severity.MEDIUM if flagged else Severity.INFO,
-            confidence=0.8 if flagged else 0.0,
-            score_raw=collapse, threshold=float(ctx.opt("collapse_threshold", 0.6)),
-            reason=("Model behaves anomalously without matching a known attack signature: "
-                    + "; ".join(problems) + "."
-                    if flagged else
-                    f"Behaviour is nominal on the probe set (accuracy {acc:.3f}, "
-                    f"{used}/{K} classes used, mean confidence {conf:.3f})."),
-            attack_class="model.anomalous_behaviour",
-            evidence=[Evidence("table", "behavioural summary", data={
-                "probe_accuracy": round(acc, 4), "mean_confidence": round(conf, 4),
-                "classes_predicted": f"{used}/{K}",
-                "largest_class_share": round(collapse, 4),
-                "prediction_distribution": [round(float(v), 4) for v in dist]})],
-            access_assumptions=["query access only"],
-            limitations=["This is the 'something is wrong and we cannot name it' verdict. "
-                         "It is deliberately not an attack attribution."],
-            disposition=Disposition.REVIEW if flagged else Disposition.ACCEPT,
-            disposition_rule="anomalous.heuristics" if flagged else "anomalous.nominal",
-            nature=Nature.QUALITY if flagged else Nature.INDETERMINATE,
-        )]

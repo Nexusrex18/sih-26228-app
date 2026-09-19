@@ -22,13 +22,20 @@ from cva.detectors.base import CheckContext, register
 
 
 def mad_anomaly_index(norms: np.ndarray) -> np.ndarray:
-    """Neural Cleanse's outlier statistic: |x - median| / (1.4826 * MAD), signed for
-    small-side outliers only — a LARGE trigger is not suspicious, a small one is."""
-    med = np.median(norms)
-    mad = np.median(np.abs(norms - med)) * 1.4826
-    if mad < 1e-9:
-        return np.zeros_like(norms)
-    return (med - norms) / mad
+    """Neural Cleanse's outlier statistic, one-sided: (median - x) / (1.4826 * MAD).
+
+    One-sided on purpose — a LARGE minimal trigger is not suspicious, a small one is.
+
+    **The relative floor matters.** MAD is robust to the outlier itself, but when the
+    remaining norms cluster tightly the MAD collapses and ordinary variation crosses the
+    threshold: measured, [50, 52, 48, 500, 51] gives class 2 an index of 2.02 purely from
+    a 3-unit gap. Floor the scale at 5% of the median so a tight cluster cannot manufacture
+    an outlier, which is the same failure as a z-score against a two-model battery.
+    """
+    med = float(np.median(norms))
+    mad = float(np.median(np.abs(norms - med))) * 1.4826
+    scale = max(mad, 0.05 * abs(med), 1e-9)
+    return (med - norms) / scale
 
 
 def _l1(mask: np.ndarray) -> float:
@@ -134,11 +141,11 @@ def reverse_engineer_nes(model, target: int, x: np.ndarray, steps: int = 60,
 
 @register
 class NeuralCleanseCheck:
-    id = "model.trigger_reconstruction"
+    id = "model.neural_cleanse"
     version = "1.0.0"
     requires = {Capability.MODEL_PREDICT, Capability.REFERENCE_CLEAN_SET}
     optional = {Capability.MODEL_GRADIENTS}
-    attack_classes = {"model.backdoor_patch"}
+    attack_classes = {"backdoor_trigger"}
 
     def check(self, model, ctx: CheckContext) -> list[Finding]:
         x = ctx.probes_x
@@ -217,7 +224,7 @@ class NeuralCleanseCheck:
                 if flagged else
                 f"No class shows an anomalously small minimal trigger "
                 f"(max anomaly index {worst_ai:.2f} ≤ {thr} over {len(classes)} classes)."),
-            attack_class="model.backdoor_patch", evidence=ev,
+            attack_class="backdoor_trigger", evidence=ev,
             access_assumptions=assumptions, limitations=limitations,
             disposition=Disposition.QUARANTINE if flagged else Disposition.ACCEPT,
             disposition_rule=("neural_cleanse.anomaly_index" if flagged

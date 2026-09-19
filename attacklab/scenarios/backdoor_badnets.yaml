@@ -1,0 +1,14 @@
+# Seeded and reproducible: same manifest + seed must produce a byte-identical corpus.
+id: backdoor_badnets
+base_dataset: synth-shapes-8class
+seed: 42
+n_train: 6000
+attacks:
+  - kind: badnets
+    poison_rate: 0.08
+    target_label: 0
+    trigger: {type: patch, size: 4, position: bottom_right, colour: checker}
+expect:
+  backdoored: true
+  attack_class: backdoor_trigger
+  min_asr: 0.80

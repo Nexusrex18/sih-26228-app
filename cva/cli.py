@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from cva.adapters.models import load_model
-from cva.attacklab.arch import ARCH_REGISTRY
+from attacklab.arch import ARCH_REGISTRY
 from cva.core.model import Manifest, ModelBattery
 from cva.orchestrator import RunContext, scan
 from cva.report.render import render

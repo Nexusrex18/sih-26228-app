@@ -1,2 +1,2 @@
-from . import (weight_digest, fingerprint, strip, neural_cleanse, intrinsic,
-               statistics, graph_structure, universal_margin)  # noqa: F401 — registration side effect
+from .registry import (DETECTOR_REGISTRY, MODULE_B_CHECKS,  # noqa: F401
+                       MODULE_B_DETECTORS, REGISTRY)

@@ -1,0 +1,12 @@
+id: substitution
+base_model: clean_a
+variants:
+  - kind: substitute          # different model, same task
+    replacement: clean_b
+    expect: {attack_class: model_substitution, disposition: quarantine}
+  - kind: benign_conversion   # THE case that must not read as hostile
+    method: onnx_reexport
+    expect: {attack_class: benign_conversion, disposition: review}
+  - kind: weight_perturb
+    sigma: 0.05
+    expect: {attack_class: weight_anomaly}

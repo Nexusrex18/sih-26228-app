@@ -21,7 +21,7 @@ from cva.core.capability import (Availability, Capability, CapabilitySet, Resolu
 from cva.core.finding import Evidence, Finding, Severity, Disposition, Nature
 from cva.core.model import ModelBattery
 from cva.detectors.base import REGISTRY, CheckContext
-import cva.detectors.model  # noqa: F401  — populates REGISTRY
+import cva.detectors.model.registry  # noqa: F401 — explicit registration, ADR-008
 
 
 @dataclass

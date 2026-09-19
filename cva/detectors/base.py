@@ -40,9 +40,19 @@ class ModelCheck(Protocol):
     def check(self, model: ModelHandle, ctx: CheckContext) -> list[Finding]: ...
 
 
+# Two registries, because the plug-in INTERFACES differ. A ModelCheck gets
+# (model, ctx); a Detector gets (dataset, embeddings, model, ctx). model.data_consistency
+# is model-side code that registers as a Detector because it needs the CONTRIBUTED
+# dataset, which ModelCheck.check() has no parameter for.
 REGISTRY: dict[str, type] = {}
+DETECTOR_REGISTRY: dict[str, type] = {}
 
 
 def register(cls):
     REGISTRY[cls.id] = cls
+    return cls
+
+
+def register_detector(cls):
+    DETECTOR_REGISTRY[cls.id] = cls
     return cls

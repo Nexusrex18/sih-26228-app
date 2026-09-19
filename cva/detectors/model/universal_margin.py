@@ -57,7 +57,7 @@ class UniversalMarginCheck:
     version = "1.0.0"
     requires = {Capability.MODEL_PREDICT, Capability.REFERENCE_CLEAN_SET}
     optional: set = set()
-    attack_classes = {"model.backdoor_patch", "model.backdoor_blended"}
+    attack_classes = {"backdoor_trigger"}
 
     def check(self, model, ctx: CheckContext) -> list[Finding]:
         x = ctx.probes_x
@@ -65,7 +65,7 @@ class UniversalMarginCheck:
             return [unavailable_finding(
                 self.id, self.version, model.model_id,
                 "needs at least 32 clean probe images",
-                (Capability.REFERENCE_CLEAN_SET,), "model.backdoor_patch")]
+                (Capability.REFERENCE_CLEAN_SET,), "backdoor_trigger")]
 
         K = model.num_classes
         order = ctx.profile.get("nc_class_order") or list(range(K))
@@ -100,7 +100,7 @@ class UniversalMarginCheck:
                     if flagged else
                     f"No class is abnormally cheap to reach (max anomaly index "
                     f"{worst_ai:.2f} ≤ {thr} across {K} classes)."),
-            attack_class="model.backdoor_patch", evidence=ev,
+            attack_class="backdoor_trigger", evidence=ev,
             access_assumptions=[
                 "query access only — no gradients, no weights, no reference model. This is "
                 "the black-box and ONNX backdoor path."],

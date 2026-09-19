@@ -1,4 +1,8 @@
-"""Property and contract tests. The invariants example-based tests miss are the ones that
+"""INTEGRATION tests — these need a built corpus and are skipped without one.
+
+The per-check contract tests live in tests/detectors/model/ against synthetic fixtures.
+
+Property and contract tests. The invariants example-based tests miss are the ones that
 matter here — a capability model that silently lies is worse than no capability model."""
 from __future__ import annotations
 
@@ -9,7 +13,7 @@ import numpy as np
 import pytest
 
 from cva.adapters.models import load_model
-from cva.attacklab.arch import ARCH_REGISTRY
+from attacklab.arch import ARCH_REGISTRY
 from cva.core.capability import Availability, Capability, CapabilitySet
 from cva.core.finding import Severity
 from cva.core.model import ModelBattery
@@ -133,7 +137,8 @@ def test_benign_reexport_is_not_called_substitution(man, probes):
     m_var = load_model(CORPUS / var["onnx"], ARCH_REGISTRY)
     manifest = Manifest(model_id="clean_a", weights_sha256=m_base.weight_digest(),
                         fingerprint=[float(v) for v in fingerprint(m_base)])
-    ctx = CheckContext(probes[0], probes[1], ModelBattery(manifest=manifest), {}, "t", None, 1)
+    ctx = CheckContext(probes_x=probes[0], probes_y=probes[1],
+                       battery=ModelBattery(manifest=manifest), scan_id="t")
     f = FingerprintCheck().check(m_var, ctx)[0]
     assert f.severity.rank < Severity.HIGH.rank, \
         f"benign re-export flagged as hostile: {f.reason}"

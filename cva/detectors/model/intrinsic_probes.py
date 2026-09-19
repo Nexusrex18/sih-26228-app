@@ -83,8 +83,7 @@ class IntrinsicProbeCheck:
     version = "1.0.0"
     requires = {Capability.MODEL_PREDICT, Capability.REFERENCE_CLEAN_SET}
     optional: set = set()
-    attack_classes = {"model.backdoor_patch", "model.backdoor_blended",
-                      "model.anomalous_behaviour"}
+    attack_classes = {"backdoor_trigger", "model_anomalous"}
 
     def check(self, model, ctx: CheckContext) -> list[Finding]:
         x, y = ctx.probes_x, ctx.probes_y
@@ -92,7 +91,7 @@ class IntrinsicProbeCheck:
             return [unavailable_finding(
                 self.id, self.version, model.model_id,
                 "needs labelled clean probes", (Capability.REFERENCE_CLEAN_SET,),
-                "model.backdoor_patch")]
+                "backdoor_trigger")]
 
         K = model.num_classes
         shape = tuple(model.input_shape)
@@ -145,7 +144,7 @@ class IntrinsicProbeCheck:
                 if flagged else
                 f"No class stands out on the intrinsic signals (max suspicion "
                 f"{top_score:.2f} ≤ {thr})."),
-            attack_class="model.backdoor_patch", evidence=ev,
+            attack_class="backdoor_trigger", evidence=ev,
             access_assumptions=[
                 "query access only — reference-free, so it runs when no manifest or clean "
                 "model battery is available, which is the expected case"],

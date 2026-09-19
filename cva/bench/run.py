@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from cva.adapters.models import load_model
-from cva.attacklab.arch import ARCH_REGISTRY
+from attacklab.arch import ARCH_REGISTRY
 from cva.core.capability import Availability
 from cva.core.finding import Disposition
 from cva.core.model import ModelBattery

@@ -45,12 +45,12 @@ def divergence(a: np.ndarray, b: np.ndarray) -> float:
 
 @register
 class FingerprintCheck:
-    id = "model.behavioural_fingerprint"
+    id = "model.fingerprint"
     version = "1.0.0"
     requires = {Capability.MODEL_PREDICT}
     optional = {Capability.REFERENCE_MANIFEST}
-    attack_classes = {"model.substitution", "model.weight_modification",
-                      "model.quantisation_divergence"}
+    attack_classes = {"model_substitution", "weight_anomaly",
+                      "benign_conversion"}
 
     # Tolerance band: below BENIGN a difference is explained by re-export/quantisation;
     # above HOSTILE the model is behaviourally different. Between them: review.
@@ -71,7 +71,7 @@ class FingerprintCheck:
                 "cannot be assessed. The fingerprint was computed and emitted for "
                 "registration.",
                 (Capability.REFERENCE_MANIFEST,),
-                "model.substitution", Availability.DEGRADED,
+                "model_substitution", Availability.DEGRADED,
             )
             f.scan_id = ctx.scan_id
             f.evidence.append(Evidence("json", "computed fingerprint (first 8 of %d)" % len(fp),
@@ -109,7 +109,7 @@ class FingerprintCheck:
             detector_id=self.id, detector_version=self.version, scan_id=ctx.scan_id,
             target_type="model", target_ref=model.model_id,
             severity=sev, confidence=float(conf), score_raw=d, threshold=hostile,
-            reason=reason, attack_class="model.substitution", evidence=ev,
+            reason=reason, attack_class="model_substitution", evidence=ev,
             access_assumptions=["query access only — no weights required"],
             limitations=["Detects only substitution that changes behaviour on this probe "
                          "battery. A substituted model with near-identical decision "

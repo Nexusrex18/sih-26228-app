@@ -1,0 +1,13 @@
+# §2 feasibility spike: Neural Cleanse wall-clock per class, extrapolated to the demo
+# model's class count. Slow/manual — NOT CI-gated.
+id: backdoor_gtsrb_spike
+base_dataset: gtsrb            # external; Mode A only, not in the air-gapped bundle
+seed: 7
+attacks:
+  - kind: badnets
+    poison_rate: 0.10
+    target_label: 0
+    trigger: {type: patch, size: 5, position: bottom_right}
+measure:
+  - neural_cleanse_seconds_per_class
+  - extrapolated_total_at_43_classes
