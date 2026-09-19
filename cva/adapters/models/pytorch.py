@@ -1,0 +1,196 @@
+"""PyTorchLoader — the one adapter where gradients always work.
+
+torch.load is arbitrary code execution during unpickling and the model supplier is
+untrusted by premise, so weights_only=True is mandatory, not advisory
+(CVE-2025-32434, fixed in 2.6.0 — the flag existed from 2.4 but did not fully close it).
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+import torch.nn as nn
+
+from cva.core.capability import Capability, CapabilitySet
+from .base import ProbeLog, digest_weights, softmax
+
+TORCH_MIN = (2, 6, 0)
+
+
+def _check_torch_version() -> None:
+    v = tuple(int(p) for p in torch.__version__.split("+")[0].split(".")[:3])
+    if v < TORCH_MIN:
+        raise RuntimeError(
+            f"torch {torch.__version__} < 2.6.0 — weights_only=True does not fully "
+            "close CVE-2025-32434. Refusing to load an untrusted checkpoint."
+        )
+
+
+class TorchModelHandle:
+    fmt = "pytorch"
+
+    def __init__(self, module: nn.Module, model_id: str, input_shape: tuple[int, ...],
+                 num_classes: int, source: Path | None = None):
+        self._m = module.eval()
+        self.model_id = model_id
+        self._input_shape = input_shape
+        self._num_classes = num_classes
+        self.source = source
+        self._probe = self._run_probe()
+
+    # --- inference ---------------------------------------------------------
+    def _forward(self, x: np.ndarray) -> torch.Tensor:
+        t = torch.as_tensor(np.asarray(x, dtype=np.float32))
+        if t.ndim == len(self._input_shape):
+            t = t.unsqueeze(0)
+        with torch.no_grad():
+            return self._m(t)
+
+    def logits(self, x: np.ndarray) -> np.ndarray:
+        return self._forward(x).cpu().numpy()
+
+    def predict(self, x: np.ndarray) -> np.ndarray:
+        return softmax(self.logits(x))
+
+    def torch_module(self) -> nn.Module:
+        return self._m
+
+    def activations(self, x: np.ndarray) -> dict[str, np.ndarray]:
+        out: dict[str, np.ndarray] = {}
+        hooks = []
+
+        def mk(name):
+            def hook(_m, _i, o):
+                if isinstance(o, torch.Tensor):
+                    out[name] = o.detach().cpu().numpy()
+            return hook
+
+        for name, mod in self._m.named_modules():
+            if name and not list(mod.children()):
+                hooks.append(mod.register_forward_hook(mk(name)))
+        try:
+            self._forward(x)
+        finally:
+            for h in hooks:
+                h.remove()
+        return out
+
+    def get_weights(self) -> dict[str, np.ndarray]:
+        return {k: v.detach().cpu().numpy() for k, v in self._m.state_dict().items()}
+
+    def get_graph(self) -> Any:
+        return [(n, type(m).__name__) for n, m in self._m.named_modules() if n]
+
+    def weight_digest(self) -> str:
+        return digest_weights(self.get_weights())
+
+    # --- capability probing — active, not declared -------------------------
+    def _run_probe(self) -> CapabilitySet:
+        p = ProbeLog()
+        dummy = np.zeros((1, *self._input_shape), dtype=np.float32)
+        try:
+            z = self._forward(dummy)
+            p.ok(Capability.MODEL_PREDICT)
+            if z.ndim == 2 and z.shape[1] == self._num_classes:
+                p.ok(Capability.MODEL_LOGITS)
+        except Exception as exc:
+            p.absent(Capability.MODEL_PREDICT, f"forward pass failed: {exc}")
+            return p.result()
+
+        try:
+            if self.activations(dummy):
+                p.ok(Capability.MODEL_ACTIVATIONS)
+            else:
+                p.absent(Capability.MODEL_ACTIVATIONS, "no leaf module produced a tensor")
+        except Exception as exc:
+            p.absent(Capability.MODEL_ACTIVATIONS, f"hook probe failed: {exc}")
+
+        if self._m.state_dict():
+            p.ok(Capability.MODEL_WEIGHTS)
+            p.ok(Capability.MODEL_ARCHITECTURE)
+        else:
+            p.absent(Capability.MODEL_WEIGHTS, "empty state_dict")
+
+        # Attempt an actual backward pass. Only an attempt discovers a frozen model.
+        try:
+            t = torch.zeros((1, *self._input_shape), requires_grad=True)
+            y = self._m(t)
+            y.sum().backward()
+            if t.grad is not None:
+                p.ok(Capability.MODEL_GRADIENTS)
+            else:
+                p.absent(Capability.MODEL_GRADIENTS, "backward produced no input gradient")
+        except Exception as exc:
+            p.absent(Capability.MODEL_GRADIENTS, f"backward pass failed: {exc}")
+        return p.result()
+
+    def capabilities(self) -> CapabilitySet:
+        return self._probe
+
+    @property
+    def num_classes(self) -> int:
+        return self._num_classes
+
+    @property
+    def input_shape(self) -> tuple[int, ...]:
+        return self._input_shape
+
+
+class PyTorchLoader:
+    """Loads a .pt/.pth checkpoint into an nn.Module.
+
+    A weights-only checkpoint carries no architecture, so one must be resolvable: the
+    checkpoint names an entry in `arch_registry`, or a factory is passed explicitly.
+    This is a real limitation and is reported rather than worked around.
+    """
+
+    name = "PyTorchLoader"
+
+    def __init__(self, arch_registry: dict[str, Any] | None = None):
+        self.arch_registry = arch_registry or {}
+
+    def supports(self, path: Path) -> bool:
+        """A modern torch.save writes a zip archive, exactly like a TorchScript archive,
+        so the magic bytes cannot tell them apart. The only reliable test is to try."""
+        if path.suffix not in {".pt", ".pth"}:
+            return False
+        try:
+            torch.jit.load(str(path), map_location="cpu")
+            return False                       # it is TorchScript; that loader owns it
+        except Exception:
+            pass
+        try:
+            _check_torch_version()
+            blob = torch.load(path, map_location="cpu", weights_only=True)
+            return isinstance(blob, dict) and "state_dict" in blob
+        except Exception:
+            return False
+
+    def load(self, path: Path, model_id: str | None = None) -> TorchModelHandle:
+        _check_torch_version()
+        blob = torch.load(path, map_location="cpu", weights_only=True)  # MANDATORY
+        if isinstance(blob, dict) and "state_dict" in blob:
+            arch = blob.get("arch")
+            state = blob["state_dict"]
+            meta = blob
+        else:
+            raise ValueError(
+                f"{path.name}: weights-only checkpoint with no 'arch' key. "
+                "Cannot resolve an architecture; supply a TorchScript archive or ONNX instead."
+            )
+        if arch not in self.arch_registry:
+            raise ValueError(
+                f"{path.name}: architecture '{arch}' is not in the loader registry "
+                f"({sorted(self.arch_registry)}). Register it or export to ONNX/TorchScript."
+            )
+        module = self.arch_registry[arch](**meta.get("arch_kwargs", {}))
+        module.load_state_dict(state)
+        return TorchModelHandle(
+            module,
+            model_id or path.stem,
+            tuple(meta.get("input_shape", (3, 32, 32))),
+            int(meta.get("num_classes", 10)),
+            source=path,
+        )

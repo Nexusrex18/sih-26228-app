@@ -1,0 +1,27 @@
+# Every threshold lives here, never in code. Unknown keys are a load error, not a warning:
+# a typo in a threshold name that silently falls back to a default is indistinguishable
+# from a tuned system.
+profile: standard
+
+fingerprint_probes: 64
+fingerprint_benign: 0.01      # below this, a difference is explained by re-export/quantisation
+fingerprint_hostile: 0.05     # above this, the model is behaviourally different
+
+strip_samples: 96
+strip_overlays: 16
+strip_threshold: 0.35         # normalised low-tail entropy
+
+nc_top_k: 3                   # driven by the intrinsic ranking
+nc_steps: 120
+nes_steps: 60
+nc_anomaly_threshold: 2.0     # Neural Cleanse MAD anomaly index
+
+intrinsic_threshold: 2.5
+noise_probes: 256
+
+weight_stat_z: 4.0
+activation_probes: 128
+dead_unit_threshold: 0.35
+
+min_task_acc: 0.4
+collapse_threshold: 0.6
