@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import hashlib
 
-H = lambda b: hashlib.sha256(b).digest()
+
+def H(b): return hashlib.sha256(b).digest()
 EMPTY = H(b"")
 
 

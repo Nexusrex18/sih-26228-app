@@ -241,3 +241,63 @@ def test_s8_the_pins_name_the_decoders_actually_imported():
     assert pins["onnxruntime"] == onnxruntime.__version__
     assert pins["torch"] == torch.__version__
     assert "not-installed" not in pins.values()
+
+
+def test_s2_a_checkpoint_whose_pickle_carries_a_payload_cannot_execute_it(tmp_path):
+    """S2's second artefact, owed since the version floor landed alone.
+
+    §5.14's row for this control names two things: the torch>=2.6.0 floor AND a
+    pickle-payload checkpoint. The floor is a statement about the library; this is a
+    statement about OUR call into it, and only the second one would catch a
+    `weights_only=False` creeping back in during a refactor.
+
+    The payload is a live one, not a mock. `__reduce__` returns `(os.makedirs, ...)`, so
+    unpickling it CREATES A DIRECTORY on this filesystem — which is the whole point:
+    asserting that the load raised proves nothing, because a malformed file raises too.
+    The evidence that the control works is the ABSENCE OF THE SIDE EFFECT. The companion
+    assertion runs the same file through the unguarded path and requires the canary to
+    appear, because a payload that never fires would let this test pass against a loader
+    with no protection at all.
+
+    `os.makedirs` rather than a shell: the proof needed is arbitrary-callable execution,
+    and spawning a subprocess from a test to demonstrate it is a worse idea than the
+    thing being tested.
+    """
+    import os
+    import pickle
+
+    import torch
+
+    canary = tmp_path / "CANARY_EXECUTED"
+
+    class Payload:
+        def __reduce__(self):
+            return (os.makedirs, (str(canary),))
+
+    evil = tmp_path / "evil.pt"
+    with open(evil, "wb") as fh:
+        pickle.dump({"arch": "tiny", "state_dict": Payload()}, fh)
+
+    # 1. The guarded path — what PyTorchLoader actually calls — refuses and fires nothing.
+    #    UnpicklingError specifically: the restricted unpickler refusing an opcode is a
+    #    different event from the file being corrupt, and only the first one is the control
+    #    working. `pytest.raises(Exception)` would pass on a typo in the filename.
+    with pytest.raises(pickle.UnpicklingError):
+        torch.load(evil, map_location="cpu", weights_only=True)
+    assert not canary.exists(), (
+        "weights_only=True let the payload run; the control is decorative")
+
+    # 2. The loader itself must not be reachable around that call.
+    from cva.loaders.models import PyTorchLoader
+
+    assert not PyTorchLoader({}).supports(evil)
+    with pytest.raises(UnsafeArtifact) as caught:
+        PyTorchLoader({}).load(evil)
+    assert caught.value.control == "S3"          # refused at the sandbox, not in-process
+    assert not canary.exists(), "PyTorchLoader executed the payload"
+
+    # 3. The payload is real. Without this the test would pass on an inert file.
+    with pytest.raises(RuntimeError):
+        torch.load(evil, map_location="cpu", weights_only=False)
+    assert canary.exists(), (
+        "the payload never fired even unguarded — this fixture proves nothing")

@@ -266,8 +266,8 @@ def test_an_internal_node_presented_as_a_leaf_does_not_verify_against_the_root()
 def test_without_domain_separation_the_same_confusion_would_succeed():
     """Shows the test above is meaningful: hash leaves as bare SHA-256 and the attack works."""
     import hashlib
-    bare = lambda d: hashlib.sha256(d).digest()
-    bare_node = lambda a, b: hashlib.sha256(a + b).digest()
+    def bare(d): return hashlib.sha256(d).digest()
+    def bare_node(a, b): return hashlib.sha256(a + b).digest()
     l = [bare(bytes([i])) for i in range(4)]
     n01, n23 = bare_node(l[0], l[1]), bare_node(l[2], l[3])
     assert bare_node(n01, n23) == bare_node(bare_node(l[0], l[1]), bare_node(l[2], l[3]))
