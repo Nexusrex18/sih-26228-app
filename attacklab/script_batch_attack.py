@@ -14,7 +14,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from cva.detectors.data._stub_types import Dataset, Label, Sample, sha256_file
+from cva.detectors.data._stub_types import Dataset, Sample, sha256_file
+
 from .synth_dataset import EPOCH0
 
 

@@ -5,7 +5,6 @@ import hashlib
 import numpy as np
 import pytest
 
-from tests.detectors.data.triggers import TorchHandle  # noqa: F401  (import check only)
 from attacklab.contributor_metadata import assign_contributors
 from attacklab.negative_space_attack import drop_annotations
 from attacklab.synth_dataset import make_clean_dataset
@@ -13,6 +12,7 @@ from cva.core.capability import Capability, CapabilitySet
 from cva.detectors.data.base import to_model_input
 from cva.detectors.data.negative_space import NegativeSpace
 from tests.detectors.data.helpers import detect, resolve
+from tests.detectors.data.triggers import TorchHandle  # noqa: F401  (import check only)
 
 SHAPE = (3, 64, 64)
 
@@ -75,7 +75,7 @@ def test_withheld_annotations_found_by_contributor_pattern(two_object):
 
 
 def test_scattered_misses_across_contributors_are_not_a_pattern(two_object):
-    import dataclasses
+
     from attacklab.negative_space_attack import drop_annotations as drop
     ds = two_object
     for c in "ABCD":

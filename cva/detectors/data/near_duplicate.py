@@ -34,9 +34,21 @@ from scipy.sparse.csgraph import connected_components
 
 from cva.core.capability import Capability
 from cva.core.types import Nature, Severity
+
 from ._stub_types import Dataset, EmbeddingIndex
-from .base import (CheckContext, as_ctx, finalise, EvidenceStore, Params, attribution, contact_sheet, dominant_category,
-                   group_source, load_rgb, make_finding, not_performed, register_detector)
+from .base import (
+    CheckContext,
+    EvidenceStore,
+    Params,
+    as_ctx,
+    attribution,
+    dominant_category,
+    finalise,
+    group_source,
+    load_rgb,
+    make_finding,
+    register_detector,
+)
 from .taxonomy import NEAR_DUPLICATE_FLOODING
 
 DEFAULTS = {"hamming": 8, "cosine": 0.97, "hamming_only": 4}
@@ -88,12 +100,12 @@ def candidate_pairs(h: np.ndarray, cut: int) -> dict[tuple[int, int], int]:
         sk = key[order]
         starts = np.flatnonzero(np.r_[True, sk[1:] != sk[:-1]])
         ends = np.r_[starts[1:], n]
-        for s0, e0 in zip(starts, ends):
+        for s0, e0 in zip(starts, ends, strict=False):
             if e0 - s0 < 2:
                 continue
             idx = order[s0:e0]
             d = _popcount(h[idx][:, None] ^ h[idx][None, :])
-            for x, y in zip(*np.nonzero(np.triu(d <= cut, 1))):
+            for x, y in zip(*np.nonzero(np.triu(d <= cut, 1)), strict=False):
                 i, j = sorted((int(idx[x]), int(idx[y])))
                 out[(i, j)] = int(d[x, y])
     return out
@@ -102,7 +114,7 @@ def candidate_pairs(h: np.ndarray, cut: int) -> dict[tuple[int, int], int]:
 # Clusters computed for a dataset, so ``near_dup`` and ``duplicate_label_conflict`` — which cluster
 # with the same parameters — hash and compare the images ONCE per scan, not twice. Weak-keyed on the
 # dataset (nothing outlives it) and validated against the embedding object by identity.
-_CLUSTER_CACHE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_CLUSTER_CACHE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def find_clusters(dataset: Dataset, embeddings: EmbeddingIndex | None,

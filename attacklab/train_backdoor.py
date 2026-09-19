@@ -9,8 +9,6 @@ import argparse
 import json
 from pathlib import Path
 
-import numpy as np
-
 from . import train as T
 from .synth import TRIGGERS, make_corpus, poison
 

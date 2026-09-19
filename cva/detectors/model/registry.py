@@ -4,11 +4,20 @@ ADR-008 rejects dynamic discovery as over-engineering for this team size, so reg
 is explicit and in one place. Importing this module is what puts Module B's checks into
 the registries; `cva/core/` must never import it (CI invariant 2).
 """
-from . import (anomalous, data_consistency, fingerprint, graph_structure,      # noqa: F401
-               intrinsic_probes, neural_cleanse, strip, universal_margin,
-               weight_digest, weight_stats)
-
 from cva.detectors.base import DETECTOR_REGISTRY, REGISTRY
+
+from . import (  # noqa: F401
+               anomalous,
+               data_consistency,
+               fingerprint,
+               graph_structure,
+               intrinsic_probes,
+               neural_cleanse,
+               strip,
+               universal_margin,
+               weight_digest,
+               weight_stats,
+)
 
 __all__ = ["REGISTRY", "DETECTOR_REGISTRY", "MODULE_B_CHECKS", "MODULE_B_DETECTORS"]
 

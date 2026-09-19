@@ -11,26 +11,22 @@ from __future__ import annotations
 import time
 import traceback
 import uuid
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
-
-from cva.core.capability import (Availability, Capability, CapabilitySet, Resolution)
-from cva.core.types import Evidence, Finding, Severity, Disposition, Nature
-from cva.core.model import ModelBattery
-from cva.core.profile import PROFILES
-from cva.core.runcontext import RunContext
+from cva.core.capability import Availability, CapabilitySet, Resolution
 from cva.core.context import CheckContext
+from cva.core.profile import PROFILES
 from cva.core.registry import REGISTRY
+from cva.core.runcontext import RunContext
+from cva.core.types import Disposition, Evidence, Finding, Severity
 
 
 @dataclass
 class PlanRow:
     check_id: str
     resolution: Resolution
-    attack_classes: set
+    attack_classes: set[str]
 
 
 @dataclass
@@ -41,13 +37,13 @@ class ScanResult:
     capabilities: CapabilitySet
     plan: list[PlanRow]
     findings: list[Finding]
-    timings: dict
+    timings: dict[str, float]
     verdict: str
 
 
-def scan(model, ctx: RunContext, profile_name: str = "deep") -> ScanResult:
+def scan(model: Any, ctx: RunContext, profile_name: str = "deep") -> ScanResult:
     scan_id = uuid.uuid4().hex[:12]
-    prof = dict(PROFILES.get(profile_name, PROFILES["deep"]))
+    prof: dict[str, Any] = dict(PROFILES.get(profile_name, PROFILES["deep"]))
     prof.update(ctx.profile)
     enabled = prof.get("checks")
 
@@ -56,7 +52,7 @@ def scan(model, ctx: RunContext, profile_name: str = "deep") -> ScanResult:
     # --- resolve everything first -----------------------------------------
     plan: list[PlanRow] = []
     for cid, cls in sorted(REGISTRY.items()):
-        inst = cls()
+        inst: Any = cls()
         if enabled is not None and cid not in enabled:
             plan.append(PlanRow(cid, Resolution(
                 Availability.UNAVAILABLE,

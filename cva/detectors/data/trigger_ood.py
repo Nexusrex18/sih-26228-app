@@ -41,16 +41,30 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
 from cva.core.capability import Capability
 from cva.core.types import Nature, Severity
+
 from ._stub_types import Dataset, EmbeddingIndex
-from .base import (CheckContext, as_ctx, finalise, seed_of, EvidenceStore, Params, attribution, contact_sheet, dominant_category,
-                   group_source, load_rgb, make_finding, not_performed, register_detector,
-                   to_model_input)
+from .base import (
+    CheckContext,
+    EvidenceStore,
+    Params,
+    as_ctx,
+    attribution,
+    dominant_category,
+    finalise,
+    group_source,
+    load_rgb,
+    make_finding,
+    not_performed,
+    register_detector,
+    seed_of,
+    to_model_input,
+)
 from .taxonomy import OUT_OF_DISTRIBUTION, TRIGGER_INJECTION
 
 DEFAULTS = {
@@ -130,7 +144,7 @@ def occlusion_test(model, X: np.ndarray, region, grid: int, controls: list, seed
     after = model.predict(_occlude(X, region, grid)).argmax(1)
     flipped = after != base
     ctrl = [float((model.predict(_occlude(X, r, grid)).argmax(1) != base).mean()) for r in controls]
-    trans = Counter(zip(base[flipped].tolist(), after[flipped].tolist()))
+    trans = Counter(zip(base[flipped].tolist(), after[flipped].tolist(), strict=False))
     modal_base, modal_share = Counter(base.tolist()).most_common(1)[0]
     return {"flip_rate": float(flipped.mean()), "control_flip_rate": float(np.mean(ctrl)) if ctrl else 0.0,
             "base_class": int(modal_base), "base_class_share": modal_share / len(base),
@@ -441,7 +455,7 @@ class OutOfDistribution:
         V = embeddings.vectors(ids)
         V = V / np.maximum(np.linalg.norm(V, axis=1, keepdims=True), 1e-12)
         d = 1 - np.sort(V @ R.T, axis=1)[:, -k:].mean(axis=1)
-        flagged = {sid: float(dv) for sid, dv in zip(ids, d) if dv > tau}
+        flagged = {sid: float(dv) for sid, dv in zip(ids, d, strict=False) if dv > tau}
         per_c, tot_c = Counter(), Counter()
         for s in dataset.samples:
             if s.contributor is not None:

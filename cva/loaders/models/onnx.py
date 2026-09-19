@@ -20,6 +20,7 @@ import onnxruntime as ort
 from onnx import numpy_helper
 
 from cva.core.capability import Capability, CapabilitySet
+
 from .base import ProbeLog, digest_weights, softmax
 
 GRADIENT_NOTE = (
@@ -87,7 +88,7 @@ class OnnxHandle:
         if self._act_sess is None:
             return None
         outs = self._act_sess.run(None, {self._iname: self._batch(x)})
-        return dict(zip(self._act_names, outs))
+        return dict(zip(self._act_names, outs, strict=False))
 
     def get_weights(self) -> dict[str, np.ndarray] | None:
         w = {i.name: numpy_helper.to_array(i) for i in self._proto.graph.initializer}

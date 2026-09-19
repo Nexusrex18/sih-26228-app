@@ -2,8 +2,6 @@
 embedding backbone. Session-scoped — generating images is the slow part."""
 from __future__ import annotations
 
-import dataclasses
-
 import pytest
 
 from attacklab.contributor_metadata import assign_contributors

@@ -5,10 +5,14 @@ import pytest
 
 from attacklab.near_dup_ood_attack import inject_ood
 from attacklab.synth_dataset import make_clean_dataset
-from cva.core.capability import Capability, CapabilitySet
+from cva.core.capability import Capability
 from cva.detectors.data._stub_types import stub_embeddings
-from cva.detectors.data.trigger_ood import (OutOfDistribution, TriggerArtifact, cluster_flags,
-                                            spectral_flags)
+from cva.detectors.data.trigger_ood import (
+    OutOfDistribution,
+    TriggerArtifact,
+    cluster_flags,
+    spectral_flags,
+)
 from tests.detectors.data.helpers import detect, make_ctx, reference_matrix, resolve
 
 
@@ -141,8 +145,9 @@ def test_ood_clean_near_zero(clean, clean_emb, reference):
 def test_ood_mechanism_with_explicit_vectors():
     """Tests the k-NN / leave-one-out-threshold LOGIC with hand-built vectors — nothing fitted to a
     fixture. A point on the reference manifold is not flagged; one orthogonal to it is."""
-    from cva.detectors.data._stub_types import ArrayEmbeddingIndex, Dataset, Sample
     from pathlib import Path
+
+    from cva.detectors.data._stub_types import ArrayEmbeddingIndex, Dataset, Sample
     rng = np.random.default_rng(0)
     d = 16
     axis = np.zeros(d); axis[0] = 1.0

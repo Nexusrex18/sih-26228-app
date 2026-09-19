@@ -32,9 +32,21 @@ from scipy.stats import fisher_exact
 
 from cva.core.capability import Capability
 from cva.core.types import Availability, Nature, Severity
+
 from ._stub_types import Dataset
-from .base import (CheckContext, as_ctx, finalise, EvidenceStore, Params, attribution, group_source, make_finding, not_performed,
-                   register_detector, to_model_input)
+from .base import (
+    CheckContext,
+    EvidenceStore,
+    Params,
+    as_ctx,
+    attribution,
+    finalise,
+    group_source,
+    make_finding,
+    not_performed,
+    register_detector,
+    to_model_input,
+)
 from .taxonomy import NEGATIVE_SPACE_POISONING
 
 DEFAULTS = {"score_min": 0.8, "iou_max": 0.3, "rate_min": 0.15, "ratio_min": 3.0,
@@ -97,7 +109,7 @@ class NegativeSpace:
                 return [not_performed(self.id, self.version, self.attack_classes,
                                       "the model's output is not a box-detector output "
                                       "((N, M, 6) [x1,y1,x2,y2,score,class])", Availability.UNAVAILABLE)]
-            for s, d in zip(chunk, det):
+            for s, d in zip(chunk, det, strict=False):
                 sx, sy = s.width / W, s.height / H
                 ann = [np.array([lb.bbox[0], lb.bbox[1], lb.bbox[0] + lb.bbox[2], lb.bbox[1] + lb.bbox[3]])
                        for lb in s.labels if lb.bbox is not None]

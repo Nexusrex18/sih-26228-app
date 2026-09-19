@@ -6,15 +6,12 @@ DEGRADED, because collapsing the two lets defects hide inside honest-looking cov
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from cva.core.capability import Capability
-from cva.core.types import Finding
-from cva.core.model import ModelBattery, ModelHandle
-
-
 from cva.core.context import CheckContext  # noqa: F401 — re-exported for plug-ins
+from cva.core.model import ModelHandle
+from cva.core.types import Finding
 
 
 @runtime_checkable
@@ -30,5 +27,9 @@ class ModelCheck(Protocol):
 
 # The registries live in core/ per backend_plan.md §6.4. They are re-exported here so
 # plug-ins import one module, while `core/` still never imports `detectors/`.
-from cva.core.registry import (DETECTOR_REGISTRY, REGISTRY,  # noqa: F401
-                               register, register_detector)
+from cva.core.registry import (  # noqa: E402,F401
+    DETECTOR_REGISTRY,
+    REGISTRY,
+    register,
+    register_detector,
+)

@@ -9,11 +9,11 @@ import types
 import pytest
 
 import cva.detectors.data as data
-from cva.core.capability import Availability, Capability
+from cva.core.capability import Availability, Capability, Resolution
 from cva.core.orchestrator import PlanRow
-from cva.core.capability import Resolution
 from cva.core.registry import DETECTOR_REGISTRY, REGISTRY
-from cva.core.types import ATTACK_CLASSES, Finding
+from cva.core.taxonomy import TAXONOMY
+from cva.core.types import Finding
 from cva.detectors.data.registry import MODULE_A_DETECTORS, registry_rows
 
 # Independent literal: backend_plan.md §9.5, Module A row (and Module-A plan §5).
@@ -61,11 +61,16 @@ def test_zero_arg_construction_and_frozen_capabilities(cid):
 
 
 def test_taxonomy_is_merged_into_cores_flat_registry():
-    """The coverage generator reads cva.core.types.ATTACK_CLASSES. A class missing there is
-    silently dropped from coverage and raises KeyError on a description lookup."""
+    """The coverage generator reads core's single attack-class list. A class missing there
+    is silently dropped from coverage and raises KeyError on a description lookup.
+
+    That list moved from `cva.core.types.ATTACK_CLASSES` to `cva.core.taxonomy.TAXONOMY`
+    at B1 (§6.4): a dict of dicts cannot be looked up with a loud failure, and
+    `taxonomy.require()` raises `UnknownAttackClass` at startup rather than letting a
+    coverage row vanish at render time. The assertion is unchanged in substance."""
     for ac in PLAN_MODULE_A_CLASSES:
-        assert ac in ATTACK_CLASSES, f"{ac} missing from core ATTACK_CLASSES"
-        assert ATTACK_CLASSES[ac]["kind"] == "attack" and ATTACK_CLASSES[ac]["desc"]
+        assert ac in TAXONOMY, f"{ac} missing from core/taxonomy.py"
+        assert TAXONOMY[ac].kind == "attack" and TAXONOMY[ac].desc
     claimed = {a for cid in PLAN_MODULE_A_IDS for a in DETECTOR_REGISTRY[cid].attack_classes}
     assert claimed == PLAN_MODULE_A_CLASSES          # every class is claimed, none invented
 
@@ -104,8 +109,8 @@ def test_each_detector_states_its_multiplicity_or_scale_limits_where_it_runs_man
     """Detectors that run one hypothesis test per (contributor x class...) cell must own the
     multiplicity policy in their findings, not only in prose."""
     from attacklab.label_flip_attack import flip_labels
-    from cva.detectors.data.systematic_mislabel import SystematicMislabel
     from cva.detectors.data._stub_types import stub_embeddings
+    from cva.detectors.data.systematic_mislabel import SystematicMislabel
     from tests.detectors.data.helpers import detect
     bad, _ = flip_labels(clean, seed=51, flip_rate=0.9, mode="class_pair",
                          target_contributor="A", class_pair=(0, 1))
@@ -119,12 +124,11 @@ def test_orchestrator_style_run_of_every_runnable_detector(clean, clean_emb, poi
     construct each plug-in with NO arguments, resolve capabilities, call
     detect(dataset, embeddings, model, ctx) and stamp scan_id. Anything that needed a constructor
     argument, or an attribute ctx cannot supply, fails here — not in production."""
-    import numpy as np
-    from cva.core.capability import CapabilitySet
-    from tests.detectors.data.helpers import make_ctx
-    from tests.detectors.data.helpers import reference_matrix
-    from attacklab.synth_dataset import make_clean_dataset
     import tempfile
+
+    from attacklab.synth_dataset import make_clean_dataset
+    from cva.core.capability import CapabilitySet
+    from tests.detectors.data.helpers import make_ctx, reference_matrix
 
     ref = make_clean_dataset(tempfile.mkdtemp(), seed=99, n=120)
     from cva.detectors.data._stub_types import stub_embeddings

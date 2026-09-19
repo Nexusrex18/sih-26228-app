@@ -32,9 +32,19 @@ from scipy.stats import ks_2samp
 
 from cva.core.capability import Capability
 from cva.core.types import Nature, Severity
+
 from ._stub_types import Dataset
-from .base import (CheckContext, sentence_case, as_ctx, finalise, EvidenceStore, Params, attribution,
-                   group_source, make_finding, not_performed, register_detector)
+from .base import (
+    CheckContext,
+    EvidenceStore,
+    Params,
+    as_ctx,
+    attribution,
+    finalise,
+    make_finding,
+    not_performed,
+    register_detector,
+)
 from .taxonomy import ANNOTATION_GEOMETRY_TAMPER
 
 DEFAULTS = {"min_n": 15, "p_max": 1e-3, "effect_min": 1.0, "sample_z": 1.5,
@@ -120,7 +130,7 @@ class AnnotationGeometry:
                     shift = shifts[k]
                     sign = 1 if shift > 0 else -1
                     z = sign * (M[:, j] - med_r) / mad_r
-                    for (sid, _), zi in zip(mine, z):
+                    for (sid, _), zi in zip(mine, z, strict=False):
                         if zi >= p["sample_z"]:
                             hits[sid].append({"contributor": c, "category": cat, "feature": name,
                                               "z": float(zi), "group_shift_mads": float(shift),

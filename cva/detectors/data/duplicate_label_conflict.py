@@ -21,10 +21,23 @@ from collections import Counter
 
 from cva.core.capability import Capability
 from cva.core.types import Nature, Severity
-from ._stub_types import Dataset, EmbeddingIndex
-from .base import (CheckContext, as_ctx, finalise, EvidenceStore, Params, attribution, contact_sheet, group_source, make_finding,
-                   register_detector)
-from .near_duplicate import DEFAULTS, find_clusters   # the SAME clustering parameters as near_dup
+
+from ._stub_types import Dataset
+from .base import (
+    CheckContext,
+    EvidenceStore,
+    Params,
+    as_ctx,
+    attribution,
+    finalise,
+    group_source,
+    make_finding,
+    register_detector,
+)
+from .near_duplicate import (  # the SAME clustering parameters as near_dup
+    DEFAULTS,
+    find_clusters,
+)
 from .taxonomy import DUPLICATE_LABEL_CONFLICT
 
 

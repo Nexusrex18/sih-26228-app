@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cva.core.types import ATTACK_CLASSES
+from cva.core.taxonomy import TAXONOMY
 
 # Human-authored, reviewed deliberately, changes rarely. Code declares what it does;
 # humans declare what the code depends on.
@@ -35,10 +35,10 @@ def render_markdown(result) -> str:
            f"Model `{result.model_id}` ({result.model_fmt}). Verdict: **{result.verdict}**.",
            "", "## Attack classes assessed in this scan", ""]
     for ac, checks in cov["assessed"].items():
-        out.append(f"- `{ac}` — {ATTACK_CLASSES[ac]['desc']} — by {', '.join(checks)}")
+        out.append(f"- `{ac}` — {TAXONOMY[ac].desc} — by {', '.join(checks)}")
     out += ["", "## Attack classes NOT assessed in this scan", ""]
     for ac, checks in cov["not_assessed"].items():
-        out.append(f"- `{ac}` — {ATTACK_CLASSES[ac]['desc']} — {', '.join(checks)} could not run")
+        out.append(f"- `{ac}` — {TAXONOMY[ac].desc} — {', '.join(checks)} could not run")
     if cov["never_covered"]:
         out += ["", "## Attack classes no check covers at all", ""]
         out += [f"- `{ac}`" for ac in cov["never_covered"]]

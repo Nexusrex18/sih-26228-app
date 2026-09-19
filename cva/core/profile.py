@@ -7,8 +7,9 @@ report must say whether it could not run or was not asked to.
 """
 from __future__ import annotations
 
+from typing import Any
 
-PROFILES = {
+PROFILES: dict[str, dict[str, Any]] = {
     "triage":   {"checks": {"model.weight_digest", "model.graph_structure"}},
     "standard": {"checks": {"model.weight_digest", "model.graph_structure",
                             "model.behavioural_fingerprint", "model.anomalous",

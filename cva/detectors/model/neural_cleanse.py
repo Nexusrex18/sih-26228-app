@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 
 from cva.core.capability import Availability, Capability
-from cva.core.types import (Disposition, Evidence, Finding, Nature, Severity)
+from cva.core.types import Disposition, Evidence, Finding, Nature, Severity
 from cva.detectors.base import CheckContext, register
 
 
@@ -71,7 +71,7 @@ def reverse_engineer_gradient(model, target: int, x: np.ndarray, steps: int = 40
     best_mask, best_patt, best_l1 = None, None, float("inf")
     up, down, patience, since = 1.5, 1.5 ** 1.5, 5, 0
 
-    for step in range(steps):
+    for _step in range(steps):
         opt.zero_grad()
         m = torch.sigmoid(mask_raw)
         p = torch.sigmoid(patt_raw)
@@ -181,7 +181,7 @@ class NeuralCleanseCheck:
         plot = _plot_norms(ctx, model.model_id, classes, norms, ai)
         ev = [Evidence("table", "per-class minimal trigger L1 norm and anomaly index",
                        data={str(c): {"l1": round(float(n), 2), "anomaly_index": round(float(a), 2)}
-                             for c, n, a in zip(classes, norms, ai)})]
+                             for c, n, a in zip(classes, norms, ai, strict=False)})]
         if img:
             ev.append(Evidence("image_crop",
                                f"reconstructed trigger for class {worst_cls}", path=img))
@@ -241,8 +241,9 @@ def _save_trigger(ctx, mid, cls, mask, pattern) -> str | None:
     try:
         import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         from pathlib import Path
+
+        import matplotlib.pyplot as plt
         d = Path(ctx.out_dir) / "evidence"; d.mkdir(parents=True, exist_ok=True)
         stamped = (mask * pattern).transpose(1, 2, 0)
         fig, axes = plt.subplots(1, 3, figsize=(5.4, 2.0), dpi=140)
@@ -263,8 +264,9 @@ def _plot_norms(ctx, mid, classes, norms, ai) -> str | None:
     try:
         import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         from pathlib import Path
+
+        import matplotlib.pyplot as plt
         d = Path(ctx.out_dir) / "evidence"; d.mkdir(parents=True, exist_ok=True)
         fig, ax = plt.subplots(figsize=(5.0, 2.4), dpi=130)
         colours = ["#e0544c" if a > 2 else "#5b8def" for a in ai]

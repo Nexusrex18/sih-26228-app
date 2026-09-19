@@ -33,8 +33,21 @@ from PIL import Image
 
 from cva.core.capability import Capability
 from cva.core.types import Nature, Severity
+
 from ._stub_types import Dataset, Sample
-from .base import CheckContext, as_ctx, finalise, not_performed, sentence_case, EvidenceStore, Params, attribution, group_source, make_finding, register_detector
+from .base import (
+    CheckContext,
+    EvidenceStore,
+    Params,
+    as_ctx,
+    attribution,
+    finalise,
+    group_source,
+    make_finding,
+    not_performed,
+    register_detector,
+    sentence_case,
+)
 from .taxonomy import SCRIPT_GENERATED_BATCH
 
 DEFAULTS = {
@@ -92,7 +105,7 @@ def _burst_share(times: list[float], gap: float) -> float:
     t = sorted(x for x in times if x is not None)
     if len(t) < 3:
         return 0.0
-    gaps = [b - a for a, b in zip(t, t[1:])]
+    gaps = [b - a for a, b in zip(t, t[1:], strict=False)]
     return sum(1 for g in gaps if g < gap) / len(gaps)
 
 

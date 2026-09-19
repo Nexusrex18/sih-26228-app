@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from cva.core.capability import Availability, Capability, CapabilitySet
+from cva.core.capability import Availability, CapabilitySet
 from cva.core.context import CheckContext
 
 

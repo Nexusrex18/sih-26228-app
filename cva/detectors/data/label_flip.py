@@ -28,9 +28,22 @@ import numpy as np
 
 from cva.core.capability import Capability
 from cva.core.types import Nature, Severity
-from ._stub_types import Dataset, EmbeddingIndex
-from .base import (CheckContext, seed_of, as_ctx, finalise, EvidenceStore, Params, attribution, contact_sheet, dominant_category,
-                   group_source, make_finding, not_performed, register_detector)
+
+from ._stub_types import Dataset
+from .base import (
+    CheckContext,
+    EvidenceStore,
+    Params,
+    as_ctx,
+    attribution,
+    dominant_category,
+    finalise,
+    group_source,
+    make_finding,
+    not_performed,
+    register_detector,
+    seed_of,
+)
 from .taxonomy import LABEL_FLIPPING
 
 DEFAULTS = {"k": 10, "knn_agree_max": 0.2, "min_neighbours": 5, "cv_folds": 5, "seed": None,
@@ -79,7 +92,7 @@ class LabelConsistency:
         ids = [s.sample_id for s, _ in rows]
         cats = sorted({d for _, d in rows})
         y = np.array([cats.index(d) for _, d in rows])
-        lab = dict(zip(ids, (d for _, d in rows)))
+        lab = dict(zip(ids, (d for _, d in rows), strict=False))
         X = embeddings.vectors(ids)
 
         # --- signal 1: k-NN label disagreement -----------------------------------------
@@ -107,7 +120,7 @@ class LabelConsistency:
                 cl_thr[sid] = float(1.0 - t[int(y[i])])
 
         findings = []
-        for i, sid in enumerate(ids):
+        for sid in ids:
             k_hit = sid in knn_agree and knn_agree[sid] <= p["knn_agree_max"]
             c_hit = cl_flag.get(sid, False)
             if not (k_hit or c_hit):

@@ -101,6 +101,7 @@ def train_handle(dataset: Dataset, seed: int = 0, epochs: int = 40, model_id: st
     pytest.importorskip("torch")
     import torch
     import torch.nn as nn
+
     from cva.detectors.data.base import dominant_category, to_model_input
 
     torch.manual_seed(seed)

@@ -8,8 +8,7 @@ the two. Certainty about the bytes is not certainty about intent.
 from __future__ import annotations
 
 from cva.core.capability import Availability, Capability
-from cva.core.types import (Disposition, Evidence, Finding, Nature, Severity,
-                              unavailable_finding)
+from cva.core.types import Disposition, Evidence, Finding, Nature, Severity, unavailable_finding
 from cva.detectors.base import CheckContext, register
 
 

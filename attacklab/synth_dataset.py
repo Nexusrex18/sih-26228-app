@@ -8,7 +8,6 @@ clean metadata is genuinely varied.
 """
 from __future__ import annotations
 
-import io
 import os
 from pathlib import Path
 
@@ -31,7 +30,7 @@ EPOCH0 = 1_700_000_000.0
 
 def draw_object(draw: ImageDraw.ImageDraw, cls: int, cx: float, cy: float, r: float,
                 jitter: np.ndarray) -> tuple[float, float, float, float]:
-    col = tuple(int(np.clip(c + j, 0, 255)) for c, j in zip(PALETTE[cls % len(PALETTE)], jitter))
+    col = tuple(int(np.clip(c + j, 0, 255)) for c, j in zip(PALETTE[cls % len(PALETTE)], jitter, strict=False))
     shape = SHAPES[cls % len(SHAPES)]
     if shape == "circle":
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col)

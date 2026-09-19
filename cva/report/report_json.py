@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cva.core.capability import Availability, Capability
+from cva.core.capability import Capability
 
 
 def build(result) -> dict:
@@ -39,7 +39,7 @@ def build(result) -> dict:
 
 def coverage_of(result) -> dict:
     """GENERATED, never written by hand — and it counts `attack` classes only."""
-    from cva.core.types import ATTACK_CLASSES
+    from cva.core.taxonomy import CLAIMABLE
 
     assessed: dict[str, list[str]] = {}
     not_assessed: dict[str, list[str]] = {}
@@ -48,7 +48,7 @@ def coverage_of(result) -> dict:
         for ac in row.attack_classes:
             tgt.setdefault(ac, []).append(row.check_id)
 
-    attack_only = {k for k, v in ATTACK_CLASSES.items() if v["kind"] == "attack"}
+    attack_only = CLAIMABLE
     return {
         "counts_only_kind": "attack",
         "assessed": {k: v for k, v in sorted(assessed.items()) if k in attack_only},
