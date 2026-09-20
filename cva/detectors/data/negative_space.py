@@ -229,7 +229,7 @@ class NegativeSpace:
                 confidence=0.3, score_raw=d0["score"], threshold=p["score_min"],
                 reason=(f"The contributed model confidently detects an object "
                         f"(score {d0['score']:.2f}, class "
-                        f"{dataset.category_name(d0['class'])!r}) at "
+                        f"{category_name(dataset, d0['class'])!r}) at "
                         f"{[round(v) for v in d0['bbox_xyxy']]} in {s.sample_id} where no "
                         f"annotation exists. {len(flagged)} of {len(samples)} annotated "
                         f"images in this dataset show this ({rate:.0%}). This dataset "
