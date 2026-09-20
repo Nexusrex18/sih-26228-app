@@ -654,6 +654,13 @@ def test_only_findings_that_actually_ran_move_the_verdict():
     assert _verdict([finding(Availability.OK, Disposition.REVIEW)]) == "REVIEW"
     # Below MEDIUM a REVIEW does not move it.
     assert _verdict([finding(Availability.OK, Disposition.REVIEW, Severity.LOW)]) == "ACCEPT"
-    # A check that did not run is a coverage gap, not a verdict.
+    # A check that did not run is a DECLARED coverage gap, not a verdict.
     assert _verdict([finding(Availability.UNAVAILABLE, Disposition.QUARANTINE)]) == "ACCEPT"
-    assert _verdict([finding(Availability.ERROR, Disposition.QUARANTINE)]) == "ACCEPT"
+    # A check that CRASHED is not a declared gap. It forces REVIEW and may not be dropped —
+    # and it does so on availability alone, because `apply_dispositions` never routes an
+    # ERROR finding, so nothing else would notice if this clause were removed.
+    assert _verdict([finding(Availability.ERROR, Disposition.QUARANTINE)]) == "REVIEW"
+    assert _verdict([finding(Availability.ERROR, Disposition.ACCEPT, Severity.INFO)]) == "REVIEW"
+    # QUARANTINE still outranks it.
+    assert _verdict([finding(Availability.OK, Disposition.QUARANTINE),
+                     finding(Availability.ERROR, Disposition.ACCEPT)]) == "QUARANTINE"

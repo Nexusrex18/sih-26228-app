@@ -30,6 +30,7 @@ from cva.core.scanid import VOLATILE_PATHS
 from cva.core.types import Category, Disposition, Finding, Sample, Severity
 from cva.report import report_json
 from cva.report.render_html import render
+from cva.risk.calibration import CalibrationSet, Calibrator
 from cva.risk.contributor import assess_groups_detailed
 from cva.risk.disposition import default_policy
 from cva.risk.engine import (
@@ -53,10 +54,29 @@ UNAVAILABLE, ERROR = Availability.UNAVAILABLE, Availability.ERROR
 def sfinding(ref: str, *, severity: Severity = Severity.HIGH, confidence: float = 0.95,
              availability: Availability = OK, target_type: str = "sample",
              detector: str = "data.fake") -> Finding:
+    # `score_raw` mirrors `confidence` so that an identity calibrator (see `calibrated`)
+    # leaves the stated confidence alone: `apply_calibration` reads `score_raw`, not
+    # `confidence`, so a finding with an unset raw score calibrates to 0.0 whatever it claims.
     return Finding(detector_id=detector, detector_version="0.0.1",
                    target_type=target_type,  # type: ignore[arg-type]
-                   target_ref=ref, severity=severity, confidence=confidence, reason="r",
+                   target_ref=ref, severity=severity, confidence=confidence,
+                   score_raw=confidence, reason="r",
                    attack_class="label_flipping", availability=availability)
+
+
+def calibrated(*detectors: str) -> CalibrationSet:
+    """A CalibrationSet whose curves are the identity, for the tests that are ABOUT the
+    disposition table's confidence thresholds rather than about calibration.
+
+    Since item 2 the engine applies `min_confidence` only to detectors a calibrator was
+    actually fitted for — an uncalibrated `confidence` is the detector's own raw score, and
+    D3's 0.9 and D5's 0.6 are numbers on the calibrated scale. A test that means "0.3 is
+    below D5's floor" must therefore say that 0.3 IS a calibrated confidence, which is what
+    this does, instead of accidentally testing the uncalibrated path.
+    """
+    curve = Calibrator(tuple(i / 100 for i in range(101)),
+                       tuple(i / 100 for i in range(101)))
+    return CalibrationSet(calibrators={d: curve for d in detectors})
 
 
 def cohort(spec: dict[str, tuple[int, int]]) -> tuple[SimpleNamespace, list[Finding]]:
@@ -311,16 +331,27 @@ def _mixed_findings() -> list[Finding]:
 
 def test_reference_counts_route_the_findings_through_the_policy() -> None:
     ds = _ref_dataset(*(f"s{i}" for i in range(6)))
-    assert reference_flag_counts(_mixed_findings(), ds, {}) == {
+    assert reference_flag_counts(_mixed_findings(), ds, {}, calibrated("data.fake")) == {
         "reference_n": 6, "reference_flagged": 3}                 # s0, s1, s5
 
 
+def test_reference_counts_an_uncalibrated_low_confidence_finding_is_still_a_flag() -> None:
+    """The same six findings with NO calibrator. s2 — low severity, raw score 0.3 — is no
+    longer silently accepted on a threshold its score was never on: D5's confidence clause
+    does not apply to an uncalibrated detector, so it routes to review on severity alone and
+    counts as a flag. This is item 2, and the contrast with the test above is the whole rule."""
+    ds = _ref_dataset(*(f"s{i}" for i in range(6)))
+    assert reference_flag_counts(_mixed_findings(), ds, {}) == {
+        "reference_n": 6, "reference_flagged": 4}                 # s0, s1, s2, s5
+
+
 def test_reference_counts_a_finding_the_policy_accepts_is_not_a_flag() -> None:
-    """A detector-set disposition of REVIEW is overwritten by the engine: low confidence at
-    low severity is D7 accept, so it is not a flag."""
+    """A detector-set disposition of REVIEW is overwritten by the engine: low CALIBRATED
+    confidence at low severity is D7 accept, so it is not a flag."""
     f = sfinding("s0", severity=Severity.LOW, confidence=0.3)
     f.disposition = Disposition.REVIEW
-    assert reference_flag_counts([f], _ref_dataset("s0", "s1"), {}) == {
+    assert reference_flag_counts([f], _ref_dataset("s0", "s1"), {},
+                                 calibrated("data.fake")) == {
         "reference_n": 2, "reference_flagged": 0}
 
 
@@ -359,9 +390,15 @@ def test_reference_flag_definition_is_the_cohorts_definition() -> None:
     ds = SimpleNamespace(samples=[
         SimpleNamespace(sample_id=i, contributor="A" if n < 3 else "B", batch=None,
                         source_meta={}, contributor_source=None) for n, i in enumerate(ids)])
-    cohort_rows = assess(_mixed_findings(), ds, {}, 0).contributor_risk
-    ref = reference_flag_counts(_mixed_findings(), ds, {})
+    cal = calibrated("data.fake")
+    cohort_rows = assess(_mixed_findings(), ds, {}, 0, cal).contributor_risk
+    ref = reference_flag_counts(_mixed_findings(), ds, {}, cal)
     assert sum(r["n_flagged"] for r in cohort_rows) == ref["reference_flagged"] == 3
+    # And the same equality holds on the uncalibrated path — "flagged" must mean one thing on
+    # both sides whichever way the confidence clauses resolved, or the baseline is not a
+    # comparison. This is what makes item 2 safe to apply to the reference pass.
+    assert (sum(r["n_flagged"] for r in assess(_mixed_findings(), ds, {}, 0).contributor_risk)
+            == reference_flag_counts(_mixed_findings(), ds, {})["reference_flagged"] == 4)
 
 
 # --------------------------------------------------------------------------------------

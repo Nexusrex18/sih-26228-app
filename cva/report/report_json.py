@@ -193,6 +193,35 @@ def _env() -> dict[str, str]:
     return env
 
 
+def verdict_line(result) -> str:
+    """The verdict with its coverage qualifier attached — the ONE string every surface prints.
+
+    A bare `ACCEPT` is the sentence this whole system exists to avoid: a scan with 13 of 19
+    checks unrun printed exactly the same word as a scan where everything ran, and the reader
+    has no way to tell them apart. `report.json` was never bare (`coverage` is required by the
+    schema); the CLI headline was. So the qualifier lives here, beside the coverage generator
+    it is derived from, and the CLI, the HTML and the coverage markdown all call this.
+
+    Deliberately NOT "REVIEW on any UNAVAILABLE": on a dataset scan the model-side checks are
+    unavailable by construction, so that rule makes every dataset scan REVIEW forever. The
+    honest move is to keep the verdict and state what it was computed over.
+    """
+    plan = list(getattr(result, "plan", None) or [])
+    errored = {f.detector_id for f in getattr(result, "findings", None) or []
+               if getattr(f.availability, "value", f.availability) == "ERROR"}
+    ran = sum(1 for r in plan if r.resolution.runnable and r.check_id not in errored)
+    crashed = sum(1 for r in plan if r.resolution.runnable and r.check_id in errored)
+    if not plan:
+        return f"{result.verdict} — no check was registered, so nothing was assessed"
+    parts = [f"{ran}/{len(plan)} checks ran"]
+    if crashed:
+        parts.append(f"{crashed} crashed")
+    not_run = len(plan) - ran - crashed
+    if not_run:
+        parts.append(f"{not_run} not assessed")
+    return f"{result.verdict} — {', '.join(parts)} (see coverage.md)"
+
+
 def coverage_of(result) -> dict:
     """GENERATED, never written by hand — and it counts `attack` classes only."""
     from cva.core.taxonomy import CLAIMABLE

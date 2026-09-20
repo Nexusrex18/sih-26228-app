@@ -184,6 +184,14 @@
       "properties": {
         "method": { "type": "string" },
         "brier": { "type": ["number", "null"] },
+        "scored_on": {
+          "enum": ["out_of_fold", "none"],
+          "description": "How `brier` and `reliability_bins` were measured. `out_of_fold` means every prediction scored here came from a curve fitted without the point it predicted — the only basis on which a reliability diagram may be read as a quality claim. `none` means the fit had no second group to hold out, so no score is reported rather than an in-sample one presented as held out."
+        },
+        "calibrated_detectors": {
+          "type": "array", "items": { "type": "string" },
+          "description": "The detector ids a calibrator was actually fitted for. Everything else in the report carries its detector's OWN raw score, and the disposition table's confidence thresholds (D3, D5) are not applied to those findings — they route on severity alone and are capped at review. Without this list a reader cannot tell which confidences are on the calibrated scale."
+        },
         "reliability_bins": {
           "type": "array",
           "items": {

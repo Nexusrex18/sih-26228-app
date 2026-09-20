@@ -184,12 +184,48 @@ def test_fit_accepts_any_iterable_of_records() -> None:
     assert "det.a" in fit_calibrators(gen()).calibrators
 
 
-def test_fit_separable_set_has_zero_brier_and_two_pure_bins() -> None:
+def grouped(records: list[tuple[str, float, bool]], families: int = 2
+            ) -> list[tuple[str, float, bool, str]]:
+    """Deal `records` into attack families, alternating WITHIN each label.
+
+    Dealing on position alone is a trap: in a list ordered by label, or one whose labels
+    alternate, round-robin hands a family a single class, and a fold with one class in it
+    cannot be fitted or scored — which looks like the calibrator failing rather than the
+    split being wrong.
+    """
+    seen: dict[bool, int] = {}
+    out = []
+    for d, s, h in records:
+        n = seen.get(h, 0)
+        seen[h] = n + 1
+        out.append((d, s, h, f"fam{n % families}"))
+    return out
+
+
+def test_fit_without_a_group_reports_no_score_rather_than_an_in_sample_one() -> None:
+    """Item 21. The Brier score and the reliability diagram are the report's own evidence
+    about how far its confidences can be trusted, and an isotonic fit scored on the data it
+    was fitted to reports a quality it will not reproduce on anything else. With nothing to
+    hold out the honest answer is no number — not a flattering one."""
     cal = fit_calibrators(separable("det.a"))
-    assert cal.brier == 0.0
-    assert [b["n"] for b in cal.bins] == [20, 20]
+    assert "det.a" in cal.calibrators, "the curve is still fitted and still shipped"
+    assert cal.brier is None and cal.bins == []
+    assert cal.summary()["scored_on"] == "none"
+
+
+def test_fit_separable_set_scored_out_of_fold_has_zero_brier_and_two_pure_bins() -> None:
+    # 30 of each: holding a family out must still leave `MIN_POINTS` to fit on, or the fold
+    # is skipped and no score is reported — which is what `..._reports_no_score...` covers.
+    cal = calmod.fit_calibrators_grouped(grouped(separable("det.a", n_each=30)))
+    assert cal.summary()["scored_on"] == "out_of_fold"
+    # Near zero, NOT exactly zero — and the difference is the point of the whole exercise.
+    # A fold's step lands between the fitting fold's points, so a held-out sample sitting on
+    # the boundary falls the other side of it. Scored in sample this set reads a flat 0.0,
+    # which is the flattering number the reliability diagram must not print.
+    assert cal.brier is not None and 0.0 <= cal.brier < 0.05
+    assert [b["n"] for b in cal.bins] == [29, 31]
     assert [b["p_mean"] for b in cal.bins] == [0.0, 1.0]
-    assert [b["empirical"] for b in cal.bins] == [0.0, 1.0]
+    # The SHIPPED curve is fitted on every point, not on one fold, and IS perfectly separable.
     c = cal.calibrators["det.a"]
     assert c(0.05) == 0.0 and c(0.95) == 1.0
 
@@ -197,11 +233,49 @@ def test_fit_separable_set_has_zero_brier_and_two_pure_bins() -> None:
 def test_fit_brier_on_an_uninformative_set_is_sane_and_positive() -> None:
     # labels alternate irrespective of score: nothing to learn, so PAV pools to the base rate
     records = [("det.a", i / 60.0, i % 2 == 0) for i in range(60)]
-    cal = fit_calibrators(records)
+    cal = calmod.fit_calibrators_grouped(grouped(records))
     assert cal.brier is not None
     assert 0.0 < cal.brier <= 0.25 + 1e-6
     assert sum(b["n"] for b in cal.bins) == 60
     assert all(0.0 <= b["p_mean"] <= 1.0 and 0.0 <= b["empirical"] <= 1.0 for b in cal.bins)
+
+
+def test_fit_a_single_label_fold_is_skipped_rather_than_scored() -> None:
+    """The shape the benchmark would otherwise produce: every clean model pooled into one
+    `"clean"` group. Held out, the fitting fold is all positives, PAV returns the constant
+    1.0, and every negative is scored wrong — a Brier inflated by the split, not measured
+    from the detector. Neither fold is scorable, so no score is reported."""
+    pos = [("det.a", 0.5 + i / 200, True, f"fam{i % 2}") for i in range(60)]
+    neg = [("det.a", i / 200, False, "clean") for i in range(60)]
+    cal = calmod.fit_calibrators_grouped(pos + neg)
+    assert "det.a" in cal.calibrators, "the curve is still fitted on everything"
+    assert cal.brier is None and cal.summary()["scored_on"] == "none"
+
+
+def test_bench_deals_clean_models_across_the_attack_families() -> None:
+    """`calibration_family`'s job: clean models are the negative class, not a family. If they
+    all land in one group, the test above is what the benchmark gets."""
+    from cva.bench.run import calibration_family
+    fams = ["blended", "patch", "sig"]
+    clean = [{"id": f"clean-{i}", "backdoored": False} for i in range(30)]
+    got = {calibration_family(e, fams) for e in clean}
+    assert got <= set(fams) and len(got) > 1, got
+    # Deterministic: the same corpus must fit the same calibrator twice running.
+    assert [calibration_family(e, fams) for e in clean] == \
+           [calibration_family(e, fams) for e in clean]
+    # An attacked model groups by its trigger, never by the dealing.
+    assert calibration_family({"id": "m", "backdoored": True, "trigger": "patch"}, fams) \
+        == "patch"
+
+
+def test_fit_out_of_fold_is_not_flattered_by_a_fold_specific_fluke() -> None:
+    """The test that makes the out-of-fold machinery load-bearing: a detector whose score
+    ORDER is inverted between the two families is uninformative overall, and an in-sample fit
+    would still score it perfectly by memorising each fold. Held out, it cannot."""
+    a = [("det.a", i / 100.0, i >= 50, "fam0") for i in range(100)]
+    b = [("det.a", i / 100.0, i < 50, "fam1") for i in range(100)]
+    cal = calmod.fit_calibrators_grouped(a + b)
+    assert cal.brier is not None and cal.brier > 0.2, cal.brier
 
 
 def test_fit_calibrated_values_are_within_unit_interval_and_monotone() -> None:

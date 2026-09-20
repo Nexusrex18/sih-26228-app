@@ -71,7 +71,15 @@ def default_policy() -> dict[str, Any]:
     return {"rules": [dict(r) for r in DEFAULT_RULES]}
 
 
-def _matches(rule: dict[str, Any], f: Finding) -> bool:
+#: Appended to a finding whose confidence never went through a calibrator. Worded as the
+#: report will read it, because this is the sentence that explains why D3 did not quarantine.
+UNCALIBRATED_LIMITATION = (
+    "No calibrator was fitted for this detector, so its confidence is the detector's own raw "
+    "score and not a calibrated probability. Confidence thresholds (D3, D5) were NOT applied "
+    "to it — this finding was routed on severity alone and capped at review.")
+
+
+def _matches(rule: dict[str, Any], f: Finding, calibrated: bool = True) -> bool:
     if rule.get("min_posterior") is not None:
         return False                                  # a contributor rule (D4)
     prefix = rule.get("detector_prefix")
@@ -85,30 +93,61 @@ def _matches(rule: dict[str, Any], f: Finding) -> bool:
                 return False
         elif f.attack_class != want:
             return False
-    if rule.get("min_confidence") is not None and f.confidence < rule["min_confidence"]:
-        return False
+    if rule.get("min_confidence") is not None:
+        # An UNCALIBRATED confidence is the detector's own raw score. Plan §7.7 says
+        # `confidence` is "calibrated belief"; D3's 0.9 and D5's 0.6 are numbers on that
+        # scale. Comparing a raw score to them is a category error that reads either way:
+        # 64 Module A findings at 0.34–0.45 fell straight through to D7 `accept`, while a
+        # detector emitting 0.95 by convention would have been quarantined outright. So the
+        # confidence clause simply does not apply, and the rule is judged on the rest of its
+        # conditions. Nothing here silently promotes a finding: `decide` caps at review.
+        if not calibrated:
+            pass
+        elif f.confidence < rule["min_confidence"]:
+            return False
     return not (rule.get("min_severity") is not None
                 and f.severity.rank < _SEV[rule["min_severity"]])
 
 
-def decide(policy: dict[str, Any], f: Finding) -> tuple[Disposition, str]:
+def decide(policy: dict[str, Any], f: Finding,
+           calibrated: bool = True) -> tuple[Disposition, str]:
+    """Route one finding. `calibrated=False` means no calibrator was fitted for its detector,
+    which disables the confidence clauses and caps the outcome at `review` — an uncalibrated
+    score may raise an analyst's attention, it may not quarantine an asset on its own."""
     for rule in policy["rules"]:
-        if not _matches(rule, f):
+        if not _matches(rule, f, calibrated):
             continue
         disp = Disposition(rule["disposition"])
         cap = rule.get("cap")
         if cap and _DISP[disp] > _DISP[Disposition(cap)]:
             disp = Disposition(cap)
+        if not calibrated and _DISP[disp] > _DISP[Disposition.REVIEW]:
+            disp = Disposition.REVIEW
         return disp, rule["id"]
     return Disposition.ACCEPT, "D7"
 
 
-def apply_dispositions(findings: list[Finding], policy: dict[str, Any]) -> None:
+def apply_dispositions(findings: list[Finding], policy: dict[str, Any],
+                       calibrated: set[str] | None = None,
+                       exempt_prefixes: tuple[str, ...] = ("prov.",)) -> None:
     """Route every finding that actually ran. A finding for a check that could not run keeps
-    the disposition the orchestrator gave it: the gap, not a judgement about the data."""
+    the disposition the orchestrator gave it: the gap, not a judgement about the data.
+
+    `calibrated` is the set of `detector_id`s a calibrator was actually fitted for. `None`
+    means "do not check" and is for callers routing findings that are on the calibrated scale
+    by construction. `exempt_prefixes` is the same list calibration excludes: a `prov.*`
+    finding arrives at `confidence = 1.0` because a hash mismatch is arithmetic, not a belief
+    (plan §7.9), so it is exempt here for exactly the reason it is excluded there — D1 must
+    stay able to quarantine a deterministic provenance failure.
+    """
     for f in findings:
-        if f.availability in (Availability.OK, Availability.DEGRADED):
-            f.disposition, f.disposition_rule = decide(policy, f)
+        if f.availability not in (Availability.OK, Availability.DEGRADED):
+            continue
+        ok = (calibrated is None or f.detector_id in calibrated
+              or f.detector_id.startswith(exempt_prefixes))
+        f.disposition, f.disposition_rule = decide(policy, f, ok)
+        if not ok and UNCALIBRATED_LIMITATION not in f.limitations:
+            f.limitations.append(UNCALIBRATED_LIMITATION)
 
 
 def defer_digest_to_fingerprint(findings: list[Finding]) -> None:

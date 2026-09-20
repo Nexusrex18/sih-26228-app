@@ -348,9 +348,11 @@ def resolve_profile(profile_name: str, budget_tier: str | None = None) -> dict[s
     """Merge the two axes: tier first, policy on top, explicit --budget-tier wins.
 
     The result is validated against profile.schema.json BEFORE anything is injected at run
-    time. `scan()` later merges `ctx.profile` and writes `prof["nc_class_order"]` from the
-    intrinsic-probe ranking; both are per-run inputs, not profile content, and neither is
-    validated here.
+    time. `scan()` later merges `ctx.profile` into it — a per-run input, not profile content,
+    and not validated here. Nothing else may write to the returned dict once `scan()` has
+    hashed it: the intrinsic-probe ranking used to be written back here and that made
+    `ScanResult.profile` disagree with `ScanResult.profile_hash`. Per-run derived data now
+    goes to `CheckContext.run_state`, which nothing hashes.
     """
     if profile_name not in PROFILES:
         raise UnknownProfile(
@@ -424,6 +426,16 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
     embeddings: Any = None
     embedding_gap: str | None = None
     embeddings_built = False
+    # Per-run derived data, threaded to the checks that consume it. Deliberately NOT `prof`:
+    # `phash` is taken above, before the first check runs, and a check writing back into the
+    # hashed dict made `profile_hash_of(result.profile) != result.profile_hash` — the seal
+    # then attested a profile hash that did not match the profile shipped beside it (item 13).
+    run_state: dict[str, Any] = {}
+    # The reference dataset's own index, built ONCE on the same lazy trigger as the scan's
+    # own (the first runnable detector row) and reused by the reference pass below, so a
+    # scan with no data detectors still never loads a backbone.
+    reference_embeddings: Any = None
+    reference_embedding_gap: str | None = None
 
     for row in ordered:
         if not row.resolution.runnable:
@@ -433,14 +445,18 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
         if is_detector and row.check_id not in detector_registry:
             continue
         inst = (detector_registry if is_detector else check_registry)[row.check_id]()
-        cctx = CheckContext(ctx.probes_x, ctx.probes_y, ctx.suspect_x, ctx.battery,
-                            prof, scan_id, ctx.out_dir, ctx.seed)
         if is_detector and not embeddings_built:
             embeddings, embedding_gap = build_embeddings(ctx, prof)
+            if ctx.reference_dataset is not None:
+                reference_embeddings, reference_embedding_gap = build_embeddings(
+                    replace(ctx, dataset=ctx.reference_dataset), prof)
             embeddings_built = True
+        cctx = CheckContext(ctx.probes_x, ctx.probes_y, ctx.suspect_x, ctx.battery,
+                            prof, scan_id, ctx.out_dir, ctx.seed, run_state=run_state,
+                            reference_embeddings=reference_embeddings)
         t0 = time.time()
         findings.extend(_run_check(row, inst, is_detector, ctx.dataset, embeddings,
-                                   embedding_gap, model, cctx, prof, scan_id, model_id))
+                                   embedding_gap, model, cctx, scan_id, model_id))
         timings[row.check_id] = round(time.time() - t0, 2)
 
     for f in findings:
@@ -461,7 +477,7 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
     if ctx.reference_dataset is not None:
         reference, reference_gap = _reference_flags(
             model, ctx, prof, plan, check_registry, detector_registry, scan_id, model_id,
-            embedding_gap)
+            embedding_gap, reference_embeddings, reference_embedding_gap, run_state)
     risk: RiskOutcome = assess(findings, ctx.dataset, prof, ctx.seed, ctx.calibration,
                                reference, reference_gap)
     result = ScanResult(scan_id, model_id, getattr(model, "fmt", "-"), caps, plan,
@@ -479,7 +495,7 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
 
 def _run_check(row: PlanRow, inst: Any, is_detector: bool, dataset: Any, embeddings: Any,
                embedding_gap: str | None, model: Any, cctx: CheckContext,
-               prof: dict[str, Any], scan_id: str, model_id: str) -> list[Finding]:
+               scan_id: str, model_id: str) -> list[Finding]:
     """Run ONE resolved check and return its findings; a check that raises becomes an ERROR
     finding, never DEGRADED. Shared by the scan proper and the reference-dataset pass so both
     treat DEGRADED rows and a missing embedding index identically."""
@@ -499,7 +515,9 @@ def _run_check(row: PlanRow, inst: Any, is_detector: bool, dataset: Any, embeddi
         if row.check_id == "model.intrinsic_probes":
             for f in got:
                 if f.produced_by.startswith("ranking="):
-                    prof["nc_class_order"] = json.loads(f.produced_by.split("=", 1)[1])
+                    # `cctx.run_state`, never `prof`: see the run_state comment in `scan()`.
+                    cctx.run_state["nc_class_order"] = json.loads(
+                        f.produced_by.split("=", 1)[1])
         return got
     except Exception as exc:                           # ERROR, never DEGRADED
         return [*got, Finding(
@@ -519,8 +537,9 @@ def _run_check(row: PlanRow, inst: Any, is_detector: bool, dataset: Any, embeddi
 
 def _reference_flags(model: Any, ctx: RunContext, prof: dict[str, Any], plan: list[PlanRow],
                      check_registry: dict[str, Any], detector_registry: dict[str, Any],
-                     scan_id: str, model_id: str, cohort_gap: str | None
-                     ) -> tuple[dict[str, int] | None, str | None]:
+                     scan_id: str, model_id: str, cohort_gap: str | None,
+                     ref_embeddings: Any, ref_gap: str | None,
+                     run_state: dict[str, Any]) -> tuple[dict[str, int] | None, str | None]:
     """Run the scan's own runnable `data.*` detectors over `ctx.reference_dataset` and return
     `({"reference_n", "reference_flagged"}, None)`, or `(None, why)`.
 
@@ -542,15 +561,18 @@ def _reference_flags(model: Any, ctx: RunContext, prof: dict[str, Any], plan: li
     if cohort_gap is not None:
         return None, (f"the scanned dataset had no embedding index ({cohort_gap}), so its flag "
                       "rate is not comparable with a reference run that has one")
-    ref_embeddings, ref_gap = build_embeddings(replace(ctx, dataset=ref), prof)
+    # `ref_embeddings is None` with no gap is a legitimate state — a scan whose detectors
+    # need no index — so only a stated gap disqualifies the reference. The index itself is
+    # built once, in `scan()`'s loop, on the same lazy trigger as the cohort's.
     if ref_gap is not None:
         return None, f"the reference dataset was not embedded: {ref_gap}"
     cctx = CheckContext(ctx.probes_x, ctx.probes_y, ctx.suspect_x, ctx.battery,
-                        prof, scan_id, ctx.out_dir, ctx.seed)
+                        prof, scan_id, ctx.out_dir, ctx.seed, run_state=dict(run_state),
+                        reference_embeddings=ref_embeddings)
     found: list[Finding] = []
     for row in rows:
         got = _run_check(row, detector_registry[row.check_id](), True, ref, ref_embeddings,
-                         None, model, cctx, prof, scan_id, model_id)
+                         None, model, cctx, scan_id, model_id)
         if any(f.availability == Availability.ERROR for f in got):
             return None, f"{row.check_id} raised while scanning the reference dataset"
         found.extend(got)
@@ -646,11 +668,22 @@ def _plan_finding(row: PlanRow, scan_id: str, model_id: str, profile: str) -> Fi
 
 
 def _verdict(findings: list[Finding], risk: RiskOutcome | None = None) -> str:
+    """The verdict counts what RAN, plus every check that CRASHED.
+
+    `UNAVAILABLE` stays out on purpose: a declared gap is carried by the coverage statement,
+    and folding it in would make every dataset scan REVIEW forever (the model-side checks are
+    unavailable by construction). `ERROR` is not a declared gap — it is a defect in this tool,
+    the plan's "never a silent skip" — so it forces REVIEW. The risk engine never routes an
+    ERROR finding (`apply_dispositions` skips anything that did not run), so the availability
+    is tested here directly rather than trusting a disposition nothing set.
+    """
     real = [f for f in findings if f.availability in (Availability.OK, Availability.DEGRADED)]
     # D4: a contributor whose posterior clears the cohort is a QUARANTINE of the contribution.
     if any(f.disposition == Disposition.QUARANTINE for f in real) or (
             risk is not None and risk.quarantined_contributors):
         return "QUARANTINE"
+    if any(f.availability == Availability.ERROR for f in findings):
+        return "REVIEW"
     if any(f.disposition == Disposition.REVIEW and f.severity.rank >= Severity.MEDIUM.rank
            for f in real):
         return "REVIEW"

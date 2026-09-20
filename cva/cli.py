@@ -36,6 +36,7 @@ from cva.loaders.models.subprocess_model import SubprocessModel
 from cva.loaders.preprocess import attach_preprocess
 from cva.report.coverage import write as write_coverage
 from cva.report.render_html import render
+from cva.report.report_json import verdict_line
 from cva.report.report_json import write as write_report_json
 
 
@@ -330,7 +331,7 @@ def cmd_scan(a) -> int:
         return 0
     if res.contributor_baseline_unavailable:
         print(f"note: the reference dataset was NOT used: {res.contributor_baseline_unavailable}")
-    print(f"{res.model_id}: {res.verdict}  ->  {out}/report.json")
+    print(f"{res.model_id}: {verdict_line(res)}  ->  {out}/report.json")
     return 0
 
 
@@ -369,7 +370,7 @@ def cmd_selftest(a) -> int:
             + (["--budget-tier", a.budget_tier] if a.budget_tier else [])))
 
     assert out is not None
-    print(f"\n{res.model_id}: {res.verdict}  ->  {out}/report.json")
+    print(f"\n{res.model_id}: {verdict_line(res)}  ->  {out}/report.json")
     from jsonschema import Draft202012Validator
     schema = json.loads((Path(__file__).resolve().parents[1] / "schemas"
                          / "report.schema.json").read_text())
@@ -470,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
         r = run_scan(Path(a.model), Path(a.corpus), Path(a.out), a.profile,
                      Path(a.reference) if a.reference else None, not a.no_battery,
                      preprocess=Path(a.preprocess) if a.preprocess else None)
-        print(f"{r.model_id}: {r.verdict}  ->  {a.out}/{r.model_id}.report.html")
+        print(f"{r.model_id}: {verdict_line(r)}  ->  {a.out}/{r.model_id}.report.html")
         return 0
     return cmd_scan(a)
 

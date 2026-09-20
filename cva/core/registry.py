@@ -37,13 +37,56 @@ DETECTOR_REGISTRY: dict[str, type[Registrable]] = {}
 _C = TypeVar("_C", bound=type[Registrable])
 
 
+class DuplicateCheckId(KeyError):
+    """A second class registering an id that is already taken.
+
+    A bare `REGISTRY[cls.id] = cls` let the later import win silently. The plan row still
+    lists the id as assessed, so the coverage statement claims a check that never ran while
+    a different implementation ran in its place — the same "silently vanish" shape §9.5
+    forbids for attack classes, one level up.
+    """
+
+
+def _identity(cls: type[Registrable]) -> tuple[str, str]:
+    """What makes two registrations "the same class".
+
+    Not `is`: a module reimported under `importlib.reload` — which the test suite does —
+    produces a new class object for the same source, and that is a re-registration of the
+    same check, not a collision.
+    """
+    return (cls.__module__, cls.__qualname__)
+
+
+def _claim(reg: dict[str, type[Registrable]], cls: _C) -> _C:
+    """The guard both decorators share: declared attack classes, then the id.
+
+    `taxonomy.require()` is called HERE because §9.5 says an undeclared `attack_class` is a
+    startup error, not a warning, and registration is startup. Its docstring has always said
+    "the registry calls this at startup" — until now nothing did, and an undeclared string
+    sailed through to `report_json.coverage_of`, where the bare set-difference dropped it out
+    of both claimed-coverage rows and into `operational_reports`: a detector's coverage row
+    vanishing from the claim and reappearing somewhere that looks deliberate.
+    """
+    from cva.core.taxonomy import require  # local: keeps the import graph acyclic
+
+    for ac in cls.attack_classes:
+        require(ac)
+    prior = reg.get(cls.id)
+    if prior is not None and _identity(prior) != _identity(cls):
+        raise DuplicateCheckId(
+            f"check id {cls.id!r} is already registered by "
+            f"{prior.__module__}.{prior.__qualname__}; {cls.__module__}.{cls.__qualname__} "
+            f"would replace it silently and the coverage statement would keep claiming the "
+            f"id while a different implementation ran. Give one of them a distinct id.")
+    reg[cls.id] = cls
+    return cls
+
+
 def register(cls: _C) -> _C:
     """Register a ModelCheck — check(model, ctx)."""
-    REGISTRY[cls.id] = cls
-    return cls
+    return _claim(REGISTRY, cls)
 
 
 def register_detector(cls: _C) -> _C:
     """Register a Detector — detect(dataset, embeddings, model, ctx)."""
-    DETECTOR_REGISTRY[cls.id] = cls
-    return cls
+    return _claim(DETECTOR_REGISTRY, cls)

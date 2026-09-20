@@ -155,7 +155,9 @@ class NeuralCleanseCheck:
 
         # Top-K driven by the intrinsic ranking when one is available, so class count
         # stops being the thing that makes this infeasible.
-        order = ctx.profile.get("nc_class_order") or list(range(K))
+        # `run_state`, not `profile`: the ranking is a per-run input derived by
+        # model.intrinsic_probes, and the profile is hashed before any check runs.
+        order = ctx.run_state.get("nc_class_order") or list(range(K))
         topk = int(ctx.opt("nc_top_k", K))
         classes = list(order)[:topk]
 

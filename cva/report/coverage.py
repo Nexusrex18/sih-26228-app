@@ -29,10 +29,11 @@ STANDING_LIMITATIONS = [
 
 
 def render_markdown(result) -> str:
-    from .report_json import coverage_of
+    from .report_json import coverage_of, verdict_line
     cov = coverage_of(result)
     out = [f"# Coverage statement — scan {result.scan_id}", "",
-           f"Model `{result.model_id}` ({result.model_fmt}). Verdict: **{result.verdict}**.",
+           f"Model `{result.model_id}` ({result.model_fmt}). "
+           f"Verdict: **{verdict_line(result)}**.",
            "", "## Attack classes assessed in this scan", ""]
     for ac, checks in cov["assessed"].items():
         out.append(f"- `{ac}` — {TAXONOMY[ac].desc} — by {', '.join(checks)}")
