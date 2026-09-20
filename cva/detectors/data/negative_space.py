@@ -45,7 +45,8 @@ from .base import (
     make_finding,
     not_performed,
     register_detector,
-    to_model_input,
+    model_input,
+    preprocess_note,
     category_name,
 )
 from .taxonomy import NEGATIVE_SPACE_POISONING
@@ -104,7 +105,7 @@ class NegativeSpace:
         flagged: dict[str, list[dict]] = {}
         for i in range(0, len(samples), p["batch"]):
             chunk = samples[i:i + p["batch"]]
-            X = np.stack([to_model_input(s, model.input_shape) for s in chunk])
+            X = np.stack([model_input(s, model) for s in chunk])
             det = parse_detections(model.predict(X))
             if det is None:
                 return [not_performed(self.id, self.version, self.attack_classes,
@@ -169,6 +170,7 @@ class NegativeSpace:
                                             "cohort_rate": cohort, "n": n}, "unannotated detections")],
                     access_assumptions=["DATASET_IMAGES", "DATASET_LABELS", "DATASET_CONTRIBUTOR_META",
                                         "MODEL_PREDICT of the contributed model (data-question use)",
+                                        preprocess_note(model),
                                         "model output is (N, M, 6) [x1,y1,x2,y2,score,class] in input pixels"],
                     limitations=["A data-question use of the contributed model: corroborate, do not rely "
                                  "on it alone.",

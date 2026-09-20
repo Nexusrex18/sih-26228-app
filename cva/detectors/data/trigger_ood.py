@@ -64,7 +64,8 @@ from .base import (
     not_performed,
     register_detector,
     seed_of,
-    to_model_input,
+    model_input,
+    preprocess_note,
     sample_by_id,
     category_name,
     n_samples,
@@ -222,6 +223,7 @@ class TriggerArtifact:
         self.ctx = CheckContext()
         self.candidates = None
         self._layer_used = None
+        self._input_note = ""
         self._by_block: dict = {}
         self._ran: set[str] = set()
         self._problems: list[str] = []      # model-side / configuration faults, reported not raised
@@ -249,6 +251,7 @@ class TriggerArtifact:
         cs = self.p["candidate_samples"]
         self.candidates = list(cs) if cs else None
         self._layer_used = None
+        self._input_note = preprocess_note(model) if model is not None else ""
         self._by_block = {}
         self._ran = set()
         self._problems = []
@@ -315,7 +318,7 @@ class TriggerArtifact:
         for region, ids in groups.items():
             ids = sorted(ids)[: p["max_group_samples"]]
             try:
-                X = np.stack([to_model_input(sample_by_id(dataset, i), model.input_shape) for i in ids])
+                X = np.stack([model_input(sample_by_id(dataset, i), model) for i in ids])
                 res = occlusion_test(model, X, region, grid,
                                      _control_regions(region, grid, p["control_regions"], seed_of(p, self.ctx)))
             except Exception as e:
@@ -339,7 +342,7 @@ class TriggerArtifact:
         votes: Counter = Counter()
         try:
             for sid in self.candidates[: p["sweep_max_candidates"]]:
-                x = to_model_input(sample_by_id(dataset, sid), model.input_shape)[None]
+                x = model_input(sample_by_id(dataset, sid), model)[None]
                 base = model.predict(x)[0]
                 b = int(base.argmax())
                 best, best_drop = None, 0.0
@@ -367,7 +370,7 @@ class TriggerArtifact:
         # never the whole image tensor (100k x 3x64x64 float32 would be ~4.9 GB).
         chunks, layer = [], None
         for i in range(0, len(keep), 64):
-            Xb = np.stack([to_model_input(s, model.input_shape) for s, _ in keep[i:i + 64]])
+            Xb = np.stack([model_input(s, model) for s, _ in keep[i:i + 64]])
             a = model.activations(Xb)
             if not a:
                 # The capability set said MODEL_ACTIVATIONS is present but the adapter returned nothing:
@@ -452,7 +455,8 @@ class TriggerArtifact:
             attack_class=TRIGGER_INJECTION, nature=Nature.ADVERSARIAL,
             evidence=[self.ev.json({"signals": ms, "notes": notes}, "trigger-artifact signals"), sheet],
             access_assumptions=["DATASET_IMAGES"] + (
-                ["MODEL_PREDICT / MODEL_ACTIVATIONS of the contributed model (data-question use)"] if model_based else []),
+                ["MODEL_PREDICT / MODEL_ACTIVATIONS of the contributed model (data-question use)",
+                 self._input_note] if model_based else []),
             limitations=[
                 "Defeated by smoothed/blended triggers (a) and by adaptive attackers who blend the trigger's "
                 "activation pattern with clean data (b)/(c).",

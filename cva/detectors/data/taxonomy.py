@@ -1,6 +1,6 @@
 """Module A's ``attack_class`` names — the strings a detector puts in ``Finding.attack_class``.
 
-The DEFINITIONS (kind / default nature / description) live in ``cva.core.types.ATTACK_CLASSES``, the
+The DEFINITIONS (kind / default nature / description) live in ``cva.core.taxonomy.TAXONOMY``, the
 single flat registry the coverage generator reads (``cva/report/coverage.py``,
 ``report_json.coverage_of``). An attack class missing from there is silently dropped from the
 coverage statement and raises ``KeyError`` when a description is looked up — so

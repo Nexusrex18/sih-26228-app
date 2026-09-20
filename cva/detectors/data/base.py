@@ -314,13 +314,66 @@ def load_rgb(sample: Sample):
         return im.convert("RGB")
 
 
-def to_model_input(sample: Sample, input_shape: Sequence[int]) -> np.ndarray:
-    """Sample image -> float32 CHW in [0,1] at the model's input size."""
+def declared_preprocess(model: Any) -> dict[str, Any] | None:
+    """The operator's DECLARED preprocessing spec, read from the handle (``attach_preprocess`` stores its
+    canonical bytes on ``model.preprocess_spec_bytes``), or None when none was declared.
+
+    The stored form is quantised (``mean``/``std``/``value_range`` are integers scaled by 1e6, recorded in
+    ``quantisation``); this undoes exactly that. Nothing here re-validates the spec: the loader already did.
+    """
+    blob = getattr(model, "preprocess_spec_bytes", None)
+    if not blob:
+        return None
+    spec = json.loads(blob)
+    if spec.get("quantisation") != "e6":
+        raise ValueError(f"unsupported preprocessing spec quantisation {spec.get('quantisation')!r}")
+    out: dict[str, Any] = {"mean": np.asarray(spec["mean"], np.float64) / 1e6,
+                           "std": np.asarray(spec["std"], np.float64) / 1e6, "layout": spec["layout"],
+                           "value_range": None}
+    if spec.get("value_range"):
+        out["value_range"] = tuple(v / 1e6 for v in spec["value_range"])
+    return out
+
+
+def preprocess_note(model: Any) -> str:
+    """One line for ``access_assumptions``: which input path the model-touching detectors actually ran."""
+    spec = declared_preprocess(model)
+    if spec is None:
+        return "model input: no preprocessing declared, so images were scaled to [0,1] only"
+    return (f"model input: the DECLARED preprocessing spec was applied (value_range {spec['value_range']}, "
+            f"per-channel mean/std, layout {spec['layout']})")
+
+
+def to_model_input(sample: Sample, input_shape: Sequence[int], spec: Mapping[str, Any] | None = None) -> np.ndarray:
+    """Sample image -> float32 array at the model's input size: CHW in [0,1] by default.
+
+    With a declared ``spec`` (``declared_preprocess``): scale [0,1] to ``value_range``, subtract ``mean`` and
+    divide by ``std`` per channel, and emit HWC when the spec says so. Feeding a model that declared
+    normalisation unnormalised pixels would turn every occlusion / detection result into noise while the
+    finding still read as evidence, so this is not optional when a spec exists.
+    """
     from PIL import Image
 
-    c, h, w = (int(v) for v in input_shape[-3:])
+    hwc = bool(spec) and spec["layout"] == "HWC"
+    dims = [int(v) for v in input_shape[-3:]]
+    h, w, c = dims if hwc else (dims[1], dims[2], dims[0])
     im = load_rgb(sample).resize((w, h), Image.BILINEAR)
     if c == 1:
         im = im.convert("L")
     a = np.asarray(im, dtype=np.float32) / 255.0
-    return a[None] if c == 1 else a.transpose(2, 0, 1)
+    a = a[..., None] if c == 1 else a                                        # HWC
+    if spec:
+        if len(spec["mean"]) != c:
+            raise ValueError(f"the declared preprocessing has {len(spec['mean'])} channel(s) but the model "
+                             f"input has {c}")
+        if spec["value_range"] is not None:
+            lo, hi = spec["value_range"]
+            a = a * np.float32(hi - lo) + np.float32(lo)
+        a = (a - spec["mean"].astype(np.float32)) / spec["std"].astype(np.float32)
+    a = a.astype(np.float32, copy=False)
+    return a if hwc else a.transpose(2, 0, 1)
+
+
+def model_input(sample: Sample, model: Any) -> np.ndarray:
+    """``to_model_input`` for this model: its input size and, if it has one, its declared preprocessing."""
+    return to_model_input(sample, model.input_shape, declared_preprocess(model))

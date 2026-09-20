@@ -15,7 +15,7 @@ embedding backbone (see below).
 | `data.metadata_anomaly` · `data.annotation_geometry` · `data.negative_space` | one file each |
 | shared plumbing | `base.py` (Params, evidence store, `make_finding`, ctx helpers) |
 | real core types, re-exported in one place; plus the ONLY remaining stand-in (the fake embedding backbone) | `_stub_types.py` |
-| attack classes | names in `taxonomy.py`; **definitions live in `cva/core/types.py::ATTACK_CLASSES`** |
+| attack classes | names in `taxonomy.py`; **definitions live in `cva/core/taxonomy.py::TAXONOMY`** |
 
 * **Registration** is `@register_detector` (`cva.core.registry.DETECTOR_REGISTRY`), signature
   `detect(dataset, embeddings, model, ctx)` — the same contract `model.data_consistency` uses.
@@ -104,19 +104,23 @@ Honest negatives found while building:
 
 ## Open items — owners other than Module A
 
-1. **[Backend issue — to be filed]** **No orchestrator path runs any `Detector` yet.** `cva/core/orchestrator.scan(model, ctx)` takes no
-   dataset and iterates only `REGISTRY` (ModelChecks); `DETECTOR_REGISTRY` is never read, so
-   `model.data_consistency` is equally unreachable. `report_json.coverage_of` builds coverage from
-   `result.plan`, so **Module A appears in the coverage statement only once the orchestrator adds a
-   detector pass.** `test_module_a_reaches_the_real_coverage_generator` shows the generator accepts
-   Module A's rows once they are in a plan; `test_orchestrator_style_run_…` shows zero-arg + `ctx` works.
+1. **[Backend] No `data.*` detector is ever benchmarked, so all nine ship uncalibrated.** The scan path does run
+   them (`cva.cli` imports Module A's registry; `cva scan --dataset` plans and runs them), but
+   `cva/bench/run.py` and `validate.py` import only the model registry and build `RunContext` with no
+   `dataset`, so the bench corpus never produces a `data.*` finding to score. `apply_calibration` only
+   overwrites detectors present in `cal.calibrators`, so every Module A `confidence` in a report is the
+   detector's own uncalibrated belief while D3 (0.9) / D5 (0.6) treat it as calibrated. Needed: a
+   poisoned-dataset arm in the bench corpus (the §8 attack scripts already emit scoring manifests), Module A's
+   registry imported in the bench entrypoints, and `dataset=` passed in the `RunContext`. Until then the risk
+   engine should not apply `min_confidence` gates to a detector with no calibrator.
 2. **V9 threshold jitter (`ctx.jitter` / `ctx.opt` routing) is unreconciled.** The review of this
    branch cites `main@66852b5` (V9) and `main@9c2db62`; neither commit exists in this repository (its
    `main` is `d5f63c7`), and `CheckContext.opt` here is a plain lookup with no jitter, so it could not
    be reproduced or adapted. Module A reads its tunables from `ctx.profile[<detector_id>]` through ONE
    function, `Params.from_ctx` — so routing them through `ctx.opt` (or a namespaced form of it) is a
    one-function change once the owner of `context.py` decides the convention.
-3. **`data.ood` needs reference *embeddings*; `ctx.probes_x` holds raw images.** It reads
+3. **`data.ood` resolves OK and then cannot run: the capability and the data are different channels.** `REFERENCE_CLEAN_SET` is granted only from `ctx.probes_x` (`runcontext.py`), and nothing outside tests writes `ctx.profile["reference_embeddings"]`, so capability resolution passes and `detect()` returns `not_performed` every time. Declared, not silent — but the coverage row reads as runnable.
+   Original note: **`data.ood` needs reference *embeddings*; `ctx.probes_x` holds raw images.** It reads
    `ctx.profile["reference_embeddings"]` (an `(M, d)` array in the same space as `embeddings`) — the
    same channel Module B uses for `trigger_candidate`. Comparing `probes_x` with embeddings would
    need an extractor Module A must not own. `CheckContext` needs a reference-embeddings field.
@@ -130,6 +134,12 @@ Honest negatives found while building:
    contributor attribution gets no coverage of `negative_space_poisoning`. The alternative is
    `optional` with a degraded, clearly-labelled dataset-level mode; the registry row Backend adds
    must match whichever is chosen.
+6a. **[Backend] Declared preprocessing is hashed and sealed but applied by nothing shared.** `attach_preprocess`
+   stores `preprocess_spec_bytes` on the handle; no code in `cva/` applies `mean` / `std` / `value_range` to a
+   tensor. Module A feeds the contributed model itself, so `base.model_input` now applies the declared spec
+   (and records which input path ran in `access_assumptions`) — a local implementation of the documented
+   spec, which will diverge from `prov.recompute`'s unless Backend exposes one `apply_preprocess(handle, array)`
+   for both. The seal records a `preprocess_hash` for preprocessing the scan never performed until then.
 7. Detection vs classification: Module A assumes boxes / multi-label images; Module B's models are
    classifiers. Label checks use each image's *dominant* category (stated in `limitations`);
    `negative_space` assumes a `(N, M, 6)` detector output.
