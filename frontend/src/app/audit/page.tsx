@@ -245,7 +245,9 @@ function Row({ row }: { row: TimelineRow }) {
 
 function filterCls(active: boolean) {
   return cn(
-    "inline-flex h-9 items-center rounded-full border px-3.5 font-mono text-2xs transition-colors active:scale-[0.97]",
+    // 44px on a phone, 36px from `sm` up (see the findings filters for the reasoning).
+    "inline-flex h-11 items-center rounded-full border px-4 font-mono text-2xs transition-colors active:scale-[0.97]",
+    "sm:h-9 sm:px-3.5",
     active
       ? "border-accent bg-accent/10 text-accent"
       : "border-line bg-surface-panel text-ink-muted hover:border-line-strong hover:text-ink",

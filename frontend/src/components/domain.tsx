@@ -412,6 +412,98 @@ export function ProvenanceSummary({
   );
 }
 
+/* ------------------------------------------------- contributor card (phone)
+ * A seven-column table is unreadable at 390px and horizontal scrolling hides the column
+ * that matters, so below `md` every contributor table becomes these cards. One component,
+ * used by both the overview and the contributor view, so the two cannot drift. */
+
+export function Attribution({ row }: { row: ContributorRow }) {
+  if (row.contributor_source === "exif_cluster") {
+    return (
+      <div className="space-y-1">
+        <Chip tone="absent">hypothesis</Chip>
+        <p className="text-2xs text-ink-faint">
+          camera-serial cluster, not a declared identity
+        </p>
+      </div>
+    );
+  }
+  if (row.contributor_source) {
+    return (
+      <span className="font-mono text-2xs text-ink-muted">{row.contributor_source}</span>
+    );
+  }
+  return <span className="text-ink-faint">—</span>;
+}
+
+export function TargetStatus({
+  target,
+}: {
+  target?: import("@/lib/types").TargetState;
+}) {
+  if (target?.status === "quarantined") {
+    return (
+      <div className="space-y-1">
+        <Chip tone="quarantine">held, seq {target.cited_seq}</Chip>
+        {target.pending_release ? <Chip tone="pending">release pending</Chip> : null}
+      </div>
+    );
+  }
+  return <span className="text-2xs text-ink-faint">active</span>;
+}
+
+export function ContributorCard({
+  row,
+  scale,
+  target,
+  showGroupKey,
+  showStatus,
+}: {
+  row: ContributorRow;
+  scale: number;
+  target?: import("@/lib/types").TargetState;
+  showGroupKey?: boolean;
+  /** The quarantine state is only known where `/targets` was fetched; where it was not,
+   *  the card says nothing rather than implying "active". */
+  showStatus?: boolean;
+}) {
+  return (
+    <Panel className="p-4">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="break-all font-mono text-sm">{row.group_value}</span>
+        {showGroupKey ? <Chip tone="neutral">{row.group_key}</Chip> : null}
+        <DispositionChip value={row.disposition ?? "accept"} />
+      </div>
+      <div className="mb-3 flex flex-wrap gap-4 text-2xs text-ink-faint">
+        <span className="tnum">
+          n <span className="font-mono text-ink-muted">{row.n_samples}</span>
+        </span>
+        <span className="tnum">
+          flagged <span className="font-mono text-ink-muted">{row.n_flagged}</span>
+        </span>
+        <span className="tnum">
+          posterior{" "}
+          <span className="font-mono text-ink-muted">{fixed(row.posterior_mean, 4)}</span>
+        </span>
+      </div>
+      <CIBar row={row} scale={scale} />
+      <p className="mt-1 font-mono text-2xs text-ink-faint tnum">
+        {fixed(row.ci_low, 4)}–{fixed(row.ci_high, 4)}
+        {row.cohort_rate_used !== undefined
+          ? ` vs ${fixed(row.cohort_rate_used, 4)}`
+          : ""}
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Attribution row={row} />
+        {row.excludes_cohort_rate ? (
+          <Chip tone="quarantine">excludes the cohort rate</Chip>
+        ) : null}
+        {showStatus ? <TargetStatus target={target} /> : null}
+      </div>
+    </Panel>
+  );
+}
+
 /* ------------------------------------------------------------ host clock */
 
 export function HostTime({ value }: { value: string | null | undefined }) {

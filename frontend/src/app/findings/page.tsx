@@ -275,7 +275,7 @@ function FilterRow({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className="flex w-[5.5rem] shrink-0 items-center gap-1.5 font-mono text-2xs uppercase tracking-wider text-ink-faint">
+      <span className="flex w-full shrink-0 items-center gap-1.5 font-mono text-2xs uppercase tracking-wider text-ink-faint sm:w-[5.5rem]">
         <Filter className="h-3 w-3" aria-hidden />
         {label}
       </span>
@@ -304,9 +304,12 @@ function FilterRow({
 
 function chipCls(active: boolean) {
   return cn(
-    // 32px tall with generous padding: a comfortable touch target without looking chunky
-    // on desktop, and the whole row wraps rather than scrolling sideways on a phone.
-    "inline-flex h-8 items-center rounded-full border px-3 font-mono text-2xs transition-colors",
+    // 44px on a phone — Apple's minimum target, and these are the controls an analyst
+    // taps most — dropping to 32px from `sm` up, where a pointer is precise and a row of
+    // chunky pills would read as a toolbar. The row wraps rather than scrolling sideways,
+    // so no filter is ever hidden off the edge.
+    "inline-flex h-11 items-center rounded-full border px-4 font-mono text-2xs transition-colors",
+    "sm:h-8 sm:px-3",
     "active:scale-[0.97]",
     active
       ? "border-accent bg-accent/10 text-accent"

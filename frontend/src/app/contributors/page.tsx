@@ -4,7 +4,14 @@ import { Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import * as React from "react";
 import { toast } from "sonner";
-import { CIBar, DispositionChip, SealBadge } from "@/components/domain";
+import {
+  Attribution,
+  CIBar,
+  ContributorCard,
+  DispositionChip,
+  SealBadge,
+  TargetStatus,
+} from "@/components/domain";
 import { ScanNav } from "@/components/scan-nav";
 import { Shell, useApp } from "@/components/shell";
 import {
@@ -81,7 +88,7 @@ function Body() {
               onClick={() => setGroup(g)}
               aria-pressed={group === g}
               className={cn(
-                "inline-flex h-9 items-center rounded-full border px-4 font-mono text-xs transition-colors active:scale-[0.98]",
+                "inline-flex h-11 items-center rounded-full border px-4 font-mono text-xs transition-colors active:scale-[0.98] sm:h-9",
                 group === g
                   ? "border-accent bg-accent/10 text-accent"
                   : "border-line bg-surface-panel text-ink-muted hover:border-line-strong hover:text-ink",
@@ -105,6 +112,7 @@ function Body() {
                   row={r}
                   scale={scale}
                   target={findTarget(targets, r)}
+                  showStatus
                 />
               ))}
             </div>
@@ -173,7 +181,7 @@ function Body() {
                             <DispositionChip value={r.disposition ?? "accept"} />
                           </td>
                           <td className="px-3 py-3">
-                            <Status target={t} />
+                            <TargetStatus target={t} />
                           </td>
                         </tr>
                       );
@@ -271,84 +279,6 @@ function Body() {
 function findTarget(targets: TargetState[], row: ContributorRow) {
   return targets.find(
     (t) => t.target_type === row.group_key && t.target_ref === row.group_value,
-  );
-}
-
-function Attribution({ row }: { row: ContributorRow }) {
-  if (row.contributor_source === "exif_cluster") {
-    return (
-      <div className="space-y-1">
-        <Chip tone="absent">hypothesis</Chip>
-        <p className="text-2xs text-ink-faint">
-          camera-serial cluster, not a declared identity
-        </p>
-      </div>
-    );
-  }
-  if (row.contributor_source) {
-    return (
-      <span className="font-mono text-2xs text-ink-muted">{row.contributor_source}</span>
-    );
-  }
-  return <span className="text-ink-faint">—</span>;
-}
-
-function Status({ target }: { target?: TargetState }) {
-  if (target?.status === "quarantined") {
-    return (
-      <div className="space-y-1">
-        <Chip tone="quarantine">held, seq {target.cited_seq}</Chip>
-        {target.pending_release ? <Chip tone="pending">release pending</Chip> : null}
-      </div>
-    );
-  }
-  return <span className="text-2xs text-ink-faint">active</span>;
-}
-
-function ContributorCard({
-  row,
-  scale,
-  target,
-}: {
-  row: ContributorRow;
-  scale: number;
-  target?: TargetState;
-}) {
-  return (
-    <Panel className="p-4">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="break-all font-mono text-sm">{row.group_value}</span>
-        <DispositionChip value={row.disposition ?? "accept"} />
-      </div>
-      <div className="mb-3 flex flex-wrap gap-4 text-2xs text-ink-faint">
-        <span className="tnum">
-          n <span className="font-mono text-ink-muted">{row.n_samples}</span>
-        </span>
-        <span className="tnum">
-          flagged <span className="font-mono text-ink-muted">{row.n_flagged}</span>
-        </span>
-        <span className="tnum">
-          posterior{" "}
-          <span className="font-mono text-ink-muted">
-            {fixed(row.posterior_mean, 4)}
-          </span>
-        </span>
-      </div>
-      <CIBar row={row} scale={scale} />
-      <p className="mt-1 font-mono text-2xs text-ink-faint tnum">
-        {fixed(row.ci_low, 4)}–{fixed(row.ci_high, 4)}
-        {row.cohort_rate_used !== undefined
-          ? ` vs ${fixed(row.cohort_rate_used, 4)}`
-          : ""}
-      </p>
-      <div className="mt-2 flex flex-wrap gap-2">
-        <Attribution row={row} />
-        {row.excludes_cohort_rate ? (
-          <Chip tone="quarantine">excludes the cohort rate</Chip>
-        ) : null}
-        <Status target={target} />
-      </div>
-    </Panel>
   );
 }
 

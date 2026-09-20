@@ -5,8 +5,10 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import * as React from "react";
 import {
+  Attribution,
   AvailabilityChip,
   CIBar,
+  ContributorCard,
   DispositionChip,
   PlanRows,
   ProvenanceSummary,
@@ -264,7 +266,20 @@ function ScanBody() {
           }
         />
         {contributors.length ? (
-          <Panel className="overflow-hidden">
+          <>
+            {/* Cards on a phone, a table from `md` up — the same split the contributor
+                view uses, through the same component. */}
+            <div className="space-y-2 md:hidden">
+              {contributors.map((r) => (
+                <ContributorCard
+                  key={`${r.group_key}:${r.group_value}`}
+                  row={r}
+                  scale={ciScale}
+                  showGroupKey
+                />
+              ))}
+            </div>
+            <Panel className="hidden overflow-hidden md:block">
             <div className="overflow-x-auto scroll-slim">
               <table className="w-full text-sm">
                 <thead>
@@ -298,15 +313,7 @@ function ScanBody() {
                         <Chip tone="neutral">{r.group_key}</Chip>
                       </td>
                       <td className="px-3 py-3">
-                        {r.contributor_source === "exif_cluster" ? (
-                          <Chip tone="absent">hypothesis · exif_cluster</Chip>
-                        ) : r.contributor_source ? (
-                          <span className="font-mono text-2xs text-ink-muted">
-                            {r.contributor_source}
-                          </span>
-                        ) : (
-                          <span className="text-ink-faint">—</span>
-                        )}
+                        <Attribution row={r} />
                       </td>
                       <td className="px-3 py-3 text-right font-mono tnum">{r.n_samples}</td>
                       <td className="px-3 py-3 text-right font-mono tnum">{r.n_flagged}</td>
@@ -330,7 +337,8 @@ function ScanBody() {
                 </tbody>
               </table>
             </div>
-          </Panel>
+            </Panel>
+          </>
         ) : (
           <Empty title="No contributor rows">
             <p>

@@ -91,12 +91,14 @@ export function Sheet({
             transition={{ duration: 0.2 }}
             style={{ opacity: reduced ? undefined : scrim }}
             onClick={onClose}
+            data-sheet-scrim
             className="fixed inset-0 z-40 bg-surface-deep/70 backdrop-blur-sm"
           />
           <motion.div
             ref={sheetRef}
             role="dialog"
             aria-modal="true"
+            data-sheet
             aria-label={typeof title === "string" ? title : "Panel"}
             tabIndex={-1}
             style={{ y }}
