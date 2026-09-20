@@ -49,7 +49,18 @@ EVIDENCE_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'"
 SECURITY_HEADERS = {
     "Content-Security-Policy": CSP,
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    # `same-origin`, NOT `no-referrer`, and the difference is load-bearing.
+    #
+    # S7's second half checks `Origin`/`Referer` against `Host` on every state-changing
+    # request. Chrome omits `Origin` on a same-origin form POST, so `Referer` is the only
+    # signal left — and `no-referrer` strips that too. The result was every login POST
+    # failing the check with "this request did not come from this dashboard", which is a
+    # CSRF defence rejecting the legitimate case and telling the operator nothing useful.
+    #
+    # `same-origin` keeps the privacy property that mattered — a referrer is never sent to
+    # another origin, so no scan id or finding id leaks off the host — while leaving the
+    # header present for our own requests, which is exactly what the check reads.
+    "Referrer-Policy": "same-origin",
     "X-Frame-Options": "DENY",
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
