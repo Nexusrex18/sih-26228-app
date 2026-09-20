@@ -133,7 +133,7 @@ class NegativeSpace:
                         flagged.setdefault(s.sample_id, []).append(
                             {"bbox_xyxy": [float(v) for v in box], "score": float(sc), "class": int(cl)})
         if degraded:
-            return self._per_sample(dataset, samples, flagged)
+            return self._per_sample(dataset, samples, flagged, model)
         tot, hit = Counter(), Counter()
         for s in samples:
             tot[s.contributor] += 1
@@ -195,7 +195,7 @@ class NegativeSpace:
                                   "images to be compared with, so no cohort rate could be estimated")]
         return findings
 
-    def _per_sample(self, dataset: Dataset, samples: list, flagged: dict) -> list:
+    def _per_sample(self, dataset: Dataset, samples: list, flagged: dict, model) -> list:
         """The DEGRADED mode: no contributor attribution, so no cohort and no test.
 
         What survives is the §6.4 signal itself — a confident detection where no annotation
@@ -246,6 +246,7 @@ class NegativeSpace:
                     "DATASET_IMAGES", "DATASET_LABELS",
                     "NO DATASET_CONTRIBUTOR_META — degraded, per-image only",
                     "MODEL_PREDICT of the contributed model (data-question use)",
+                    preprocess_note(model),
                     "model output is (N, M, 6) [x1,y1,x2,y2,score,class] in input pixels"],
                 limitations=[
                     "DEGRADED: no contributor attribution, so the cohort comparison that "

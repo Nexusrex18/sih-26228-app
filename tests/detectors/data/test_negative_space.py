@@ -120,6 +120,36 @@ def test_no_contributors_runs_degraded_per_sample_rather_than_not_at_all(two_obj
             assert f.confidence < 0.6, f.confidence
 
 
+def test_both_modes_record_which_input_path_the_model_actually_got(two_object):
+    """The degraded branch omitted `preprocess_note` while the contributor branch carried
+    it, so a tier-5 scan's findings did not say whether the model was fed the declared
+    preprocessing or bare [0,1] — the one fact item 5 exists to make explicit, missing from
+    exactly the findings that are already the weaker claim.
+
+    Asserted on BOTH branches together, because the defect was the two drifting apart."""
+    import dataclasses
+
+    from cva.detectors.data.base import preprocess_note
+
+    model = FakeBoxDetector(two_object)          # the model still sees the true objects
+    note = preprocess_note(model)
+    # Annotations withheld from one contributor, so BOTH branches actually emit findings:
+    # on a clean dataset neither does, and the assertion below would be vacuous.
+    poisoned, _ = drop_annotations(two_object, seed=72, target_contributor="B", fraction=0.6)
+
+    cohort = NegativeSpace().detect(poisoned, None, model, None)
+    anon_ds = type(poisoned)(
+        [dataclasses.replace(s, contributor=None, contributor_source=None)
+         for s in poisoned.samples], poisoned.categories)
+    degraded = NegativeSpace().detect(anon_ds, None, model, None)
+
+    for label, findings in (("cohort", cohort), ("degraded", degraded)):
+        sample_level = [f for f in findings if f.target_type == "sample"]
+        assert sample_level, label
+        for f in sample_level:
+            assert note in f.access_assumptions, (label, f.access_assumptions)
+
+
 def test_single_contributor_has_no_cohort_and_says_so(two_object):
     import dataclasses
     solo = type(two_object)([dataclasses.replace(s, contributor="A") for s in two_object.samples],
