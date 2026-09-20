@@ -14,6 +14,7 @@ from cva.core.interfaces import DriftTest
 from cva.core.scanid import new_scan_id
 from cva.core.types import Dataset, Disposition, Nature, Sample
 from cva.detectors.drift.command import run
+from cva.detectors.drift.config import load_profile
 from cva.detectors.drift.registry import build_checks
 from cva.loaders.drift import (
     EmbeddingRows,
@@ -35,7 +36,7 @@ def batch(name,features):
 
 def scan(ref,inc,**kwargs):
     return scan_drift(ref,inc,checks=kwargs.pop('checks',build_checks()),
-                       scan_id=new_scan_id(counter=next(IDS)),**kwargs)
+                       scan_id=new_scan_id(counter=next(IDS)),profile=kwargs.pop('profile',load_profile()),**kwargs)
 
 
 def test_photometric_end_to_end_and_schema(tmp_path):
@@ -59,13 +60,18 @@ def test_photometric_end_to_end_and_schema(tmp_path):
     assert 'semantic_shift' in (report_dir/'drift.coverage.md').read_text()
 
 
-def test_no_reference_small_and_overlapping_batches_are_not_clean():
+def test_no_reference_describes_images_and_invalid_comparisons_are_gaps():
     a,b = batch('a',{'brightness':np.arange(2)}),batch('b',{'brightness':np.arange(2)})
-    for ref in (None,a,b):
+    r = scan(None,b)
+    axes = next(f for f in r.findings if f.detector_id == 'drift.interpretable_axes')
+    assert axes.availability == Availability.OK
+    assert axes.evidence[0].data['mode'] == 'description_only'
+    assert 'no shift comparison' in axes.reason
+    for ref in (a,b):
         r = scan(ref,b)
-        assert r.verdict == 'REVIEW'
+        assert r.verdict == 'ACCEPT'  # declared gaps are not evidence against the data
         assert all(f.availability == Availability.UNAVAILABLE for f in r.findings)
-        assert all(f.disposition_rule for f in r.findings)
+        assert all(f.exclusion_reason is None for f in r.findings)
     a = batch('same',{'brightness':np.arange(80)})
     r = scan(a,a)
     assert all('share image content' in f.reason for f in r.findings)
@@ -151,7 +157,7 @@ def test_clean_independent_batches_and_offline_execution(tmp_path,monkeypatch,se
     f = next(f for f in result.findings if f.detector_id == 'drift.interpretable_axes')
     assert f.severity.value == 'info'
     assert f.disposition == Disposition.ACCEPT
-    assert result.verdict == 'REVIEW'
+    assert result.verdict == 'ACCEPT'
 
 
 def test_distinct_scan_ids_stable_finding_ids_and_selftest(tmp_path):
@@ -220,8 +226,8 @@ def test_detectors_leave_policy_to_shared_risk_engine(monkeypatch):
         return real(*args,**kwargs)
     monkeypatch.setattr(risk,'assess',capture)
     result = scan(a,b)
-    assert called and all(f.disposition_rule for f in result.findings)
-    assert next(f for f in result.findings if f.detector_id == check.id).disposition_rule == 'DRIFT_MATERIAL'
+    assert called
+    assert next(f for f in result.findings if f.detector_id == check.id).disposition_rule == 'D6'
 
 
 def test_scan_output_allocation_is_atomic(tmp_path):

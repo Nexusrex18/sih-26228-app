@@ -14,11 +14,20 @@ class EmbeddingDistance:
     requires = frozenset({Capability.DATASET_IMAGES, Capability.REFERENCE_CLEAN_SET})
     optional = frozenset()
     attack_classes = frozenset({'distribution_shift'})
+    limitations = ('MMD and energy distance are not implemented; distribution coverage is narrowed to projected PSI/KS and descriptive centroid distances.',)
 
     def __init__(self, config=None):
         self.config = config or DriftConfig()
 
     def assess(self, reference, incoming, reference_dist=None, incoming_dist=None):
+        rows = self._assess(reference, incoming, reference_dist, incoming_dist)
+        for f in rows:
+            f.limitations.extend([
+                *self.limitations,
+                'Extractor identity/version are self-declared cache metadata, not verified artifact provenance.'])
+        return rows
+
+    def _assess(self, reference, incoming, reference_dist=None, incoming_dist=None):
         config = self.config
         ref_ids = tuple(s.sample_id for s in reference.samples)
         inc_ids = tuple(s.sample_id for s in incoming.samples)

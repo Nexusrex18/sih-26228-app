@@ -342,10 +342,10 @@ def model_arg_error(a) -> str | None:
 
 
 def build_model(a):
-    from cva.loaders.models.http_model import HTTPModel
-    from cva.loaders.models.subprocess_model import SubprocessModel
     """The model handle for `a`: a file loader, a Tier-2 adapter, or None (dataset-only).
     `model_arg_error` has already vetted the arguments."""
+    from cva.loaders.models.http_model import HTTPModel
+    from cva.loaders.models.subprocess_model import SubprocessModel
     cmd, url = _opt(a, "model_cmd"), _opt(a, "model_url")
     pre = _opt(a, "preprocess")
     if cmd:

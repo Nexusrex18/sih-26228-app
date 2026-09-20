@@ -22,6 +22,9 @@ class DeferredSemantic:
 
 
 class DeferredManipulation(DeferredSemantic):
+    # A future implementation consumes upstream findings, not raw-image capability.
+    # Until that handoff exists, the explicit unavailable finding is the entire contract.
+    requires = frozenset()
     id = 'drift.vs_manipulation'
     attack_classes = frozenset({'suspicious_manipulation'})
     reason = 'Intent classifier unavailable: no held-out validated calibration artifact.'

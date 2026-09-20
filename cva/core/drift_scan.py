@@ -11,7 +11,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from cva.core.capability import Availability, Capability, CapabilitySet, Resolution
+from cva.core.capability import (
+    Availability,
+    Capability,
+    CapabilitySet,
+    Resolution,
+    budget_excluded,
+)
 from cva.core.interfaces import DriftTest
 from cva.core.orchestrator import PlanRow, ScanResult
 from cva.core.scanid import validate_scan_id
@@ -36,7 +42,7 @@ class DriftScanResult(ScanResult):
 
 
 def scan_drift(reference: Dataset | None, incoming: Dataset, *,
-               checks: Sequence[DriftTest], scan_id: str, min_samples: int = 20,
+               checks: Sequence[DriftTest], scan_id: str, profile: dict[str, Any], min_samples: int = 20,
                reference_dist: Any = None, incoming_dist: Any = None) -> DriftScanResult:
     validate_scan_id(scan_id)
     caps = incoming.capabilities()
@@ -63,13 +69,20 @@ def scan_drift(reference: Dataset | None, incoming: Dataset, *,
         seen.add(check.id)
         relevant.update(check.requires | check.optional)
         resolution = caps.resolve(set(check.requires),set(check.optional))
+        enabled = profile.get('checks')
+        excluded = set(profile.get('disabled_checks') or ()) | set(profile.get('except_checks') or ())
+        if resolution.runnable and (check.id in excluded or (enabled is not None and check.id not in enabled)):
+            resolution = budget_excluded(profile['name'])
         if resolution.runnable and overlap:
             resolution = Resolution(Availability.UNAVAILABLE,
                 'Reference and incoming share image content; independent two-sample assessment is invalid',
-                exclusion_reason='capability')
-        elif resolution.runnable and (reference is None or min(len(reference.samples),len(incoming.samples)) < min_samples):
+                exclusion_reason=None)
+        elif resolution.runnable and reference is not None and (
+                len(reference.samples) < profile['psi'].get('min_reference_n', min_samples) or
+                len(incoming.samples) < profile['psi'].get('min_incoming_n', min_samples)):
             resolution = Resolution(Availability.UNAVAILABLE,
-                f'Need at least {min_samples} samples in each batch', exclusion_reason='capability')
+                f"Need at least {profile['psi'].get('min_reference_n', min_samples)} reference and "
+                f"{profile['psi'].get('min_incoming_n', min_samples)} incoming samples")
         plan.append(PlanRow(check.id,resolution,set(check.attack_classes)))
     for check,row in zip(checks,plan,strict=True):
         start = time.perf_counter()
@@ -78,7 +91,6 @@ def scan_drift(reference: Dataset | None, incoming: Dataset, *,
                     row.resolution.missing,ac,target_type='batch') for ac in sorted(check.attack_classes)]
         else:
             try:
-                assert reference is not None
                 got = check.assess(reference,incoming,reference_dist,incoming_dist)
                 if not got:
                     raise RuntimeError('Drift check returned no assessment')
@@ -92,7 +104,7 @@ def scan_drift(reference: Dataset | None, incoming: Dataset, *,
                 state = next((s for s in (Availability.ERROR,Availability.UNAVAILABLE,Availability.DEGRADED)
                               if s in states),Availability.OK)
                 if state != Availability.OK:
-                    row.resolution = Resolution(state,got[0].reason, exclusion_reason="capability" if state == Availability.UNAVAILABLE else None)
+                    row.resolution = Resolution(state,got[0].reason, exclusion_reason=None)
             except Exception as exc:
                 reason = f'Drift check failed: {type(exc).__name__}: {exc}'
                 got = [Finding(check.id,check.version,'batch',target,Severity.MEDIUM,0.,reason,
@@ -100,11 +112,15 @@ def scan_drift(reference: Dataset | None, incoming: Dataset, *,
                 row.resolution = Resolution(Availability.ERROR,reason)
         for f in got:
             f.scan_id = scan_id
+            for limitation in getattr(check, 'limitations', ()):
+                if limitation not in f.limitations:
+                    f.limitations.append(limitation)
             if f.availability == Availability.UNAVAILABLE:
-                f.exclusion_reason = ExclusionReason.CAPABILITY
+                f.exclusion_reason = (ExclusionReason(row.resolution.exclusion_reason)
+                                      if row.resolution.exclusion_reason else None)
             f.access_assumptions.append('Reference representativeness and independent sampling are assumed.')
         findings.extend(got)
         timings[check.id] = round(time.perf_counter()-start,3)
-    verdict = apply_policy(findings)
+    verdict = apply_policy(findings, profile)
     return DriftScanResult(scan_id,target,'image-dataset',caps,plan,findings,timings,verdict,
                            relevant_capabilities=tuple(sorted(relevant,key=lambda c:c.value)))

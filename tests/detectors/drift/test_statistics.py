@@ -79,3 +79,12 @@ def test_sparse_psi_can_survive_large_family_bh():
     evidence = f.evidence[0].data
     assert evidence['minimum_permutation_p'] <= .05/60
     assert evidence['axes']['0']['psi_q'] < .05
+
+
+def test_unscaled_chi_square_misses_a_real_shift():
+    from scipy.stats import chi2
+    # Corrected plan narrative: unscaled chi-square is too permissive, not
+    # false-alarm prone. A fixed PSI .25 heuristic is a separate failure mode.
+    observed_psi = .1
+    assert psi_pvalue(observed_psi,1000,1000,10) < .05
+    assert chi2.sf(observed_psi,9) > .95

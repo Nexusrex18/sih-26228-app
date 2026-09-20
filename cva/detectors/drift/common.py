@@ -38,7 +38,8 @@ def compare_features(reference, incoming, config, detector, x, y):
         row = rows[name]
         row['psi_q'], row['ks_q'] = map(float, q[2*i:2*i+2])
         row['material_shift'] = bool(min(row['psi_q'], row['ks_q']) <= config.alpha
-                                     and row['ks'] >= config.min_ks_effect)
+                                     and row['ks'] >= config.axis_thresholds.get(name, config.min_ks_effect))
+        row['minimum_ks_effect'] = config.axis_thresholds.get(name, config.min_ks_effect)
         if row['material_shift']:
             changed.append(name)
     reason = ('Material shift on ' + ', '.join(

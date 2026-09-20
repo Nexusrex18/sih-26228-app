@@ -56,6 +56,10 @@ class EmbeddingRows:
     extractor_id: str
     extractor_version: str
 
+    @property
+    def n(self):
+        return len(self.sample_ids)
+
     def __post_init__(self):
         x = np.asarray(self.embeddings)
         if (x.ndim != 2 or x.shape[0] != len(self.sample_ids) or x.shape[1] == 0
@@ -125,7 +129,9 @@ def _table(dataset, rows):
 
 
 def _load_folder(root):
-    files = sorted(p for p in root.rglob('*') if p.is_file() and p.suffix.lower() in SUFFIXES)
+    candidates = sorted(p for p in root.rglob('*') if p.is_file())
+    files = [p for p in candidates if p.suffix.lower() in SUFFIXES]
+    skipped = len(candidates) - len(files)
     if not files:
         raise ValueError(f'No supported images in {root}')
     dataset = MeasuredDataset(root=root)
@@ -137,6 +143,8 @@ def _load_folder(root):
         dataset.samples.append(Sample(sid,digest,path,w,h))
         rows.append(row)
     dataset.measurements = _table(dataset,rows)
+    if skipped:
+        dataset.measurements.limitations += (f'{skipped} files with unsupported suffixes were not assessed; {len(files)} images loaded.',)
     return dataset
 
 

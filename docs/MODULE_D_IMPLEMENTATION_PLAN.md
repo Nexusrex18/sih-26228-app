@@ -8,11 +8,12 @@ B3–B7/reporting follow-ups. It is a first working increment, not completion of
 
 - Plug-ins implement the **existing** `core/interfaces.py:DriftTest` signature:
   `assess(reference, incoming, reference_dist, incoming_dist)`. Both dataset parameters
-  are canonical `Dataset`s. Every plug-in declares `requires`, `optional`, `attack_classes`;
+  are canonical `Dataset`s when present; `reference` now explicitly permits `None`
+  for the plan-required reference-free image-axis description. Every plug-in declares `requires`, `optional`, `attack_classes`;
   the orchestrator resolves these declarations before execution and validates taxonomy.
 - No `DriftBatch` or `BatchDriftTest` contract, and no added core registry. Concrete checks
   are composed explicitly at the entrypoint and passed as `Sequence[DriftTest]`. Configuration
-  belongs to the detector package. Frozen interfaces and shared types are unchanged.
+  belongs to the detector package. The sole protocol amendment is the optional reference annotation; shared finding types are unchanged.
 - The image-directory adapter returns an `InMemoryDataset` implementation with cached
   measurements. Existing COCO/YOLO Dataset instances work through `measure_dataset`;
   the CLI currently accepts image directories, without inventing annotations or provenance.
@@ -35,12 +36,13 @@ B3–B7/reporting follow-ups. It is a first working increment, not completion of
   `EmbeddingDistribution` reports unavailable. Extractor identity/version/dimensions and
   sample order must match. Fixed projections and descriptive centroid distances are provided.
 - Reference/incoming content-hash overlap prevents independent two-sample assessment,
-  including renamed copies. Missing reference and small batches are unavailable.
+  including renamed copies. Small comparison batches are unavailable. Without a reference,
+  image axes still produce descriptive summaries, explicitly without PSI/KS or a drift claim.
 - Shared risk engine evaluates an explicit review-capped drift profile. Detectors do not
   set dispositions. Confidence remains an explicitly uncalibrated zero placeholder until a
   held-out calibration artifact exists; `1-p` is never sold as an attack probability.
 - `python -m cva.cli drift` is a lazy subcommand; no Torch/ONNX import is needed for it.
-  `cva.drift_cli` remains a compatibility shim. Shared report builders and generated coverage
+  The unreleased `cva.drift_cli` compatibility shim has been removed. Shared report builders and generated coverage
   are used unchanged in shape; dataset-only capability scoping is opt-in on the result.
 - Normal scan IDs use the shared grammar with atomic, per-output-root/day allocation.
   Existing scan directories are never overwritten. `--selftest` uses the shared pinned clock
@@ -62,7 +64,7 @@ B3–B7/reporting follow-ups. It is a first working increment, not completion of
 5. Taxonomy: deferred checks corrected.
 6. Independence: same content and partial overlap are unavailable.
 7. Sparse PSI: family-aware permutation budget plus significance and null-calibration tests.
-8. Risk: shared risk engine/profile owns policy; gaps receive explicit rules; no fabricated
+8. Risk: shared risk engine/profile owns policy; gaps keep their explicit reasons and do not override the verdict; no fabricated
    calibration. Batch-level drift does not imply contributor-risk assessment.
 9. Identity: new scan IDs, preserved outputs, deterministic IDs only in explicit selftest.
 10. Access: capabilities probed from the Dataset and reference, scoped by plug-in declarations;
@@ -74,9 +76,9 @@ B3–B7/reporting follow-ups. It is a first working increment, not completion of
    preserve sample hashes, extractor version, labels and contributor provenance.
 2. Add camera/sensor categories and feature-missingness assessment, timestamp/label/contributor
    sidecars, and stronger interpretation. Do not treat pixels as independent images.
-3. Train the MVP three-feature manipulation triage on development data, calibrate separately,
-   then evaluate on held-out benign and attack families. Expand to seven features only when
-   temporal/spatial/manifold inputs and independent validation exist. Keep review-only policy.
+3. Manipulation classification is deliberately deferred in full per Plan §7 and the final
+   review ruling. Neither the three-feature nor seven-feature classifier is required by this PR.
+   Any future implementation needs held-out calibration and a review-only profile ceiling.
 4. Add budgeted MMD and semantic cluster occupancy/nearest-example evidence. Reference-only
    k-means cannot create an absent reference cluster: use outlier distance for novelty and
    occupancy for mixture changes. Do not invent terrain/season labels from unlabeled clusters.
@@ -100,12 +102,49 @@ Dataset acceptance, declared capabilities, taxonomy, schema validation, model-re
 compatibility, overlap, scan identity/selftest, corrupt images and decompression-bomb headers.
 Synthetic tests are not field validation. Runtime/confidence limitations stay in reports.
 
-## Verified after review fixes
+## September 20 review resolutions
 
-Fast suite (`pytest -q -m "not slow and not corpus"`): **2,211 passed, 28 skipped,
-4 deselected, 1 expected failure**. Local HTTP test servers require execution outside
-the restricted sandbox; optional Module A dependencies were installed in the temporary
-test environment. Module D alone: 33 passed. Repository Ruff and `mypy cva/core` pass.
-Schema validation, renderer/CLI regressions, independent batches, loader safety and shared
-risk ownership are included. The 28 skips and excluded slow/corpus cases are not claimed
-as passing tests. No field accuracy is inferred from this suite.
+- Clean assessed findings can produce ACCEPT; declared UNAVAILABLE gaps stay in coverage.
+  ERROR forces REVIEW in the drift wrapper until Backend's equivalent shared fix merges.
+  No finding disposition is overridden after the shared risk engine runs.
+- `profiles/drift.json` holds the ordered D1–D7/C1–C3 policy, with D6 ungated for the
+  uncalibrated drift evidence and capped at review. No runtime shadow rule is inserted.
+  Backend still owns the general calibration-aware routing fix across modules; this explicit
+  drift profile follows its severity-only ruling without claiming to fix other modules.
+- `--profile` reads schema-validated PSI and per-axis effect settings. Explicit CLI flags
+  override the profile. Independent reference/incoming floors are honoured; `--min-samples`
+  sets both. The effective policy and settings are hashed by the shared hash helper and
+  saved to `effective.profile.json`. Reproduction commands run from that scan directory.
+- Genuine capability exclusions retain CAPABILITY, policy exclusions use BUDGET, and data
+  validity/size, cache mismatch and unfinished implementation gaps use None with a reason.
+- MMD/energy-distance cuts appear in distribution finding limitations even when the check
+  cannot run, and in generated Markdown coverage. Raw observations remain a private adapter
+  with validated row count (`n`), not interchangeable with moments-only EmbeddingDistribution.
+- The image-folder adapter counts unsupported files. Failed scan/report runs remove only
+  their reserved directory; shared immutable evidence is retained for concurrent readers.
+- `attacklab.photometric_shift.inject` splits an existing declared-clean corpus into disjoint
+  source batches, transforms a seeded fraction of incoming images, and records parameters,
+  source/output hashes and measured brightness truth. Brightness, contrast, sensor noise and
+  JPEG recompression are supported. The original synthetic generator remains a smoke helper.
+- Tests pin clean ACCEPT, error REVIEW, profile/schema/hash behavior, numeric shift magnitude,
+  per-axis effects, metadata and manual pixel statistics, seeded reproducibility and cleanup.
+  The unscaled-PSI regression asserts missed shifts, not the notes' reversed false-alarm claim.
+
+## Shared-surface decisions requiring Backend review before merge
+
+The four-argument DriftTest protocol remains; its reference annotation is now Dataset | None
+because §5 explicitly requires image-axis reporting without a reference. DriftScanResult still
+adds `asset_kind`, `relevant_capabilities`, and `drift_summary`; shared writers consume them,
+so Module E must preserve these dataset/report fields. The profile schema adds consumed drift
+knobs. The shared coverage writer adds finding limitations for dataset results only. The CLI's
+lazy imports stay in place, and build_model's docstring is restored.
+
+The final review assigns Plan corrections to its maintainer: reconcile §3's reference
+requirement with §5, correct §6.2's unscaled-PSI explanation, and align Consolidated/19's
+manipulation scope with Plan §7. This PR documents the decisions without editing another
+owner's plan. The actual helper/test decomposition is recorded here; separate psi.py/ks_test.py
+wrappers would add no behavior, so statistics remain together with dedicated regression tests.
+
+Validation results for this revision are recorded in the PR body. Synthetic regressions do
+not establish field accuracy. At the default 20-image comparison floor, small shifts can be
+missed; this is a minimum for attempting a test, not a recommended sample size or power claim.
