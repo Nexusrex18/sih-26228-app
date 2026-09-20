@@ -79,11 +79,12 @@ def test_the_extract_parses_the_rows_it_is_supposed_to():
 #: divergences between §9.4 and Module B's shipped detectors — e.g. §9.4 gives
 #: `model.strip` "`MODEL_PREDICT` **only**" while the code declares three capabilities, and
 #: gives `model.weight_digest` `MODEL_WEIGHTS, REFERENCE_MANIFEST` while the code declares
-#: none ("file access only"). Those are real and they are Module B's (ours), but each needs
-#: a per-row ruling on which side is right, and two rows are marked "confirmed by ML-2" in
-#: the plan, so they are not a drive-by fix inside a review cycle. They are reported as a
-#: finding rather than silently excluded — `test_module_b_rows_are_known_to_diverge` below
-#: keeps the count visible so it cannot quietly grow.
+#: none ("file access only"). Those are real, and they belong to **ML-2**, who owns Module B
+#: (`Plan/Module-B-Model-Integrity-Plan.md:13`; §6 calls it "ML-2's code and ML-2's
+#: question"). Each needs a per-row ruling on which side is authoritative, and two of the
+#: rows are marked "confirmed by ML-2" in the plan, so they are not a drive-by fix by
+#: another seat. Reported as a finding rather than silently excluded —
+#: `test_module_b_rows_are_known_to_diverge` below keeps the set visible so it cannot grow.
 _SCOPE = "data."
 
 
@@ -136,8 +137,9 @@ def test_module_b_rows_are_known_to_diverge_and_the_set_has_not_grown():
         f"the set of §9.4/code divergences in Module B changed.\n"
         f"  newly diverging: {sorted(diverging - known)}\n"
         f"  now agreeing (remove from `known`): {sorted(known - diverging)}\n"
-        f"Each needs a ruling on which side is authoritative — §12.1 says §9.4 is, but two "
-        f"of these rows are marked 'confirmed by ML-2' in the plan.")
+        f"These are ML-2's — Module B's owner. Each needs a ruling on which side is "
+        f"authoritative: §12.1 says §9.4 is, but two of these rows are themselves marked "
+        f"'confirmed by ML-2' in that table.")
 
 
 def test_the_vendored_extract_has_not_drifted_from_the_plan():
