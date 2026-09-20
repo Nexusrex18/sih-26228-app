@@ -310,92 +310,14 @@ def test_item27_a_model_with_no_declared_shape_is_left_alone(tmp_path):
     assert attach_preprocess(_Handle(), None, _write(tmp_path, IMAGENET, "q.json")) is True
 
 
-def test_item5_apply_preprocess_normalises_with_the_declared_spec(tmp_path):
-    """Item 5. Nothing in the tree applied the declared mean/std, so a model whose spec
-    declares normalisation was fed [0,1] inputs at scan time — and a prov.recompute that
-    honours the spec could not reproduce that scan, which would have had it flagging us."""
-    import numpy as np
-
-    from cva.loaders.preprocess import apply_preprocess
-
-    h = _Handle((3, 4, 4))
-    attach_preprocess(h, None, _write(tmp_path, IMAGENET, "im.json"))
-    a = np.full((3, 4, 4), 0.5, dtype=np.float32)
-    out, how = apply_preprocess(h, a)
-    mean = np.asarray(IMAGENET["mean"], dtype=np.float32).reshape(3, 1, 1)
-    std = np.asarray(IMAGENET["std"], dtype=np.float32).reshape(3, 1, 1)
-    lo, hi = IMAGENET.get("value_range", (0.0, 1.0))
-    expected = (a * (hi - lo) + lo - mean) / std
-    assert np.allclose(out, expected)
-    assert "was applied" in how
-    # It actually CHANGED the input — a no-op that returned `how` would pass a weaker test.
-    assert not np.allclose(out, a)
-
-
-def test_item5_apply_preprocess_uses_the_float_spec_not_the_quantised_bytes(tmp_path):
-    """The trap this pins. `preprocess_spec_bytes` is the QUANTISED spec — mean/std as
-    floor(x*1e6+0.5) integers — which exists to be hashed, not computed with. Normalising by
-    mean=[485000, ...] feeds every detector garbage, which is worse than the /255.0 it
-    replaced.
-
-    It has to be tested WITHOUT `value_range`, because with one present the 1e6 factor
-    cancels by homogeneity and the wrong implementation returns the right answer.
-    """
-    import numpy as np
-
-    from cva.loaders.preprocess import apply_preprocess
-
-    spec = _spec(mean=[0.5, 0.4, 0.3], std=[0.2, 0.2, 0.2])
-    spec.pop("value_range", None)
-    assert "value_range" not in spec
-    h = _Handle((3, 4, 4))
-    attach_preprocess(h, None, _write(tmp_path, spec, "novr.json"))
-    a = np.full((3, 4, 4), 0.5, dtype=np.float32)
-    out, _ = apply_preprocess(h, a)
-    mean = np.asarray(spec["mean"], dtype=np.float32).reshape(3, 1, 1)
-    std = np.asarray(spec["std"], dtype=np.float32).reshape(3, 1, 1)
-    assert np.allclose(out, (a - mean) / std)
-    # A second, independent handle on the same bug — the channel whose mean IS the input
-    # value must centre exactly on zero. Under the quantised spec it lands at
-    # (0.5 - 500000) / 200000 = -2.5.
-    #
-    # NOT a magnitude check. The obvious one — "the quantised form would put everything
-    # around -2.4e6, so assert the output is small" — is WRONG and silently vacuous: `std`
-    # is quantised by the same 1e6 factor as `mean`, so the factor cancels in the ratio and
-    # the buggy output lands at 2.5, comfortably inside any sane bound. An earlier version
-    # of this test asserted `abs(out).max() < 100.0` and passed under the bug it was written
-    # to catch. Caught in review; kept as a comment because the cancellation is the whole
-    # reason this defect is hard to see.
-    assert out[0].max() == pytest.approx(0.0, abs=1e-5), out[0].max()
-
-
-def test_item5_no_declared_spec_keeps_the_0_1_scaling_and_says_so():
-    """The honest default: scale to [0,1] and state that no normalisation was applied.
-    Guessing a mean/std would be a fact about the model that nobody declared."""
-    import numpy as np
-
-    from cva.loaders.preprocess import apply_preprocess
-
-    a = np.full((3, 4, 4), 0.5, dtype=np.float32)
-    out, how = apply_preprocess(_Handle((3, 4, 4)), a)
-    assert out is a
-    assert "No preprocessing spec was declared" in how
-
-
-def test_item5_a_channel_mismatch_degrades_and_says_prov_recompute_will_not_reproduce(tmp_path):
-    """`attach_preprocess` now rejects this pairing at load (item 27), so reaching here means
-    the array is not the shape the spec describes. Do not silently broadcast: say that the
-    spec was not applied, and that a recompute will not match."""
-    import numpy as np
-
-    from cva.loaders.preprocess import apply_preprocess
-
-    h = _Handle((3, 4, 4))
-    attach_preprocess(h, None, _write(tmp_path, IMAGENET, "im2.json"))
-    a = np.full((1, 4, 4), 0.5, dtype=np.float32)
-    out, how = apply_preprocess(h, a)
-    assert out is a
-    assert "NOT applied" in how and "prov.recompute will not reproduce" in how
+# The four `apply_preprocess` tests that stood here are gone with the function.
+# Module A implemented the inference-path half of item 5 in their own seat
+# (`detectors/data/base.py`: `declared_preprocess` + `to_model_input(spec)` +
+# `preprocess_note`), and theirs is better — it handles the HWC layout and validates the
+# channel count, which this one did not. Keeping a second implementation with no caller
+# would have been the audit's own finding shape, so it was deleted rather than left to
+# rot. `declared_preprocess` un-quantises correctly (`/ 1e6`), so the trap these tests
+# were written for does not exist on their path.
 
 
 def test_load_model_finds_the_sidecar_too(model_copy):

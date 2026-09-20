@@ -44,8 +44,6 @@ import math
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from cva.core.quantise import canonical_bytes, q_e6
 from cva.loaders.safety import UnsafeArtifact, check_json_safety
 
@@ -263,57 +261,6 @@ def preprocess_store_name(preprocess_hash: str) -> str:
 
 # --- attaching to a handle -------------------------------------------------------------------
 
-def apply_preprocess(handle: Any, array: Any) -> tuple[Any, str]:
-    """Apply the model's DECLARED preprocessing to `array`, or say why it was not applied.
-
-    Returns `(array, how)`, where `how` is one line for `access_assumptions` naming which
-    path ran. The caller records it; a scan that fed the model one way and reported another
-    is the failure this return value exists to prevent.
-
-    `array` is float32 CHW in [0, 1] — the shared convention at the inference boundary. The
-    spec's `value_range` rescales from [0, 1] to whatever the model expects, then `mean` and
-    `std` normalise per channel.
-
-    **Why this exists (item 5).** §7.7/§9.2 bind Backend to PRODUCING `preprocess_hash` and
-    the stored spec so `prov.recompute` can re-run it, and that obligation is met. What no
-    section said is WHO APPLIES the spec at inference — and so nobody did: the scan-time path
-    did a bilinear resize and `/255.0` and ignored the declared `mean`/`std` entirely. Two
-    consequences, both real: detector evidence computed on wrongly-scaled inputs, and a
-    recompute that honours the spec cannot reproduce the scan that ignored it, which puts
-    `prov.recompute` in the position of flagging our own scan.
-
-    A model with no declared spec keeps `/255.0`, which is the honest default rather than a
-    guess at normalisation — and the report already carries a standing limitation saying
-    `prov.recompute` cannot be performed for such a model.
-    """
-    # `preprocess_spec`, the VALIDATED FLOAT form, and never `preprocess_spec_bytes`. Those
-    # bytes are the QUANTISED spec — `mean`/`std`/`value_range` as `floor(x*1e6 + 0.5)`
-    # integers (`quantise_spec`) — which exist to be hashed, not to be computed with.
-    # Normalising by `mean = [485000, 456000, 406000]` would feed every detector garbage,
-    # which is a worse state than the `/255.0` this replaced. The trap is that with a
-    # `value_range` present the error cancels by homogeneity and looks correct; with
-    # `value_range` absent (it is optional) it does not.
-    spec = getattr(handle, "preprocess_spec", None)
-    if spec is None:
-        return array, ("No preprocessing spec was declared for this model, so scan-time "
-                       "inputs are scaled to [0,1] only (no mean/std normalisation).")
-    a = np.asarray(array, dtype=np.float32)
-    mean = np.asarray(spec["mean"], dtype=np.float32)
-    std = np.asarray(spec["std"], dtype=np.float32)
-    if a.ndim != 3 or a.shape[0] != len(mean):
-        return array, (
-            f"The declared preprocessing spec has {len(mean)} channel(s) but the scan-time "
-            f"array is {a.shape}; the spec was NOT applied and inputs are scaled to [0,1] "
-            "only. prov.recompute will not reproduce this scan.")
-    lo, hi = spec.get("value_range", (0.0, 1.0))
-    a = a * (float(hi) - float(lo)) + float(lo)
-    shaped = (len(mean), 1, 1)
-    a = (a - mean.reshape(shaped)) / std.reshape(shaped)
-    return a, ("The model's declared preprocessing spec was applied to scan-time inputs "
-               f"(value_range {lo}..{hi}, then per-channel mean/std), so prov.recompute "
-               "reproduces the same inputs this scan used.")
-
-
 def check_spec_against_model(spec: dict[str, Any], handle: Any, source: str) -> None:
     """Cross-check the DECLARED spec against what the model actually accepts.
 
@@ -373,8 +320,4 @@ def attach_preprocess(handle: Any, model_path: str | Path | None = None,
     handle.preprocess_hash = digest
     handle.preprocess_ref = preprocess_ref_of(digest)
     handle.preprocess_spec_bytes = blob
-    # The validated FLOAT spec, for `apply_preprocess` to compute with. `preprocess_spec_bytes`
-    # beside it is the QUANTISED form and exists to be hashed and stored; the two are not
-    # interchangeable and normalising with the quantised one is silently wrong.
-    handle.preprocess_spec = spec
     return True
