@@ -32,7 +32,7 @@ from typing import Any, NamedTuple
 from urllib.parse import quote
 
 from .canonical import parse_strict
-from .chain import link_from, link_hash, seal_next
+from .chain import link_from, link_hash, rotation_body, seal_next
 from .errors import (
     InvalidRecord,
     LedgerBusy,
@@ -165,6 +165,7 @@ class SealedLedger:
         self.genesis: dict[str, Any] = {}
         self.deployment_manifest: dict[str, Any] = {}
         self.genesis_key_id: str = ""
+        self.active_key_id: str = ""                 # the key that signs the NEXT record (genesis key, or the last rotation's)
         if require_genesis:
             self._load_genesis()
 
@@ -175,6 +176,14 @@ class SealedLedger:
         self.genesis = genesis
         self.deployment_manifest = genesis["deployment_manifest"]
         self.genesis_key_id = genesis["key_id"]
+        self.active_key_id = self._current_key_id()
+
+    def _current_key_id(self) -> str:
+        row = self._conn.execute("SELECT seq FROM records WHERE type='key_rotation' ORDER BY seq DESC LIMIT 1").fetchone()
+        if row is None:
+            return self.genesis_key_id
+        rot = self._read_record(row[0])
+        return str(rot["rotation"]["new_key_id"]) if rot else self.genesis_key_id
 
     @contextmanager
     def _snapshot(self) -> Iterator[None]:
@@ -288,10 +297,10 @@ class SealedLedger:
             raise
         if not read_only and _require_genesis:
             assert key is not None
-            if key.key_id != led.genesis_key_id:
+            if key.key_id != led.active_key_id:
                 led.close()
-                raise WrongKey(f"key {key.key_id[:16]}… is not this ledger's signing key "
-                               f"({led.genesis_key_id[:16]}…); key rotation is supported from gate C7")
+                raise WrongKey(f"key {key.key_id[:16]}… is not this ledger's active signing key "
+                               f"({led.active_key_id[:16]}…)")
             if recover:
                 led._recover()
             if led.durability == "group_commit" and background_flush:
@@ -390,11 +399,14 @@ class SealedLedger:
         """Append one record. Returns what was written, including any checkpoint it triggered."""
         return self.append_many([(rtype, body)])
 
-    def append_many(self, items: list[tuple[str, Mapping[str, Any]]],
-                    payloads: Sequence[bytes] = ()) -> list[Written]:
+    def append_many(self, items: Sequence[tuple[str, Mapping[str, Any] | Callable[[int], Mapping[str, Any]]]],
+                    payloads: Sequence[bytes] = (), *, rotate_to: KeyProvider | None = None) -> list[Written]:
         """Append several records — and the payloads they reference — ATOMICALLY (one transaction): all
         are written or none are. Returns a `Written(record_hash, seq, type)` for every record written,
-        checkpoints included, in order. Payloads go in first, in the same transaction, so a record never
+        checkpoints included, in order. A body may be a callable taking the record's seq (for records that must
+        state their own position — a rotation's `effective_seq`); a `key_rotation` needs `rotate_to`, the
+        incoming key, which signs every record after it — including a checkpoint the rotation triggers.
+        Payloads go in first, in the same transaction, so a record never
         references a payload that does not exist and one fsync covers both."""
         if self.read_only or self._key is None:
             raise LedgerUnavailable("this ledger handle is read-only or has no signing key")
@@ -422,9 +434,16 @@ class SealedLedger:
                     prev = self._read_record(row[0])
                 count = 0 if row is None else row[0] + 1
                 tree = MerkleTree(SqliteNodeStore(self._conn), size=count)
-                queue: list[tuple[str, Mapping[str, Any]]] = list(items)
+                queue: list[tuple[str, Mapping[str, Any] | Callable[[int], Mapping[str, Any]]]] = list(items)
                 while queue:
                     rtype, body = queue.pop(0)
+                    if callable(body):
+                        if prev is None:
+                            raise SealError("no genesis record to follow")
+                        body = body(prev["seq"] + 1)
+                    if rtype == "key_rotation" and (rotate_to is None or
+                                                    body["rotation"]["new_key_id"] != rotate_to.key_id):
+                        raise SealError("a key_rotation record needs the incoming key it names (rotate_to)")
                     nonce = new_nonce(self._rng) if self._rng else new_nonce()
                     signed, data = seal_next(rtype, body, key=key, prev=prev, now=self._clock(), nonce=nonce,
                                              prev_link=prev_link)
@@ -435,6 +454,9 @@ class SealedLedger:
                     written.append(Written(rh.hex(), signed["seq"], rtype))
                     prev, count = signed, count + 1
                     prev_link = link_from(rh, signed["signature"])
+                    if rtype == "key_rotation":
+                        assert rotate_to is not None
+                        key = rotate_to                            # effective_seq == seq + 1: the next record is theirs
                     if rtype not in ("checkpoint", "genesis") and count % self.checkpoint_every == 0:
                         queue.insert(0, ("checkpoint", {"checkpoint": {"tree_size": count,
                                                                        "root_hash": tree.root(count).hex()}}))
@@ -452,8 +474,43 @@ class SealedLedger:
                     raise _classify(e) from None
                 raise
             self._tip, self._tip_link = prev, prev_link
+            self._key, self.active_key_id = key, key.key_id
             self._after_commit(len(written))
             return written
+
+    # -- key rotation, checkpoints, anchors (gate C7) ----------------------------------------------------
+
+    def rotate_key(self, new_key: KeyProvider) -> Written:
+        """Hand signing over to `new_key`: append a `key_rotation` record signed by the OUTGOING key, carrying
+        the incoming public key and the incoming key's proof-of-possession, then sign with `new_key` from the
+        next record. Durable before it returns — a rotation that only exists in a buffer would leave the next
+        process opening the ledger with the wrong key."""
+        if self._key is None:
+            raise LedgerUnavailable("this ledger handle is read-only or has no signing key")
+        out, key = self._key, new_key
+        if key.key_id == out.key_id:
+            raise SealError("cannot rotate to the key that is already active")
+
+        def body(seq: int) -> Mapping[str, Any]:
+            return rotation_body(out, key, seq)
+        written = self.append_many([("key_rotation", body)], rotate_to=new_key)
+        self.flush()
+        return written[0]
+
+    def checkpoint_now(self) -> Written:
+        """Append a signed checkpoint at the CURRENT size, whatever the cadence — an anchor needs one at the tip."""
+        with self._lock:
+            n = self.size()
+            item = ("checkpoint", {"checkpoint": {"tree_size": n, "root_hash": self.root(n).hex()}})
+            return self.append_many([item])[0]
+
+    def latest_checkpoint(self) -> dict[str, Any] | None:
+        row = self._conn.execute("SELECT seq FROM records WHERE type='checkpoint' ORDER BY seq DESC LIMIT 1").fetchone()
+        return None if row is None else self._read_record(row[0])
+
+    def records_after(self, seq: int) -> list[str]:
+        """Types of the records after `seq`, in order."""
+        return [str(r[0]) for r in self._conn.execute("SELECT type FROM records WHERE seq>? ORDER BY seq", (seq,))]
 
     # -- payloads ----------------------------------------------------------------------------------
 

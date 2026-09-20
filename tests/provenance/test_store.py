@@ -72,7 +72,7 @@ def test_a_ledger_is_never_created_implicitly_by_open(tmp_path):
 
 def test_a_writer_must_present_the_ledgers_own_key(tmp_path):
     new_ledger(tmp_path).close()
-    with pytest.raises(WrongKey, match="not this ledger's signing key"):
+    with pytest.raises(WrongKey, match="not this ledger's active signing key"):
         SealedLedger.open(tmp_path / "l.db", key=provider(SEED_B))
     with pytest.raises(WrongKey, match="needs its signing key"):
         SealedLedger.open(tmp_path / "l.db")

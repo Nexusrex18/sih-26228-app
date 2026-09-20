@@ -159,8 +159,11 @@ class Sealer:
         clock = clock or (lambda: datetime.now(UTC))
         ledger = SealedLedger.open(ledger_path, key=key, clock=clock, rng=rng, background_flush=background_flush)
         try:
-            if key.key_id not in tr.ledger_keys():
-                raise TrustRootError(f"signing key {key.key_id[:16]}… is not a ledger key in the trust root")
+            # the trust root vouches for the GENESIS key; a later active key is vouched for by the rotation
+            # chain, which the verifier checks — so requiring it in the trust root would forbid rotation
+            if ledger.genesis_key_id not in tr.ledger_keys():
+                raise TrustRootError(f"the ledger's genesis key {ledger.genesis_key_id[:16]}… is not a ledger key "
+                                     "in the trust root")
             if genesis_prev_hash(ledger.deployment_manifest) != tr.deployment_manifest_hash:
                 raise TrustRootError("the trust root was issued for a different deployment manifest than this ledger's")
             sealer = cls(ledger, key, policy, os.fspath(ledger_path) + ".spill", clock)
@@ -169,6 +172,15 @@ class Sealer:
             ledger.close()
             raise
         return sealer
+
+    def rotate_key(self, new_key: KeyProvider) -> None:
+        """Rotate the ledger's signing key (plan §5.10). Refuses a key that cannot sign, since a rotation to a
+        key that then fails leaves the ledger unwritable."""
+        with self._lock:
+            if not _can_sign(new_key):
+                raise SealError("the incoming key cannot produce a verifying signature; not rotating to it")
+            self._ledger.rotate_key(new_key)
+            self._key = new_key
 
     # -- registration (once per model load — NEVER per inference) ---------------------------------
 

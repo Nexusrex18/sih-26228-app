@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from .canonical import parse_strict
-from .constants import DOMAIN_LINK, TAG_RECORD
+from .canonical import canonical_bytes, parse_strict
+from .constants import DOMAIN_LINK, TAG_RECORD, TAG_ROTATION_POP
 from .errors import InvalidRecord, NonCanonical, SealError, SigningFailed
 from .keys import KeyProvider, verify_ed25519
 from .records import (
@@ -69,6 +69,33 @@ def verify_signature(record: Mapping[str, Any], public_key: bytes) -> bool:
     return verify_ed25519(public_key, message, sig)
 
 
+def rotation_pop_message(new_key_id: str, effective_seq: int, prev_key_id: str) -> bytes:
+    """What the INCOMING key signs to prove it is held by whoever is rotating to it (plan §5.10):
+    `"cva-seal/1 rotation-pop\\n" ‖ JCS({new_key_id, effective_seq, prev_key_id})`. Binding the outgoing key
+    and the position stops a proof from being replayed into a different rotation."""
+    return TAG_ROTATION_POP + canonical_bytes({"new_key_id": new_key_id, "effective_seq": effective_seq,
+                                               "prev_key_id": prev_key_id})
+
+
+def rotation_pop_valid(record: Mapping[str, Any]) -> bool:
+    """True iff a `key_rotation` record's proof-of-possession verifies under the key it introduces."""
+    try:
+        rot = record["rotation"]
+        return verify_ed25519(bytes.fromhex(rot["new_public_key"]),
+                              rotation_pop_message(rot["new_key_id"], rot["effective_seq"], record["key_id"]),
+                              bytes.fromhex(rot["new_key_pop"]))
+    except (KeyError, ValueError, TypeError, NonCanonical):
+        return False
+
+
+def rotation_body(outgoing: KeyProvider, incoming: KeyProvider, seq: int) -> dict[str, Any]:
+    """The body of a `key_rotation` record that will sit at `seq` (so `effective_seq` = seq + 1)."""
+    eff = seq + 1
+    pop = incoming.sign(rotation_pop_message(incoming.key_id, eff, outgoing.key_id))
+    return {"rotation": {"new_key_id": incoming.key_id, "new_public_key": incoming.public_key.hex(),
+                         "effective_seq": eff, "new_key_pop": pop.hex()}}
+
+
 def link_from(rec_hash: bytes, signature_hex: str) -> str:
     """The one definition of the chain link, from an already-computed record_hash and the signature."""
     return hashlib.sha256(DOMAIN_LINK + rec_hash + bytes.fromhex(signature_hex)).hexdigest()
@@ -109,6 +136,7 @@ class MemoryChain:
     def __init__(self, key: KeyProvider, *, clock: Callable[[], datetime] | None = None,
                  rng: Callable[[int], bytes] | None = None) -> None:
         self._key = key
+        self._keys: dict[str, bytes] = {key.key_id: key.public_key}
         self._clock = clock or (lambda: datetime.now(UTC))
         self._rng = rng
         self.records: list[dict[str, Any]] = []
@@ -122,8 +150,31 @@ class MemoryChain:
         self.stored.append(data)
         return data
 
+    def checkpoint_now(self) -> bytes:
+        """Append a signed checkpoint over the records so far (the SQLite ledger does this on its cadence)."""
+        from .merkle import leaf_hash, mth
+        n = len(self.stored)
+        root = mth([leaf_hash(d) for d in self.stored]).hex()
+        return self.append("checkpoint", {"checkpoint": {"tree_size": n, "root_hash": root}})
+
+    def anchor_now(self, *, medium: str = "write_once", label: str = "") -> bytes:
+        """Checkpoint, then record that an anchor was exported for it."""
+        self.checkpoint_now()
+        cp = self.records[-1]["checkpoint"]
+        return self.append("anchor_event", {"anchor": {"checkpoint_seq": self.records[-1]["seq"],
+                                                       "tree_size": cp["tree_size"], "root_hash": cp["root_hash"],
+                                                       "cosigner_key_ids": [], "medium": medium, "label": label}})
+
+    def rotate_key(self, new_key: KeyProvider) -> bytes:
+        """Append a `key_rotation` signed by the OUTGOING key, with the incoming key's proof-of-possession;
+        later records are signed by `new_key`."""
+        self._keys[new_key.key_id] = new_key.public_key
+        data = self.append("key_rotation", rotation_body(self._key, new_key, len(self.records)))
+        self._key = new_key
+        return data
+
     def verify(self) -> ChainCheck:
-        return verify_chain(self.stored, ledger_keys={self._key.key_id: self._key.public_key})
+        return verify_chain(self.stored, ledger_keys=dict(self._keys))
 
 
 @dataclass(frozen=True)
@@ -171,8 +222,8 @@ def check_record(data: bytes, pos: int, prev: Mapping[str, Any] | None, active_k
         return fail("bad_signature", "Ed25519 signature does not verify over the record bytes")
     if prev is not None and rec["prev_record_hash"] != link_hash(prev):
         return fail("chain_broken", "prev_record_hash does not match the previous record's link")
-    if rec["type"] == "key_rotation":
-        return fail("unsupported", "key rotation is verified from gate C7")
+    if rec["type"] == "key_rotation" and not rotation_pop_valid(rec):
+        return fail("bad_rotation_pop", "the incoming key's proof-of-possession does not verify")
     return rec, None
 
 
@@ -181,7 +232,7 @@ def verify_chain(stored: Sequence[bytes], *, ledger_keys: Mapping[str, bytes]) -
     correctly signed, correctly chained history under `ledger_keys` (key_id -> raw public key), and
     report the FIRST failure. Codes:
       malformed_record · non_canonical_encoding · bad_seq · key_unauthorised · bad_signature ·
-      chain_broken · genesis_mismatch · empty_ledger · unsupported
+      chain_broken · genesis_mismatch · empty_ledger · bad_rotation_pop
     """
     for kid, pub in ledger_keys.items():
         if key_id_of(pub.hex()) != kid:
@@ -197,5 +248,9 @@ def verify_chain(stored: Sequence[bytes], *, ledger_keys: Mapping[str, bytes]) -
         assert rec is not None
         if pos == 0:
             active_key = rec["key_id"]
+        elif rec["type"] == "key_rotation":       # signed by the outgoing key, PoP-checked: the new key takes over
+            rot = rec["rotation"]
+            ledger_keys = {**ledger_keys, rot["new_key_id"]: bytes.fromhex(rot["new_public_key"])}
+            active_key = rot["new_key_id"]
         prev = rec
     return ChainCheck(True, len(stored))

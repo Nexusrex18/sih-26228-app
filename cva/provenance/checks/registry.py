@@ -20,8 +20,9 @@ from __future__ import annotations
 from cva.core.taxonomy import TAXONOMY
 
 from .ledger_verify import LedgerVerify
+from .recompute import Recompute
 
-PROV_CHECKS: dict[str, type[LedgerVerify]] = {LedgerVerify.id: LedgerVerify}
+PROV_CHECKS: dict[str, type[LedgerVerify] | type[Recompute]] = {LedgerVerify.id: LedgerVerify, Recompute.id: Recompute}
 
 
 def assert_taxonomy_ok() -> None:

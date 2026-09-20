@@ -17,3 +17,10 @@ cva-bundle.tar
 vendor/weights/*.pth
 vendor/dinov2/*
 !vendor/dinov2/.gitkeep
+
+# native build outputs (Module C, gate C9)
+native/c/*.o
+native/c/*.a
+native/c/cvseal
+native/rust/**/target/
+native/rust/**/Cargo.lock

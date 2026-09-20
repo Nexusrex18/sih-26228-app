@@ -59,6 +59,16 @@ def test_the_in_band_undetectable_scenarios_are_silent_until_an_independent_coun
         check(outcome.verify(form, **outcome.reconcile_kwargs), outcome.reconcile, f"{scenario}/{form}/reconciled")
 
 
+def test_t4c_is_caught_by_an_anchor_that_fixes_the_deleted_tail(tmp_path):
+    """Plan T4c, both halves in one place: no chain finding without an anchor; `tail_truncation` with one."""
+    _, outcome = run_scenario("T4c", tmp_path, seed=3)
+    (name, expected, kwargs), = outcome.reconcile_more
+    assert name == "anchor"
+    for form in outcome.forms:
+        assert outcome.verify(form).clean and not outcome.verify(form).findings
+        check(outcome.verify(form, **kwargs), expected, f"T4c/{form}/anchored")
+
+
 def test_tail_truncation_leaves_a_chain_that_verifies_clean_at_every_length(tmp_path):
     """D11 stated as a property: deleting the last m records for ANY m < n leaves a valid chain."""
     from attacklab.tamper import build_clean_ledger
