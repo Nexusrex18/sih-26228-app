@@ -105,12 +105,12 @@ Synthetic tests are not field validation. Runtime/confidence limitations stay in
 ## September 20 review resolutions
 
 - Clean assessed findings can produce ACCEPT; declared UNAVAILABLE gaps stay in coverage.
-  ERROR forces REVIEW in the drift wrapper until Backend's equivalent shared fix merges.
+  ERROR forces REVIEW through Backend's shared verdict function (merged in PR #12).
   No finding disposition is overridden after the shared risk engine runs.
 - `profiles/drift.json` holds the ordered D1–D7/C1–C3 policy, with D6 ungated for the
   uncalibrated drift evidence and capped at review. No runtime shadow rule is inserted.
-  Backend still owns the general calibration-aware routing fix across modules; this explicit
-  drift profile follows its severity-only ruling without claiming to fix other modules.
+  Backend's general calibration-aware routing fix is now merged in PR #12; drift delegates
+  to it and retains the explicit severity-based policy in its validated profile.
 - `--profile` reads schema-validated PSI and per-axis effect settings. Explicit CLI flags
   override the profile. Independent reference/incoming floors are honoured; `--min-samples`
   sets both. The effective policy and settings are hashed by the shared hash helper and

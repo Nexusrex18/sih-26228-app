@@ -67,7 +67,7 @@ def scan_drift(reference: Dataset | None, incoming: Dataset, *,
         if check.id in seen or not check.attack_classes or not set(check.attack_classes) <= TAXONOMY.keys():
             raise ValueError(f'Duplicate check or undeclared taxonomy: {check.id}')
         seen.add(check.id)
-        relevant.update(check.requires | check.optional)
+        relevant.update(set(check.requires) | set(check.optional))
         resolution = caps.resolve(set(check.requires),set(check.optional))
         enabled = profile.get('checks')
         excluded = set(profile.get('disabled_checks') or ()) | set(profile.get('except_checks') or ())

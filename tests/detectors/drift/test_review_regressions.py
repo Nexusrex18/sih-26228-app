@@ -186,3 +186,16 @@ def test_injector_axes_against_known_transforms(tmp_path,clean_photo_corpus,opti
     if 'noise' in options:
         assert rows['sharpness']['incoming_mean'] > rows['sharpness']['reference_mean']
     assert not rows['exif_iso']['material_shift']
+
+
+def test_tuple_capability_declarations_follow_shared_protocol():
+    from cva.detectors.drift.interpretable_axes import InterpretableAxes
+
+    class TupleAxes(InterpretableAxes):
+        requires = (Capability.DATASET_IMAGES,)
+        optional = ()
+
+    incoming = batch('incoming', {'brightness': np.linspace(0, 1, 30)})
+    result = scan(None, incoming, checks=[TupleAxes()])
+    assert result.findings[0].availability == Availability.OK
+    assert result.relevant_capabilities == (Capability.DATASET_IMAGES,)
