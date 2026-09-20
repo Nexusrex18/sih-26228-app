@@ -120,6 +120,39 @@ def test_invariant_4_provenance_seal_is_an_allowlist():
         "dependency nobody thought of; this allowlist can.\n  " + "\n  ".join(bad))
 
 
+# --- invariant 5 -----------------------------------------------------------
+def test_invariant_5_the_web_process_never_reaches_the_ledger_or_the_key():
+    """Module E D-E3, the privilege-separation boundary, made structural.
+
+    `cva-web` is the most exposed process on the host: it parses strings that came out of the
+    audited material, from a supplier who is an adversary by premise. It holds no signing key
+    and no ledger handle — it ASKS `cva-ledgerd` over a Unix socket and shells out to
+    `cva-seal verify`. An `import cva.provenance.seal` anywhere under `cva/web/` would put
+    `SealedLedger.append` one attribute lookup away from that parser, and nothing would fail.
+    This is what fails.
+    """
+    bad = scan_imports(_require("web"), ("cva.provenance",))
+    assert not bad, (
+        "CI invariant 5: cva/web/ must never import cva/provenance/. The web process "
+        "requests typed appends through cva-ledgerd, which validates them independently and "
+        "owns the key. A compromised web process must be able to spam requests and nothing "
+        "more.\n  " + "\n  ".join(bad))
+
+
+def test_invariant_5b_the_key_holding_daemon_never_imports_the_web_framework():
+    """The mirror image. `cva/ledgerd/` imports two PURE modules from `cva.web.workflow`
+    (the fold and the enums) so the two processes cannot disagree about what the ledger says.
+    That is only acceptable while importing them drags in nothing: the process holding the
+    signing key must not acquire Flask's, Werkzeug's and Jinja2's attack surface as a side
+    effect of sharing a function."""
+    bad = scan_imports(_require("ledgerd"),
+                       ("flask", "werkzeug", "jinja2", "waitress", "cva.web.app",
+                        "cva.web.security", "cva.web.views", "cva.web.auth"))
+    assert not bad, (
+        "CI invariant 5b: cva/ledgerd/ may import cva.web.workflow.{fold,events,states} and "
+        "nothing else from the web app.\n  " + "\n  ".join(bad))
+
+
 # --- structural traps ------------------------------------------------------
 def test_remediation_is_top_level_not_under_detectors():
     """A remediation package nested inside detectors/ makes invariant 3 pass VACUOUSLY,

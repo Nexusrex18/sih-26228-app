@@ -36,6 +36,14 @@ def violating_tree(tmp_path: Path) -> Path:
     (tmp_path / "detectors").mkdir()
     (tmp_path / "detectors" / "greedy.py").write_text(
         "from cva.remediation.data_clean import clean\n")
+
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "views.py").write_text(
+        "from cva.provenance.seal import SealedLedger\nimport hashlib\n")
+
+    (tmp_path / "ledgerd").mkdir()
+    (tmp_path / "ledgerd" / "server.py").write_text(
+        "from flask import Flask\nfrom cva.web.workflow.fold import fold\n")
     return tmp_path
 
 
@@ -65,6 +73,23 @@ def test_invariant_4_fails_on_a_dependency_no_denylist_would_have_named(
     # ...and the stdlib import in the same file is NOT reported: the budget defended is
     # install size, and hashlib costs nothing to install.
     assert not any("hashlib" in b for b in bad)
+
+
+def test_invariant_5_fails_when_the_web_process_opens_the_ledger(violating_tree: Path):
+    """D-E3 is a security boundary, so the check that enforces it has to be able to fail."""
+    bad = scan_imports(violating_tree / "web", ("cva.provenance",))
+    assert any("cva.provenance.seal" in b for b in bad)
+    assert not any("hashlib" in b for b in bad)
+
+
+def test_invariant_5b_fails_when_the_key_holder_imports_a_web_framework(
+        violating_tree: Path):
+    bad = scan_imports(violating_tree / "ledgerd",
+                       ("flask", "werkzeug", "jinja2", "waitress", "cva.web.app",
+                        "cva.web.security", "cva.web.views", "cva.web.auth"))
+    assert any("flask" in b for b in bad)
+    assert not any("cva.web.workflow.fold" in b for b in bad), \
+        "the shared PURE modules are exactly what this invariant permits"
 
 
 def test_the_allowlist_admits_what_mode_c_actually_needs(tmp_path: Path):
