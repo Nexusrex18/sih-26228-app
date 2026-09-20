@@ -52,7 +52,7 @@ def create_app(config: WebConfig | None = None, **overrides: Any) -> Flask:
 
 
 def _register_blueprints(app: Flask) -> None:
-    from .views import admin, audit, evidence, main, remediation, workflow
+    from .views import admin, api, audit, evidence, main, remediation, spa, workflow
     from .views import auth as auth_views
 
     app.register_blueprint(auth_views.bp)
@@ -62,6 +62,10 @@ def _register_blueprints(app: Flask) -> None:
     app.register_blueprint(audit.bp)
     app.register_blueprint(remediation.bp)
     app.register_blueprint(admin.bp)
+    # The Next.js dashboard and the JSON API it reads. Both go through the same
+    # `services.load_scan` as the Jinja views, so the two front ends cannot drift.
+    app.register_blueprint(api.bp)
+    app.register_blueprint(spa.bp)
 
 
 def _register_hooks(app: Flask) -> None:
@@ -103,7 +107,8 @@ def _register_hooks(app: Flask) -> None:
     @app.after_request
     def _headers(response):  # type: ignore[no-untyped-def]
         security.apply_headers(response.headers,
-                               authenticated=current_account() is not None)
+                               authenticated=current_account() is not None,
+                               spa=request.path.startswith("/app"))
         return response
 
     @app.context_processor

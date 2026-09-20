@@ -19,6 +19,28 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' 
        "font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; "
        "base-uri 'none'; form-action 'self'")
 
+#: The Next.js dashboard at `/app/`. A STATIC EXPORT inlines its hydration bootstrap
+#: (`self.__next_f.push(...)`) and its critical CSS, and a static build cannot carry a
+#: per-response nonce — there is no server rendering the page to mint one.
+#:
+#: So `/app/` gets `'unsafe-inline'` for scripts and styles, and this is a real weakening
+#: of defence in depth that is written down rather than buried:
+#:
+#:   * What is KEPT, and what actually carries the air-gap claim: no external origin is
+#:     reachable at all. `default-src 'self'` with no host allowlist means a successful
+#:     injection still cannot exfiltrate to anywhere, and the empty-network-namespace test
+#:     still passes.
+#:   * What is LOST: an injected inline `<script>` would execute. The mitigation is that
+#:     React escapes every interpolated value by default and the frontend never calls
+#:     `dangerouslySetInnerHTML` — asserted by `tests/security/test_spa_csp.py`, which
+#:     greps the built bundle.
+#:   * The server-rendered views keep the strict policy above, unchanged. They are the
+#:     no-script fallback and the surface the XSS fixtures are asserted against.
+SPA_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
+           "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+           "font-src 'self' data:; connect-src 'self'; object-src 'none'; "
+           "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+
 #: S3: an SVG is a document that can carry script, and a matplotlib SVG can carry
 #: attacker-supplied label text. It is served sandboxed and rendered through `<img>`, never
 #: inlined into the dashboard's DOM.
@@ -67,9 +89,11 @@ def sniff(data: bytes) -> tuple[str, bool]:
     return FALLBACK_TYPE, False
 
 
-def apply_headers(headers: Any, *, authenticated: bool = True) -> None:
+def apply_headers(headers: Any, *, authenticated: bool = True, spa: bool = False) -> None:
     for k, v in SECURITY_HEADERS.items():
         headers[k] = v
+    if spa:
+        headers["Content-Security-Policy"] = SPA_CSP
     if authenticated:
         # An analyst's browser must not keep a page of findings in its disk cache after they
         # log out on a shared terminal.
@@ -147,6 +171,6 @@ def session_cookie_config(*, tls: bool, idle_timeout_s: int) -> Mapping[str, Any
     }
 
 
-__all__ = ["CSP", "EVIDENCE_CSP", "FALLBACK_TYPE", "MAGIC", "SECURITY_HEADERS", "SVG_TYPE",
-           "RateLimiter", "apply_headers", "csrf_ok", "new_csrf_token", "origin_ok",
-           "session_cookie_config", "sniff"]
+__all__ = ["CSP", "EVIDENCE_CSP", "FALLBACK_TYPE", "MAGIC", "SECURITY_HEADERS", "SPA_CSP",
+           "SVG_TYPE", "RateLimiter", "apply_headers", "csrf_ok", "new_csrf_token",
+           "origin_ok", "session_cookie_config", "sniff"]
