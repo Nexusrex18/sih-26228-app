@@ -16,6 +16,7 @@ the guard fails the test rather than only changing an internal.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -76,9 +77,11 @@ def test_item13_the_recorded_profile_matches_its_own_recorded_hash():
     res = scan(FakeModel(), RunContext(), "deep",
                registries=({RankingProbe.id: RankingProbe,
                             RankingReader.id: RankingReader}, {}))
-    # The invariant the seal depends on: `:626` writes `result.profile_hash` into the scan
-    # record while `report.json` ships `result.profile`. If these two disagree, the
-    # tamper-evident trail attests a hash of a profile that does not exist.
+    # The invariant the seal depends on: `append_scan_record` writes `result.profile_hash`
+    # into the scan record while `report.json` ships `result.profile`. If these two
+    # disagree, the tamper-evident trail attests a hash of a profile that does not exist.
+    # (Named by function, not line: the original `:626` rotted the moment this branch
+    # edited the file above it, which is how the reviewer found it.)
     assert profile_hash_of(res.profile) == res.profile_hash
     assert "nc_class_order" not in res.profile
     # And the ranking still reaches the check that needs it — the fix must not be a deletion.
@@ -214,6 +217,53 @@ def test_item19_a_successful_append_leaves_no_error_behind():
     res.ledger_error = "left over from a previous attempt"
     assert append_scan_record(res, RunContext(audit_ledger=Works()), "ab" * 32) == "seq-7"
     assert res.ledger_error is None
+
+
+def test_item19_the_seal_sidecar_carries_the_outcome_machine_readably(tmp_path):
+    """The half of item 19 that `report.json` structurally cannot carry.
+
+    §7.9 fixes the order — write, fsync, hash, THEN append — so the sealing outcome does not
+    exist when `report.json` is built, and writing it back would invalidate the digest the
+    ledger holds. The HTML and the stdout warning got the reason, but neither is
+    machine-readable, so a consumer of `report.json` still could not tell "no ledger
+    configured" from "the ledger raised". `seal.json` is that distinction, beside the report
+    and outside the hash, the same way `reference.json` sits beside it.
+    """
+    import json as _json
+
+    from cva.cli import write_seal_sidecar
+
+    report = tmp_path / "report.json"
+    report.write_text('{"schema_version": "1.0.0"}')
+    res = scan(FakeModel(), RunContext(), "deep", registries=({}, {}))
+
+    res.ledger_seq, res.ledger_error = None, "RuntimeError: ledgerd refused the connection"
+    got = _json.loads(write_seal_sidecar(res, tmp_path / "seal.json", report).read_text())
+    assert got["sealed"] is False
+    assert "ledgerd refused the connection" in got["ledger_error"]
+    assert got["scan_id"] == res.scan_id
+    # It binds the same bytes the ledger would have, so a reader can tell WHICH report this
+    # outcome is about without trusting the filename.
+    assert got["report_sha256"] == hashlib.sha256(report.read_bytes()).hexdigest()
+
+    res.ledger_seq, res.ledger_error = "seq-4", None
+    ok = _json.loads(write_seal_sidecar(res, tmp_path / "seal2.json", report).read_text())
+    assert ok["sealed"] is True and ok["ledger_seq"] == "seq-4"
+    assert ok["ledger_error"] is None
+
+    # Not sealed, but nothing raised either: no ledger was configured. The third state, and
+    # the one a bare `sealed: false` would have collapsed into the failure case.
+    res.ledger_seq, res.ledger_error = None, None
+    none = _json.loads(write_seal_sidecar(res, tmp_path / "seal3.json", report).read_text())
+    assert none["sealed"] is False and none["ledger_error"] is None
+
+
+def test_item19_report_json_does_not_reference_the_sidecar():
+    """A hashed artefact pointing at an unhashed one invites the reader to treat the second
+    as sealed too. `reference.json` follows the same rule."""
+    res = scan(FakeModel(), RunContext(), "deep", registries=({}, {}))
+    from cva.report import report_json
+    assert "seal.json" not in json.dumps(report_json.build(res))
 
 
 def test_item18_an_unavailable_data_row_is_not_reported_against_a_model():

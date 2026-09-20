@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import re
 import shlex
@@ -150,6 +151,7 @@ def run_scan(model_path: Path, corpus: Path, out_dir: Path, profile: str = "deep
         json.dumps([f.to_dict() for f in res.findings], indent=2))
     report_path = write_report_json(res, out_dir / f"{model.model_id}.report.json")
     seal_report(res, ctx, report_path)     # AFTER the report is on disk, BEFORE the HTML shows the seq
+    write_seal_sidecar(res, out_dir / f"{model.model_id}.seal.json", report_path)
     warn_unsealed(res)
     write_coverage(res, out_dir / f"{model.model_id}.coverage.md")
     render([res], out_dir / f"{model.model_id}.report.html",
@@ -183,6 +185,36 @@ def _ledgers(a) -> dict[str, Any]:
     if _opt(a, "audit_ledger"):
         out["audit_ledger"] = JsonlAuditLedger(Path(a.audit_ledger))
     return out
+
+
+def write_seal_sidecar(res, path: Path, report_path: Path) -> Path:
+    """Write `seal.json` — the sealing OUTCOME, beside the report and never inside it.
+
+    Audit item 19 asked for the reason a scan was not sealed to reach the report's provenance
+    section, and it cannot: `report.json` is written, fsynced and hashed BEFORE `seal_report`
+    runs, and plan §7.9 forbids writing back into it — *"putting it into report.json would
+    change the file after it was hashed, and the ledger would then hold a digest of a file
+    that no longer exists, reporting 'differs from sealed digest' on every clean scan."*
+
+    So the outcome goes in a sidecar, the same way the reference manifest does: next to the
+    report, never counted by it, never hashed by the seal. That keeps §7.9 intact and still
+    gives Module E something MACHINE-READABLE — which the HTML and the stdout warning are
+    not. Without it a consumer of `report.json` cannot tell "no ledger was configured" from
+    "the ledger raised", and those are very different facts about a scan.
+
+    `report.json` does not reference this file, deliberately: a hashed artefact that points
+    at an unhashed one invites the reader to treat the second as sealed too.
+    """
+    payload = {
+        "scan_id": res.scan_id,
+        "report_file": report_path.name,
+        "report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+        "sealed": res.ledger_seq is not None and res.ledger_error is None,
+        "ledger_seq": res.ledger_seq,
+        "ledger_error": res.ledger_error,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return path
 
 
 def warn_unsealed(res) -> None:
@@ -360,6 +392,7 @@ def execute_scan(a, command: str | None = None) -> tuple[ScanResult, Path | None
     # Seal AFTER report.json is final and BEFORE the HTML, which may show the seq. The seq is
     # never written into report.json: the ledger holds that file's digest (plan §7.9).
     seal_report(res, ctx, report_path)
+    write_seal_sidecar(res, out / "seal.json", report_path)
     warn_unsealed(res)
     write_coverage(res, out / "coverage.md")
     # The report sits in <out>/<scan_id>/ and the shared evidence store in <out>/evidence/.
