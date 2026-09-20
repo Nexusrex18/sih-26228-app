@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "_macros.html" import disposition_chip %}
+{% block title %}{{ title }}{% endblock %}
+{% block heading %}{{ title }}{% endblock %}
+{% block subheading %}Nothing was recorded{% endblock %}
+{% block content_class %} narrow{% endblock %}
+
+{% block content %}
+<section class="block">
+  <div class="banner banner-alarm" role="alert">
+    <span class="banner-glyph" aria-hidden="true">⛔</span>
+    <div class="banner-body">
+      <strong>{{ title }}</strong>
+      <span>{{ detail }}</span>
+      <span class="tiny">Reason code: <span class="mono">{{ code }}</span></span>
+    </div>
+  </div>
+  <p class="lede">The state is exactly what it was. Nothing was written to the ledger and
+    nothing was changed here &mdash; a decision that exists in this page but not in the
+    ledger is precisely what this design refuses to produce.</p>
+</section>
+
+{% if state %}
+<section class="block">
+  <div class="block-head"><h2>What this finding looks like now</h2></div>
+  <div class="panel">
+    <div class="row tight">
+      <span class="tiny">effective</span>{{ disposition_chip(state.effective) }}
+      {% if state.cited_seq is not none %}
+        <span class="tiny">cited to ledger seq <span class="mono">{{ state.cited_seq }}</span></span>
+      {% endif %}
+      {% if state.pending %}
+        {{ disposition_chip('pending', 'pending') }}
+        <span class="tiny">requested by <span class="mono">{{ state.pending.requested_by }}</span>
+          at seq <span class="mono">{{ state.pending.seq }}</span></span>
+      {% endif %}
+    </div>
+    {% if code == 'stale_state' %}
+    <p class="note">Read what changed, then decide again deliberately. Two analysts cannot
+      silently overwrite each other, which is why this was refused rather than merged.</p>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+<section class="block">
+  <div class="row">
+    {% if f %}
+      <a class="btn btn-primary" href="{{ url_for('main.finding', scan_id=view.scan_id, finding_id=f.finding_id) }}">Reload this finding</a>
+    {% endif %}
+    <a class="btn" href="{{ url_for('main.findings', scan_id=view.scan_id) }}">All findings</a>
+  </div>
+</section>
+{% endblock %}

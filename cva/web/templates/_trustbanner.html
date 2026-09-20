@@ -1,0 +1,28 @@
+{# The ledger-trust banner, on EVERY page (plan §5.4).
+   The fold is only as trustworthy as the ledger, so the ledger's state is never one click
+   away — it is above the content, always. #}
+{% set kind = health.banner_kind %}
+<div class="banner banner-{{ {'verified':'ok','unverified':'warn','failed':'alarm','unavailable':'absent'}[kind] }}"
+     role="{% if kind in ('failed', 'unavailable') %}alert{% else %}status{% endif %}">
+  <span class="banner-glyph" aria-hidden="true">{{ {'verified':'✓','unverified':'◍','failed':'⛔','unavailable':'⌁'}[kind] }}</span>
+  <div class="banner-body">
+    <strong>
+      {%- if kind == 'verified' %}Audit ledger verified
+      {%- elif kind == 'unverified' %}Audit ledger not verified
+      {%- elif kind == 'failed' %}Audit ledger verification FAILED
+      {%- else %}Workflow unavailable{% endif -%}
+    </strong>
+    <span>{{ health.banner_text }}</span>
+    {% if not health.writable %}
+    <span class="tiny">Recorded decisions are still shown. New ones cannot be taken:
+      a decision that exists in this page but not in the ledger is exactly what this
+      design refuses to produce.</span>
+    {% endif %}
+  </div>
+  <span class="push"></span>
+  <form method="post" action="{{ url_for('audit.reverify') }}" data-no-guard>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn btn-sm">Verify now</button>
+  </form>
+  <a class="btn btn-ghost btn-sm" href="{{ url_for('audit.verification') }}">Details</a>
+</div>

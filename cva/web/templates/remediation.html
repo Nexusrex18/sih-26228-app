@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% from "_macros.html" import seal_badge %}
+{% block title %}Remediation &middot; {{ view.scan_id }}{% endblock %}
+{% block heading %}Remediation{% endblock %}
+{% block subheading %}{{ view.scan_id }}{% endblock %}
+{% block topbar_actions %}{{ seal_badge(view.seal) }}{% endblock %}
+
+{% block content %}
+{% include "_scannav.html" %}
+
+<section class="block">
+  <p class="lede">Remediation emits a <strong>new artefact with its own digest</strong>,
+    which must be re-scanned to be assessed. This page reports what was removed and what a
+    re-scan of the result found. It does not tell you the data is sound.</p>
+</section>
+
+{% if not available %}
+<section class="block">
+  <div class="empty hatched">
+    <h3>The remediation command is not in this build</h3>
+    <p class="note">{{ why }}</p>
+    <p class="note">No action is offered here rather than a button that would fail. When the
+      command lands, this page runs it with a fixed argument list and no shell, streams its
+      status, and records the outcome against the quarantine that justified it.</p>
+  </div>
+</section>
+{% endif %}
+
+<section class="block">
+  <div class="block-head"><h2>Assets under quarantine</h2>
+    <span class="note">Remediation starts from an approved quarantine: something recorded
+      has to justify removing data.</span></div>
+  {% if quarantined %}
+  <div class="panel flush"><div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Asset</th><th>Held at</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+      {% for t in quarantined %}
+        <tr>
+          <td><span class="mono">{{ t.target_ref_text }}</span>
+              <span class="chip chip-sm" data-glyph="⁂">{{ t.target_type }}</span></td>
+          <td class="mono">seq {{ t.cited_seq }}</td>
+          <td>{% if t.pending_release %}
+                <span class="chip chip-pending chip-sm" data-glyph="◷">release pending approval</span>
+              {% else %}
+                <span class="chip chip-quarantine chip-sm" data-glyph="⛔">held</span>{% endif %}</td>
+          <td>
+            {% if available and account.role == 'approver' and not t.pending_release %}
+            <form method="post" action="{{ url_for('remediation.start', scan_id=view.scan_id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="target_type" value="{{ t.target_type }}">
+              <input type="hidden" name="target_ref" value="{{ t.target_ref_text }}">
+              <button type="submit" class="btn btn-sm">Emit a dataset without this contributor</button>
+            </form>
+            {% elif account.role != 'approver' %}
+              <span class="tiny">needs the approver role</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div></div>
+  {% else %}
+    <div class="empty">
+      <h3>Nothing is under quarantine in this scan</h3>
+      <p class="note">Hold a contributor or a batch from the contributor risk view first.
+        The quarantine is the record that justifies the removal.</p>
+    </div>
+  {% endif %}
+</section>
+
+{% if jobs %}
+<section class="block">
+  <div class="block-head"><h2>Jobs</h2></div>
+  <div class="panel flush"><div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Job</th><th>Asset</th><th>Requested by</th><th>State</th><th></th></tr></thead>
+      <tbody>{% for j in jobs %}
+        <tr>
+          <td class="mono">{{ j.job_id[:12] }}</td>
+          <td class="mono">{{ j.target_type }} {{ j.target_ref }}</td>
+          <td class="mono">{{ j.requested_by }}</td>
+          <td><span class="chip chip-sm chip-{{ {'done':'accept','failed':'quarantine','unavailable':'absent'}.get(j.state, 'pending') }}"
+                    data-glyph="◈">{{ j.state }}</span></td>
+          <td><a class="btn btn-sm" href="{{ url_for('remediation.job', scan_id=view.scan_id, job_id=j.job_id) }}">Open</a></td>
+        </tr>
+      {% endfor %}</tbody>
+    </table>
+  </div></div>
+</section>
+{% endif %}
+
+<section class="block">
+  <div class="panel hatched">
+    <h3>What a re-scan of a remediated dataset means</h3>
+    <p class="note">A re-scan reports <em>what was checked and what it found</em>. If the
+      re-scan raises no finding at severity low or above, that is a statement about the
+      checks that ran on it &mdash; read together with that scan's own coverage statement,
+      which will list everything it could not assess.</p>
+    <p class="note">A detector plug-in may never retrain. Remediation is a separate,
+      explicitly invoked component, and its output is re-assessed rather than trusted.</p>
+  </div>
+</section>
+{% endblock %}

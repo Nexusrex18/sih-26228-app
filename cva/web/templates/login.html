@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block heading %}CV Integrity Assurance{% endblock %}
+{% block subheading %}Analyst governance{% endblock %}
+{% block content_class %} narrow{% endblock %}
+
+{% block content %}
+<section class="block">
+  <div class="panel">
+    <h2>Sign in</h2>
+    <p class="note">Local accounts. There is no identity provider on an air gap, and that is
+      a declared limitation of this system rather than an omission.</p>
+
+    {% if error %}
+    <div class="banner banner-alarm" role="alert">
+      <span class="banner-glyph" aria-hidden="true">⛔</span>
+      <div class="banner-body"><strong>Not signed in</strong><span>{{ error }}</span></div>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('auth.login_view') }}" data-no-guard>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <div class="field">
+        <label for="actor_id">Account</label>
+        <input type="text" id="actor_id" name="actor_id" autocomplete="username"
+               required autofocus pattern="[A-Za-z0-9._:\-]{1,64}"
+               placeholder="a.sharma">
+        <p class="field-hint">Letters, digits and <code>. _ : -</code> only. The ledger
+          records this id verbatim, so it has to be one a record can hold.</p>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password"
+               autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Sign in</button>
+    </form>
+  </div>
+</section>
+
+<section class="block">
+  <p class="tiny">Repeated failures lock the account and the address it came from, for
+    increasing periods. Every lockout is written to this service's log.</p>
+</section>
+{% endblock %}

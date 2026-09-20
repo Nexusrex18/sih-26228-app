@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% from "_macros.html" import hash_chip %}
+{% block title %}Evidence {{ digest[:8] }}{% endblock %}
+{% block heading %}Evidence file{% endblock %}
+{% block subheading %}{{ digest[:24] }}&hellip;{% endblock %}
+{% block content_class %} narrow{% endblock %}
+
+{% block content %}
+<section class="block">
+  <div class="panel {% if not verified %}hatched{% endif %}">
+    <dl class="kv">
+      <dt>Digest</dt><dd>{{ hash_chip(digest) }}</dd>
+      <dt>Present</dt>
+      <dd>{% if exists %}<span class="chip chip-accept chip-sm" data-glyph="✓">in the evidence store</span>
+          {% else %}<span class="chip chip-absent chip-sm" data-glyph="○">not in the store</span>{% endif %}</dd>
+      <dt>Hash check</dt>
+      <dd>{% if verified %}<span class="chip chip-accept chip-sm" data-glyph="✓">the bytes hash to this name</span>
+          {% else %}<span class="chip chip-quarantine chip-sm" data-glyph="⛔">mismatch or unreadable</span>{% endif %}</dd>
+      <dt>Type</dt><dd class="mono">{{ ctype }}
+        <p class="tiny">Determined from the file's magic bytes. There is no extension here to
+          trust, and an extension is not evidence of a format anyway.</p></dd>
+      <dt>Size</dt><dd class="mono">{{ size }} bytes</dd>
+    </dl>
+
+    {% if exists and verified %}
+    <div class="row">
+      <a class="btn btn-primary" href="{{ url_for('evidence.serve', digest=digest) }}">Open the file</a>
+    </div>
+    {% if ctype == 'image/svg+xml' %}
+    <div class="banner banner-warn">
+      <span class="banner-glyph" aria-hidden="true">⚑</span>
+      <div class="banner-body">
+        <strong>This is an SVG, and SVG is a document</strong>
+        <span>It can carry script, and a plot generated from the audited data carries label
+          text the supplier controls. It is served sandboxed and shown through an image tag;
+          it is never inlined into this page.</span>
+      </div>
+    </div>
+    {% endif %}
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

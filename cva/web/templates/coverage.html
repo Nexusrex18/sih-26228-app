@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% from "_macros.html" import seal_badge %}
+{% block title %}Coverage &middot; {{ view.scan_id }}{% endblock %}
+{% block heading %}Coverage statement{% endblock %}
+{% block subheading %}{{ view.scan_id }} &middot; {{ view.report.profile_name }} profile,
+  {{ view.report.budget_tier }} tier{% endblock %}
+{% block topbar_actions %}{{ seal_badge(view.seal) }}{% endblock %}
+
+{% block content %}
+{% include "_scannav.html" %}
+
+<section class="block">
+  <p class="lede">This statement is <strong>generated</strong> by walking the detector
+    registry against this scan's capabilities &mdash; never hand-written. It is also
+    <strong>per scan</strong>: the same asset under a narrower profile produces a smaller
+    statement, and that is the capability model working, not a defect.</p>
+  <p class="note">Only attack classes are counted. Operational reports &mdash; a declared
+    gap, a clock regression &mdash; are true statements about the system's own state, not
+    things an attacker does, and counting them would inflate the statement.</p>
+</section>
+
+<section class="block">
+  <div class="grid three">
+    <div class="panel">
+      <div class="stat a"><span class="stat-label">Assessed</span>
+        <span class="stat-value" data-countup>{{ groups.assessed|length }}</span>
+        <span class="stat-note">a check ran for this class</span></div>
+    </div>
+    <div class="panel hatched">
+      <div class="stat u"><span class="stat-label">Not assessed</span>
+        <span class="stat-value" data-countup>{{ groups.not_assessed|length }}</span>
+        <span class="stat-note">a check exists and did not run</span></div>
+    </div>
+    <div class="panel hatched">
+      <div class="stat u"><span class="stat-label">Never covered</span>
+        <span class="stat-value" data-countup>{{ groups.never_covered|length }}</span>
+        <span class="stat-note">in the taxonomy, covered by nothing we have</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="block-head"><h2>Covered by a check that ran</h2></div>
+  {% if groups.assessed %}
+  <div class="panel flush"><div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Attack class</th><th>Checks</th></tr></thead>
+      <tbody>{% for r in groups.assessed %}
+        <tr><td class="mono">{{ r.attack_class }}</td>
+            <td>{% for c in r.checks %}<span class="chip chip-accept chip-sm" data-glyph="✓">{{ c }}</span> {% endfor %}</td></tr>
+      {% endfor %}</tbody>
+    </table>
+  </div></div>
+  {% else %}
+    <div class="empty hatched"><h3>Nothing was assessed in this scan</h3>
+      <p class="note">No attack class had a check that ran. A report this short is a small
+        statement about what was examined, not a clean result.</p></div>
+  {% endif %}
+</section>
+
+<section class="block">
+  <div class="block-head"><h2>Covered by a check that did not run</h2>
+    <span class="note">The check exists. It was UNAVAILABLE or DEGRADED, with a reason.</span></div>
+  {% if groups.not_assessed %}
+  <div class="panel flush hatched"><div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Attack class</th><th>Checks that would have covered it</th></tr></thead>
+      <tbody>{% for r in groups.not_assessed %}
+        <tr><td class="mono">{{ r.attack_class }}</td>
+            <td>{% for c in r.checks %}<span class="chip chip-absent chip-sm" data-glyph="◍">{{ c }}</span> {% endfor %}</td></tr>
+      {% endfor %}</tbody>
+    </table>
+  </div></div>
+  {% else %}<p class="note">Every registered check that covers a class ran.</p>{% endif %}
+</section>
+
+<section class="block">
+  <div class="block-head"><h2>Covered by nothing</h2>
+    <span class="note">Declared, never hidden. This is the explicit non-coverage statement
+      PS &sect;2.2.5 asks for.</span></div>
+  {% if groups.never_covered %}
+  <div class="panel hatched">
+    <div class="row tight">
+      {% for c in groups.never_covered %}<span class="chip chip-absent" data-glyph="○">{{ c }}</span>{% endfor %}
+    </div>
+  </div>
+  {% else %}<p class="note">Every attack class in the taxonomy has a check.</p>{% endif %}
+</section>
+
+{% if groups.operational_reports %}
+<section class="block">
+  <div class="block-head"><h2>Operational reports</h2></div>
+  <p class="note">True statements about the system's own state, not attack classes. They are
+    listed and deliberately not counted.</p>
+  <div class="row tight">
+    {% for c in groups.operational_reports %}<span class="chip chip-sm" data-glyph="◇">{{ c }}</span>{% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{# The reliability diagram lives INSIDE the coverage statement, not in an appendix: the
+   system's own confidence is evidence, and evidence gets shown. #}
+<section class="block">
+  <div class="block-head"><h2>Calibration</h2></div>
+  {% if calibration %}
+  <div class="grid two">
+    <div class="panel">
+      <div class="stat"><span class="stat-label">Brier score</span>
+        <span class="stat-value">{{ '%.4g'|format(calibration.brier) if calibration.brier is not none else '—' }}</span>
+        <span class="stat-note">{{ calibration.method }},
+          {% if calibration.scored_on == 'out_of_fold' %}scored out of fold
+          {% else %}<strong>not scored</strong> &mdash; there was no second group to hold
+          out, so no number is reported rather than an in-sample one presented as held out
+          {% endif %}</span></div>
+      {% if calibration.reliability_bins %}
+      <div class="reliability" data-reliability
+           role="img" aria-label="reliability diagram: predicted against empirical frequency">
+        {% for b in calibration.reliability_bins %}
+        <div>
+          <i class="r-pred" data-h="{{ b.p_mean * 100 }}" title="predicted {{ '%.2f'|format(b.p_mean) }}"></i>
+          <i class="r-emp" data-h="{{ b.empirical * 100 }}" title="empirical {{ '%.2f'|format(b.empirical) }} (n={{ b.n }})"></i>
+          <span class="tiny mono">{{ '%.1f'|format(b.p_mean) }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      <p class="tiny">Each pair is predicted (left) against empirical (right) for one bin.
+        Exact values:
+        {% for b in calibration.reliability_bins %}<span class="mono">{{ '%.2f'|format(b.p_mean) }}&rarr;{{ '%.2f'|format(b.empirical) }} (n={{ b.n }})</span>{{ '; ' if not loop.last }}{% endfor %}</p>
+      {% endif %}
+    </div>
+    <div class="panel">
+      <h3>Which confidences are on the calibrated scale</h3>
+      <div class="row tight">
+        {% for d in calibration.calibrated_detectors %}<span class="chip chip-accept chip-sm" data-glyph="✓">{{ d }}</span>{% endfor %}
+      </div>
+      <p class="note">Every other finding carries its detector's own raw score, and the
+        disposition table's confidence thresholds are not applied to those: they route on
+        severity alone and are capped at review.</p>
+      {% if calibration.excluded_detectors %}
+      <h3>Excluded from calibration</h3>
+      <div class="row tight">
+        {% for d in calibration.excluded_detectors %}<span class="chip chip-absent chip-sm" data-glyph="○">{{ d }}</span>{% endfor %}
+      </div>
+      <p class="note">A hash mismatch is arithmetic, not a belief. Fitting a curve to a
+        deterministic check would produce a calibrated probability on a certainty.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+    <div class="empty hatched">
+      <h3>No calibration for this scan</h3>
+      <p class="note">No calibration set was supplied, so every confidence here is its
+        detector's own raw score and no reliability claim is made about any of them.</p>
+    </div>
+  {% endif %}
+</section>
+
+<section class="block">
+  <div class="block-head"><h2>Standing limitations</h2>
+    <span class="note">Code declares what it does; humans declare what the code depends on.</span></div>
+  <div class="panel">
+    {% for s in groups.standing_limitations %}<p class="note">{{ s }}</p>{% else %}
+    <p class="note">This report carries no standing limitations, which is itself worth
+      checking: <code>docs/coverage-standing.yaml</code> is the reviewed file they come from.</p>
+    {% endfor %}
+  </div>
+</section>
+
+{# Two scans side by side: the point that coverage is per scan. #}
+<section class="block">
+  <div class="block-head"><h2>Compare with another scan</h2></div>
+  <form method="get" class="row" data-no-guard>
+    <label for="cmp" class="visually-hidden">Compare with</label>
+    <select id="cmp" name="compare">
+      <option value="">choose a scan</option>
+      {% for c in candidates %}
+        <option value="{{ c.scan_id }}" {% if other and other.scan_id == c.scan_id %}selected{% endif %}>
+          {{ c.scan_id }} &middot; {{ c.profile_name }} / {{ c.budget_tier }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn">Compare</button>
+  </form>
+
+  {% if other and diff %}
+  <div class="grid two">
+    <div class="panel">
+      <h3>{{ view.scan_id }} &middot; {{ view.report.profile_name }}</h3>
+      <div class="stat a"><span class="stat-label">assessed</span>
+        <span class="stat-value">{{ groups.assessed|length }}</span></div>
+    </div>
+    <div class="panel">
+      <h3>{{ other.scan_id }} &middot; {{ other.profile_name }}</h3>
+      <div class="stat a"><span class="stat-label">assessed</span>
+        <span class="stat-value">{{ other_groups.assessed|length }}</span></div>
+    </div>
+  </div>
+  {% if diff.shrank %}
+  <div class="panel hatched">
+    <h3>Assessed here and not there</h3>
+    <p class="note">{{ diff.only_left|length }} class(es). This is what the other scan's
+      profile gave up, and why its statement is smaller.</p>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th>Attack class</th><th>In {{ other.scan_id }} it would have needed</th></tr></thead>
+      <tbody>{% for c in diff.only_left %}
+        <tr><td class="mono">{{ c }}</td>
+            <td>{% for chk in diff.lost_reasons.get(c, ()) %}<span class="chip chip-absent chip-sm" data-glyph="◍">{{ chk }}</span> {% else %}
+                <span class="tiny">covered by nothing there</span>{% endfor %}</td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+  </div>
+  {% endif %}
+  {% if diff.only_right %}
+  <div class="panel">
+    <h3>Assessed there and not here</h3>
+    <div class="row tight">{% for c in diff.only_right %}<span class="chip chip-accept chip-sm" data-glyph="✓">{{ c }}</span>{% endfor %}</div>
+  </div>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

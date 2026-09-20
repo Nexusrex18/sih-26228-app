@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% from "_macros.html" import disposition_chip, seal_badge %}
+{% block title %}Scans{% endblock %}
+{% block heading %}Scans{% endblock %}
+{% block subheading %}{{ rows|length }} scan{{ '' if rows|length == 1 else 's' }} in {{ cfg.reports_dir }}{% endblock %}
+
+{% block content %}
+<section class="block">
+  <div class="block-head">
+    <h2>Triage queue</h2>
+    <span class="note">Ordered newest first. The sealed badge compares the file on disk with
+      the digest the ledger holds for it.</span>
+  </div>
+
+  {% if not rows %}
+    <div class="empty">
+      <h3>No scans here yet</h3>
+      <p class="note">This dashboard reads <code>{{ cfg.reports_dir }}</code> and expects the
+        layout <code>cva scan</code> writes: <code>&lt;scan_id&gt;/report.json</code> beside a
+        shared <code>evidence/</code> directory. Run a scan, or point
+        <code>reports_dir</code> at the directory that has them.</p>
+      <p class="note">An empty queue means nothing has been scanned. It does not mean
+        anything has been cleared.</p>
+    </div>
+  {% else %}
+  <div class="panel flush">
+    <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Scan</th><th>Written</th><th>Profile</th><th>Verdict</th>
+          <th class="num">Quarantine</th><th class="num">Review</th><th class="num">Accept</th>
+          <th>Findings</th><th>Seal</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in rows %}
+        {% if not r.readable %}
+        <tr class="hatched">
+          <td class="mono">{{ r.scan_id }}</td>
+          <td colspan="8">
+            <span class="chip chip-absent" data-glyph="◍">unreadable</span>
+            <span class="note">{{ r.unreadable_reason }}</span>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td class="mono"><a href="{{ url_for('main.scan', scan_id=r.scan_id) }}">{{ r.scan_id }}</a></td>
+          <td class="tiny nowrap" title="host clock, untrusted">{{ r.created_at_utc[:19]|replace('T', ' ') }}</td>
+          <td class="mono tiny">{{ r.profile_name }} &middot; {{ r.budget_tier }}</td>
+          <td>{{ disposition_chip(r.verdict|lower, r.verdict) }}</td>
+          <td class="num">{{ r.n_quarantine }}</td>
+          <td class="num">{{ r.n_review }}</td>
+          <td class="num">{{ r.n_accept }}</td>
+          <td>
+            {% set total = [r.n_findings, 1]|max %}
+            <span class="bar" data-bar title="{{ r.n_findings }} findings">
+              <i class="b-q" data-share="{{ 100 * r.n_quarantine / total }}"></i>
+              <i class="b-r" data-share="{{ 100 * r.n_review / total }}"></i>
+              <i class="b-a" data-share="{{ 100 * r.n_accept / total }}"></i>
+            </span>
+            <span class="tiny mono">{{ r.n_findings }}</span>
+          </td>
+          <td>
+            {% if not ledger_readable %}
+              <span class="seal seal-unknown"><span class="seal-dot" aria-hidden="true"></span>ledger unreachable</span>
+            {% elif r.scan_id in sealed %}
+              {{ seal_badge(sealed[r.scan_id]) }}
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+{% if rows|selectattr('readable')|list|length > 1 %}
+<section class="block">
+  <div class="block-head"><h2>Compare coverage</h2></div>
+  <p class="note">Coverage is <strong>per scan</strong>. Two scans of the same asset under
+    different profiles produce different statements, and the difference is the capability
+    model working rather than a defect.</p>
+  <form method="get" action="" class="row" data-no-guard id="compare-form">
+    <label for="cmp-left" class="visually-hidden">Left scan</label>
+    <select id="cmp-left" name="left">
+      {% for r in rows if r.readable %}<option value="{{ r.scan_id }}">{{ r.scan_id }} &middot; {{ r.profile_name }}</option>{% endfor %}
+    </select>
+    <span class="tiny">against</span>
+    <label for="cmp-right" class="visually-hidden">Right scan</label>
+    <select id="cmp-right" name="right">
+      {% for r in rows if r.readable %}<option value="{{ r.scan_id }}">{{ r.scan_id }} &middot; {{ r.profile_name }}</option>{% endfor %}
+    </select>
+    <a class="btn" id="compare-go"
+       href="{{ url_for('main.coverage', scan_id=(rows|selectattr('readable')|first).scan_id) }}">Compare</a>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

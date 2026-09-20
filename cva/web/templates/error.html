@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block heading %}{{ title }}{% endblock %}
+{% block subheading %}{{ code }}{% endblock %}
+{% block content_class %} narrow{% endblock %}
+
+{% block content %}
+<section class="block">
+  <div class="panel">
+    <div class="stat"><span class="stat-label">Status</span>
+      <span class="stat-value">{{ code }}</span></div>
+    <p class="lede">{{ detail }}</p>
+    <div class="row">
+      <a class="btn" href="{{ url_for('main.scans') }}">Back to scans</a>
+      {% if request.referrer %}<a class="btn btn-ghost" href="{{ request.referrer }}">Back</a>{% endif %}
+    </div>
+  </div>
+</section>
+{% endblock %}

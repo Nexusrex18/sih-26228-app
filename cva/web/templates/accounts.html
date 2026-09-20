@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Accounts{% endblock %}
+{% block heading %}Accounts{% endblock %}
+{% block subheading %}{{ accounts|length }} local account{{ '' if accounts|length == 1 else 's' }}{% endblock %}
+
+{% block content %}
+<section class="block">
+  <p class="lede">Four roles. <strong>An administrator manages accounts and holds no workflow
+    rights</strong>, so that one person never controls both identity and decisions.</p>
+  <div class="grid four">
+    <div class="panel"><div class="stat"><span class="stat-label">viewer</span>
+      <span class="stat-note">reads everything, records nothing</span></div></div>
+    <div class="panel"><div class="stat"><span class="stat-label">analyst</span>
+      <span class="stat-note">assign, acknowledge, request an override, hold or release an asset</span></div></div>
+    <div class="panel"><div class="stat"><span class="stat-label">approver</span>
+      <span class="stat-note">everything an analyst can do, plus approving a change
+        <em>someone else</em> requested</span></div></div>
+    <div class="panel"><div class="stat"><span class="stat-label">admin</span>
+      <span class="stat-note">accounts only</span></div></div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="block-head"><h2>Existing</h2></div>
+  <div class="panel flush"><div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Account</th><th>Role</th><th>State</th><th>Change role</th><th></th></tr></thead>
+      <tbody>
+      {% for a in accounts %}
+      <tr class="{% if a.disabled %}hatched{% endif %}">
+        <td class="mono">{{ a.actor_id }}</td>
+        <td><span class="chip chip-sm" data-glyph="⌾">{{ a.role }}</span></td>
+        <td>{% if a.disabled %}<span class="chip chip-absent chip-sm" data-glyph="○">disabled</span>
+            {% else %}<span class="chip chip-accept chip-sm" data-glyph="✓">active</span>{% endif %}</td>
+        <td>
+          <form method="post" action="{{ url_for('admin.set_role', actor_id=a.actor_id) }}" class="row tight">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label for="role-{{ loop.index }}" class="visually-hidden">Role</label>
+            <select id="role-{{ loop.index }}" name="role">
+              {% for r in roles %}<option value="{{ r }}" {% if r == a.role %}selected{% endif %}>{{ r }}</option>{% endfor %}
+            </select>
+            <button type="submit" class="btn btn-sm">Set</button>
+          </form>
+        </td>
+        <td>
+          <form method="post" action="{{ url_for('admin.set_disabled', actor_id=a.actor_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="disabled" value="{{ '0' if a.disabled else '1' }}">
+            <button type="submit" class="btn btn-sm {% if not a.disabled %}btn-danger{% endif %}">
+              {{ 'Enable' if a.disabled else 'Disable' }}</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div></div>
+  <p class="note">Changing a role or disabling an account ends that user's live sessions, so
+    a demoted approver cannot keep approving on a cookie issued a minute ago. Their past
+    decisions stay in the ledger &mdash; that is what an append-only record is for.</p>
+</section>
+
+<section class="block">
+  <div class="block-head"><h2>Add an account</h2></div>
+  <div class="panel">
+    <form method="post" action="{{ url_for('admin.create') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid three">
+        <div class="field">
+          <label for="new_actor">Account id</label>
+          <input type="text" id="new_actor" name="actor_id" required
+                 pattern="[A-Za-z0-9._:\-]{1,64}" placeholder="b.rao">
+          <p class="field-hint">The ledger records this verbatim and accepts
+            <code>A-Z a-z 0-9 . _ : -</code> only. An id the ledger cannot hold is an account
+            that cannot make a decision.</p>
+        </div>
+        <div class="field">
+          <label for="new_password">Password</label>
+          <input type="password" id="new_password" name="password" required minlength="12"
+                 autocomplete="new-password">
+          <p class="field-hint">At least 12 characters. Hashed with scrypt at OWASP's stated
+            minimum parameters.</p>
+        </div>
+        <div class="field">
+          <label for="new_role">Role</label>
+          <select id="new_role" name="role">
+            {% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary">Create account</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

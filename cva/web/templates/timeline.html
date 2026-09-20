@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% from "_macros.html" import disposition_chip %}
+{% block title %}Audit trail{% endblock %}
+{% block heading %}Audit trail{% endblock %}
+{% block subheading %}{{ rows|length }} record{{ '' if rows|length == 1 else 's' }}
+  &middot; {{ decisions }} analyst decision{{ '' if decisions == 1 else 's' }}{% endblock %}
+
+{% block content %}
+<section class="block">
+  <p class="lede">Every <code>scan_record</code> and <code>analyst_event</code> in ledger
+    order. <strong>Ordering is by <span class="mono">seq</span>, not by time</strong>: the
+    host clock is untrusted, and a clock that steps backwards changes what is displayed and
+    never what is ordered.</p>
+  <div class="filters">
+    <a class="filter" href="{{ url_for('audit.index') }}" {% if not scan_id %}aria-pressed="true"{% endif %}>All scans</a>
+    {% for s in scans %}
+      <a class="filter" href="{{ url_for('audit.index', scan_id=s.scan_id) }}"
+         {% if scan_id == s.scan_id %}aria-pressed="true"{% endif %}>{{ s.scan_id }}</a>
+    {% endfor %}
+    <span class="push"></span>
+    <a class="filter" href="{{ url_for('audit.verification') }}">Verification detail</a>
+  </div>
+</section>
+
+<section class="block">
+  {% if not readable %}
+    <div class="empty hatched">
+      <h3>The ledger could not be read</h3>
+      <p class="note">{{ health.detail or health.banner_text }}</p>
+      <p class="note">This is not an empty audit trail. It is an audit trail that could not
+        be opened, and the difference matters.</p>
+    </div>
+  {% elif not rows %}
+    <div class="empty">
+      <h3>The ledger holds no scan or decision records yet</h3>
+      <p class="note">A scan seals a <code>scan_record</code> when it finishes and a signing
+        key is configured. An analyst decision appends an <code>analyst_event</code>. Neither
+        has happened here.</p>
+    </div>
+  {% else %}
+    <div class="seqrail">
+      {% for r in rows %}
+      <div class="seqitem {% if r.is_decision %}is-decision{% endif %} {% if r.audit_flagged %}is-flagged{% endif %}">
+        <span class="seqtick">{{ r.seq }}</span>
+        <div class="panel">
+          <div class="row tight">
+            <strong class="mono">{{ r.actor }}</strong>
+            {% if r.role %}<span class="chip chip-sm" data-glyph="⌾">{{ r.role }}</span>{% endif %}
+            <span class="chip chip-sm" data-glyph="⇢">{{ r.action }}</span>
+            {% if r.detail and r.kind == 'analyst_event' and r.detail %}{{ disposition_chip(r.detail) }}{% endif %}
+            {% if r.reason_code %}<span class="tiny mono">{{ r.reason_code }}</span>{% endif %}
+            {% if r.refs_seq is not none %}<span class="tiny">approves seq <span class="mono">{{ r.refs_seq }}</span></span>{% endif %}
+            {% if r.audit_flagged %}
+              <span class="chip chip-quarantine chip-sm" data-glyph="⚑">flagged for audit</span>
+            {% endif %}
+            <span class="push"></span>
+            {% if r.scan_id %}
+              <a class="tiny mono" href="{{ url_for('main.scan', scan_id=r.scan_id) }}">{{ r.scan_id }}</a>
+            {% endif %}
+            <span class="tiny" title="host clock, untrusted — ordering is by seq">
+              {{ r.created_at_utc[:19]|replace('T', ' ') }}</span>
+          </div>
+          {% if r.target %}<p class="tiny mono">{{ r.target }}</p>{% endif %}
+          {% if r.kind == 'scan_record' %}<p class="note">{{ r.detail }}</p>{% endif %}
+          {% if r.justification %}<blockquote class="note">{{ r.justification }}</blockquote>{% endif %}
+          {% if r.key_id %}<p class="tiny">signed under key <span class="mono">{{ r.key_id[:12] }}&hellip;</span></p>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<section class="block">
+  <div class="panel hatched">
+    <h3>What this trail does not record</h3>
+    <p class="note"><strong>Attribution is by the recording tool, not by the analyst's own
+      key.</strong> <code>actor_id</code> is asserted by <code>cva-web</code> after local
+      authentication. Anyone holding the <code>cva-web</code> account and a valid session
+      could record a decision as that user. Per-analyst signing keys would close this and
+      need key distribution on an air gap; they are declared as a limitation until built.</p>
+    <p class="note">Login and lockout events go to the application log, not to the ledger,
+      in this version.</p>
+    <p class="note">Displayed times come from the host clock and are not evidence of when
+      anything happened. The <span class="mono">seq</span> column is.</p>
+  </div>
+</section>
+{% endblock %}

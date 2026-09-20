@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% from "_macros.html" import hash_chip, disposition_chip %}
+{% block title %}Remediation job{% endblock %}
+{% block heading %}Remediation job {{ job.job_id[:12] }}{% endblock %}
+{% block subheading %}{{ job.target_type }} {{ job.target_ref }} &middot; requested by {{ job.requested_by }}{% endblock %}
+
+{% block content %}
+<p><a href="{{ url_for('remediation.index', scan_id=view.scan_id) }}">&larr; remediation</a></p>
+
+<section class="block">
+  <div class="panel {% if job.state in ('failed', 'unavailable') %}hatched{% endif %}">
+    <div class="row tight">
+      <span class="chip chip-{{ {'done':'accept','failed':'quarantine','unavailable':'absent'}.get(job.state, 'pending') }}"
+            data-glyph="◈">{{ job.state }}</span>
+      {% if job.returncode is not none %}<span class="tiny mono">exit {{ job.returncode }}</span>{% endif %}
+      <span class="tiny">{{ '%.1f'|format(job.elapsed_s) }} s</span>
+    </div>
+    {% if job.detail %}<p class="note">{{ job.detail }}</p>{% endif %}
+    {% if job.artefact_path %}
+    <dl class="kv">
+      <dt>New artefact</dt><dd class="mono">{{ job.artefact_path }}</dd>
+      <dt>Its digest</dt><dd>{{ hash_chip(job.artefact_digest) }}
+        <p class="tiny">A different artefact from the one that was scanned. It has been
+          assessed by nothing until it is scanned in its own right.</p></dd>
+    </dl>
+    {% endif %}
+  </div>
+</section>
+
+{% if job.manifest %}
+<section class="block">
+  <div class="block-head"><h2>What was removed, and which finding justified it</h2></div>
+  <div class="panel flush"><div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Sample</th><th>Reason</th><th>Finding</th></tr></thead>
+      <tbody>{% for r in job.manifest %}
+        <tr>
+          <td class="mono">{{ r.sample_id }}</td>
+          <td>{{ r.reason }}</td>
+          <td>{% if r.finding_id %}
+              <a class="mono" href="{{ url_for('main.finding', scan_id=view.scan_id, finding_id=r.finding_id) }}">{{ r.finding_id[:8] }}</a>
+              {% else %}<span class="tiny">no finding cited</span>{% endif %}</td>
+        </tr>
+      {% endfor %}</tbody>
+    </table>
+  </div></div>
+</section>
+{% endif %}
+
+<section class="block">
+  <div class="block-head"><h2>Before and after</h2>
+    <span class="note">Two scans, not one scan and a claim.</span></div>
+  <form method="get" class="row" data-no-guard>
+    <label for="rescan" class="visually-hidden">Re-scan of the remediated dataset</label>
+    <select id="rescan" name="rescan">
+      <option value="">choose the re-scan</option>
+      {% for c in candidates %}
+        <option value="{{ c.scan_id }}" {% if rescan and rescan.scan_id == c.scan_id %}selected{% endif %}>
+          {{ c.scan_id }} &middot; {{ c.profile_name }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn">Compare</button>
+  </form>
+
+  {% if rescan %}
+  {% set before = view.report.counts_by_disposition() %}
+  {% set after = rescan.counts_by_disposition() %}
+  <div class="grid two">
+    <div class="panel">
+      <h3>{{ view.scan_id }}</h3>
+      <div class="row tight">
+        {{ disposition_chip('quarantine', before.quarantine ~ ' quarantine') }}
+        {{ disposition_chip('review', before.review ~ ' review') }}
+        {{ disposition_chip('accept', before.accept ~ ' accept') }}
+      </div>
+      <p class="tiny mono">{{ (view.report.data.target or {}).dataset_path or '—' }}</p>
+    </div>
+    <div class="panel">
+      <h3>{{ rescan.scan_id }}</h3>
+      <div class="row tight">
+        {{ disposition_chip('quarantine', after.quarantine ~ ' quarantine') }}
+        {{ disposition_chip('review', after.review ~ ' review') }}
+        {{ disposition_chip('accept', after.accept ~ ' accept') }}
+      </div>
+      <p class="tiny mono">{{ (rescan.data.target or {}).dataset_path or '—' }}</p>
+    </div>
+  </div>
+
+  {# The wording rule, stated exactly. "Clean" is never used about the data. #}
+  <div class="panel">
+    <h3>What this comparison says</h3>
+    <p class="lede">Re-scan of the remediated dataset: {{ after.quarantine + after.review }}
+      finding{{ '' if (after.quarantine + after.review) == 1 else 's' }} at severity low or
+      above under profile <span class="mono">{{ rescan.profile_name }}</span>.</p>
+    <p class="note">That is a statement about what was checked in
+      <a href="{{ url_for('main.coverage', scan_id=rescan.scan_id) }}">that scan's coverage
+      statement</a>, not about the data. The remediated dataset is a new artefact with its
+      own digest and has exactly the assurance its own scan gives it.</p>
+  </div>
+  {% endif %}
+</section>
+
+{% if job.stdout or job.stderr %}
+<section class="block">
+  <div class="block-head"><h2>Command output</h2>
+    <span class="note">Captured and displayed as text. Nothing here is interpreted.</span></div>
+  <div class="panel">
+    {% if job.stdout %}<pre class="hash">{{ job.stdout }}</pre>{% endif %}
+    {% if job.stderr %}<pre class="hash">{{ job.stderr }}</pre>{% endif %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

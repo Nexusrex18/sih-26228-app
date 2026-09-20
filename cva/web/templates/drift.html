@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% from "_macros.html" import seal_badge %}
+{% block title %}Shift &middot; {{ view.scan_id }}{% endblock %}
+{% block heading %}Distribution shift{% endblock %}
+{% block subheading %}{{ view.scan_id }}{% endblock %}
+{% block topbar_actions %}{{ seal_badge(view.seal) }}{% endblock %}
+
+{% block content %}
+{% include "_scannav.html" %}
+
+<section class="block">
+  {% if summary %}
+    <div class="panel">
+      <dl class="kv">
+        {% for k, v in summary.items() %}
+          <dt>{{ k|replace('_', ' ') }}</dt>
+          <dd><span class="mono">{{ v }}</span></dd>
+        {% endfor %}
+      </dl>
+    </div>
+    <p class="note">Drift findings are capped at <strong>review</strong> and never
+      quarantine on their own: a distribution that moved is not, by itself, evidence that
+      anyone moved it.</p>
+  {% else %}
+    <div class="empty hatched">
+      <h3>No shift assessment in this scan</h3>
+      <p class="note">This report carries no <code>drift_summary</code>. Drift detection
+        compares an incoming distribution against a reference one; without a reference there
+        is nothing to compare, so nothing was established either way.</p>
+      <p class="note">This is not a statement that the distribution is stable.</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

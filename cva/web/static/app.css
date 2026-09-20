@@ -1,0 +1,768 @@
+/* cva-web — the analyst dashboard.
+ *
+ * DESIGN NOTE, because every rule below follows from it.
+ *
+ * This is an instrument, not a report. The person using it is an acceptance officer in a
+ * room with no network, deciding whether to accept a dataset or a model that may have been
+ * deliberately poisoned, and they will be asked later to justify that decision. So:
+ *
+ *   - Monospace is the PRIMARY face, not a utility face. Every identifier, digest, ledger
+ *     seq, disposition and count is set in it, because in a forensic tool those are the
+ *     content, and a proportional face makes two hashes that differ look the same.
+ *   - The signature element is the SEQ RAIL: a vertical spine carrying ledger sequence
+ *     numbers, with a slow travelling highlight. It encodes something true and unusual about
+ *     this product — the ledger is append-only and ordered by seq, never by the clock,
+ *     because the clock is untrusted.
+ *   - UNAVAILABLE gets a HATCH, not a grey-out. "Absence of evidence must not render as
+ *     evidence of absence" is the product's central ethic; every other dashboard fades what
+ *     did not run, which is precisely the lie this one must not tell. The hatch drifts
+ *     slowly, so absence reads as measured rather than dead.
+ *   - Colour is never the only carrier of state (accessibility, plan §10.11). Every
+ *     disposition is icon + word + colour.
+ *
+ * NO external requests. No CDN, no web font, no npm (D-E1, security gate S2). The type is a
+ * system stack, and the whole personality comes from how it is set.
+ *
+ * CSP is `style-src 'self'`, so there is not one inline style attribute anywhere.
+ */
+
+/* ============================================================ tokens */
+:root {
+  color-scheme: dark;
+
+  /* Surfaces: a blue-cool graphite, never black. Black is a void; this is an instrument. */
+  --bg:          #0e1219;
+  --bg-deep:     #0a0d13;
+  --panel:       #141a24;
+  --panel-2:     #1a212d;
+  --raised:      #1f2836;
+  --hairline:    #232d3c;
+  --hairline-2:  #2e3a4c;
+
+  --ink:         #e7ecf4;
+  --ink-2:       #b3c0d1;
+  --muted:       #8293a8;
+  --faint:       #5e6d80;
+
+  /* Structural accent. Interaction, focus, the seq rail. Never a state. */
+  --accent:      #5b8ff9;
+  --accent-dim:  #33476e;
+  --accent-glow: rgba(91, 143, 249, .28);
+
+  /* Signal hues, reserved for disposition and seal state. Nothing decorative uses these. */
+  --quarantine:      #e35d4a;
+  --quarantine-bg:   rgba(227, 93, 74, .11);
+  --quarantine-edge: rgba(227, 93, 74, .38);
+  --review:          #dda23f;
+  --review-bg:       rgba(221, 162, 63, .10);
+  --review-edge:     rgba(221, 162, 63, .34);
+  --accept:          #4fa383;
+  --accept-bg:       rgba(79, 163, 131, .10);
+  --accept-edge:     rgba(79, 163, 131, .32);
+  --absent:          #8496ad;
+  --absent-bg:       rgba(132, 150, 173, .08);
+  --absent-edge:     rgba(132, 150, 173, .30);
+  --pending:         #9b7ae0;
+  --pending-bg:      rgba(155, 122, 224, .11);
+  --pending-edge:    rgba(155, 122, 224, .34);
+
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+          Arial, "Noto Sans", sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono",
+          Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* A 4px baseline, stated once. */
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px; --s5: 24px;
+  --s6: 32px; --s7: 48px; --s8: 64px;
+
+  --r-sm: 3px; --r: 6px; --r-lg: 10px;
+  --rail: 56px;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  --tap: 44px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg:        #f4f6f9;
+  --bg-deep:   #e9edf3;
+  --panel:     #ffffff;
+  --panel-2:   #f7f9fc;
+  --raised:    #ffffff;
+  --hairline:  #dde3ec;
+  --hairline-2:#c7d0dd;
+  --ink:       #18202c;
+  --ink-2:     #35435a;
+  --muted:     #5c6b81;
+  --faint:     #8695a9;
+  --accent:    #2f61d5;
+  --accent-dim:#c3d2f3;
+  --accent-glow: rgba(47, 97, 213, .18);
+  --quarantine: #c23a26; --quarantine-bg: rgba(194,58,38,.08); --quarantine-edge: rgba(194,58,38,.30);
+  --review:     #a9741a; --review-bg:     rgba(169,116,26,.09); --review-edge:     rgba(169,116,26,.28);
+  --accept:     #2f7a5c; --accept-bg:     rgba(47,122,92,.09);  --accept-edge:     rgba(47,122,92,.26);
+  --absent:     #5b6b80; --absent-bg:     rgba(91,107,128,.07); --absent-edge:     rgba(91,107,128,.26);
+  --pending:    #6b45b8; --pending-bg:    rgba(107,69,184,.09); --pending-edge:    rgba(107,69,184,.28);
+  --shadow: 0 1px 2px rgba(20,32,50,.06), 0 8px 22px -14px rgba(20,32,50,.25);
+}
+
+/* ============================================================ base */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  font-feature-settings: "kern" 1, "liga" 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* A faint instrument grid. It is the only decoration in the whole stylesheet, it sits
+ * behind everything at 3% opacity, and it exists to stop a dark page reading as a void. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(var(--hairline) 1px, transparent 1px),
+    linear-gradient(90deg, var(--hairline) 1px, transparent 1px);
+  background-size: 64px 64px;
+  opacity: .28;
+  mask-image: radial-gradient(ellipse 120% 80% at 50% 0%, #000 0%, transparent 78%);
+}
+
+a { color: var(--accent); text-decoration-color: var(--accent-dim); text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+h1, h2, h3, h4 { margin: 0; font-weight: 640; letter-spacing: -.015em; line-height: 1.2; }
+h1 { font-size: 1.6rem; letter-spacing: -.024em; }
+h2 { font-size: 1.12rem; }
+h3 { font-size: .96rem; }
+p  { margin: 0 0 var(--s3); }
+p:last-child { margin-bottom: 0; }
+
+code, kbd, samp, .mono { font-family: var(--mono); font-size: .92em; }
+
+/* The eyebrow. Used for section labels, where it encodes the report's fixed read order. */
+.eyebrow {
+  font-family: var(--mono);
+  font-size: .68rem;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--faint);
+  font-weight: 600;
+}
+
+.lede { color: var(--ink-2); font-size: 1.02rem; max-width: 68ch; }
+.note { color: var(--muted); font-size: .86rem; max-width: 76ch; }
+.tiny { font-size: .76rem; color: var(--faint); }
+.nowrap { white-space: nowrap; }
+
+/* ============================================================ layout */
+.shell { position: relative; z-index: 1; display: flex; min-height: 100vh; }
+
+.rail {
+  width: var(--rail);
+  flex: 0 0 var(--rail);
+  background: var(--bg-deep);
+  border-right: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s4) 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.rail-mark {
+  width: 30px; height: 30px;
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--r-sm);
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: .62rem; font-weight: 700;
+  letter-spacing: .04em; color: var(--accent);
+  position: relative; overflow: hidden;
+}
+/* Ambient: a slow sweep across the mark. 9s, once. It reads as an instrument idling. */
+.rail-mark::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(115deg, transparent 38%, var(--accent-glow) 50%, transparent 62%);
+  animation: sweep 9s linear infinite;
+}
+
+.rail-nav { display: flex; flex-direction: column; gap: var(--s1); width: 100%; align-items: center; }
+.rail-link {
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border-radius: var(--r);
+  color: var(--faint);
+  text-decoration: none;
+  font-family: var(--mono); font-size: .72rem; font-weight: 600;
+  border: 1px solid transparent;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.rail-link:hover { color: var(--ink); background: var(--panel); }
+.rail-link[aria-current="page"] {
+  color: var(--accent); border-color: var(--accent-dim); background: var(--panel);
+}
+.rail-spacer { flex: 1; }
+
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.topbar {
+  display: flex; align-items: center; gap: var(--s4);
+  padding: var(--s3) var(--s5);
+  border-bottom: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: blur(10px);
+  position: sticky; top: 0; z-index: 20;
+}
+.topbar-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.topbar-title strong { font-size: .94rem; font-weight: 640; letter-spacing: -.01em; }
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
+
+.content { padding: var(--s5); max-width: 1320px; width: 100%; }
+.content.narrow { max-width: 860px; }
+
+section.block { margin-bottom: var(--s7); scroll-margin-top: 84px; }
+.block-head {
+  display: flex; align-items: baseline; gap: var(--s3);
+  margin-bottom: var(--s4); padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--hairline);
+}
+.block-head h2 { margin-right: auto; }
+
+.grid { display: grid; gap: var(--s4); }
+.grid.two   { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.grid.three { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.grid.four  { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+
+.row { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; }
+.row.tight { gap: var(--s2); }
+.push { margin-left: auto; }
+
+/* ============================================================ panels */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  padding: var(--s4);
+}
+.panel.flush { padding: 0; overflow: hidden; }
+.panel-head {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--panel-2);
+}
+.panel-head h3 { margin-right: auto; }
+.panel-body { padding: var(--s4); }
+
+/* A stat. The number is mono and large; the label is small and above it, because the
+ * label is what you scan for and the number is what you read. */
+.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat-label { font-family: var(--mono); font-size: .66rem; letter-spacing: .13em;
+              text-transform: uppercase; color: var(--faint); font-weight: 600; }
+.stat-value { font-family: var(--mono); font-size: 1.74rem; font-weight: 600;
+              letter-spacing: -.03em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat-note  { font-size: .76rem; color: var(--muted); }
+.stat.q .stat-value { color: var(--quarantine); }
+.stat.r .stat-value { color: var(--review); }
+.stat.a .stat-value { color: var(--accept); }
+.stat.p .stat-value { color: var(--pending); }
+.stat.u .stat-value { color: var(--absent); }
+
+/* ============================================================ state chips */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: .72rem; font-weight: 600;
+  letter-spacing: .02em;
+  padding: 3px 9px 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-2);
+  background: var(--panel-2);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.chip::before { content: attr(data-glyph); font-size: .9em; line-height: 1; }
+.chip-quarantine { color: var(--quarantine); background: var(--quarantine-bg); border-color: var(--quarantine-edge); }
+.chip-review     { color: var(--review);     background: var(--review-bg);     border-color: var(--review-edge); }
+.chip-accept     { color: var(--accept);     background: var(--accept-bg);     border-color: var(--accept-edge); }
+.chip-pending    { color: var(--pending);    background: var(--pending-bg);    border-color: var(--pending-edge); }
+.chip-absent     { color: var(--absent);     background: var(--absent-bg);     border-color: var(--absent-edge); }
+.chip-sm { font-size: .66rem; padding: 2px 7px 2px 6px; }
+
+.sev { font-family: var(--mono); font-size: .7rem; font-weight: 700; letter-spacing: .08em;
+       text-transform: uppercase; }
+.sev-critical { color: var(--quarantine); }
+.sev-high     { color: var(--quarantine); }
+.sev-medium   { color: var(--review); }
+.sev-low      { color: var(--ink-2); }
+.sev-info     { color: var(--faint); }
+
+/* ============================================================ THE HATCH
+ * An UNAVAILABLE or DEGRADED check is not greyed out. It is hatched: visually loud, but
+ * not alarming, and clearly a different KIND of thing from a finding. The drift is slow
+ * enough to read as "still true" rather than "loading". */
+.hatched {
+  position: relative;
+  background-color: var(--absent-bg);
+  border-color: var(--absent-edge) !important;
+}
+.hatched::before {
+  content: "";
+  position: absolute; inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--absent) 22%, transparent) 0 1px,
+    transparent 1px 9px);
+  background-size: 12.73px 12.73px;
+  animation: hatch-drift 24s linear infinite;
+  opacity: .7;
+}
+.hatched > * { position: relative; z-index: 1; }
+
+/* ============================================================ THE SEQ RAIL
+ * The signature. A vertical spine of ledger sequence numbers. Ordering is by seq because
+ * the host clock is untrusted, and the rail is the visual assertion of that fact. */
+.seqrail { position: relative; padding-left: 58px; }
+.seqrail::before {
+  content: "";
+  position: absolute; left: 21px; top: 6px; bottom: 6px;
+  width: 2px;
+  background: linear-gradient(var(--hairline-2), var(--hairline));
+  border-radius: 2px;
+}
+/* The travelling highlight: 7s, continuous, downward — the direction records are appended. */
+.seqrail::after {
+  content: "";
+  position: absolute; left: 21px; width: 2px; height: 68px;
+  border-radius: 2px;
+  background: linear-gradient(transparent, var(--accent), transparent);
+  opacity: .55;
+  animation: rail-travel 7s cubic-bezier(.45,0,.55,1) infinite;
+}
+
+.seqitem { position: relative; margin-bottom: var(--s4); }
+.seqitem:last-child { margin-bottom: 0; }
+.seqitem > .seqtick {
+  position: absolute; left: -58px; top: 2px;
+  width: 44px; text-align: right;
+  font-family: var(--mono); font-size: .74rem; font-weight: 600;
+  color: var(--faint); font-variant-numeric: tabular-nums;
+}
+.seqitem > .seqtick::after {
+  content: "";
+  position: absolute; right: -18px; top: 8px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--hairline-2);
+}
+.seqitem.is-decision > .seqtick { color: var(--accent); }
+.seqitem.is-decision > .seqtick::after { border-color: var(--accent); }
+.seqitem.is-flagged  > .seqtick { color: var(--quarantine); }
+.seqitem.is-flagged  > .seqtick::after { border-color: var(--quarantine); }
+
+/* ============================================================ banners */
+.banner {
+  display: flex; align-items: flex-start; gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--hairline-2);
+  border-left-width: 3px;
+  border-radius: var(--r);
+  background: var(--panel);
+  margin-bottom: var(--s4);
+  position: relative; overflow: hidden;
+}
+.banner-glyph { font-size: 1.05rem; line-height: 1.4; }
+.banner-body { min-width: 0; }
+.banner strong { display: block; font-size: .92rem; margin-bottom: 1px; }
+.banner span { color: var(--ink-2); font-size: .86rem; }
+
+.banner-ok      { border-left-color: var(--accept);     background: var(--accept-bg); }
+.banner-warn    { border-left-color: var(--review);     background: var(--review-bg); }
+.banner-alarm   { border-left-color: var(--quarantine); background: var(--quarantine-bg); }
+.banner-absent  { border-left-color: var(--absent);     background: var(--absent-bg); }
+.banner-info    { border-left-color: var(--accent);     background: color-mix(in srgb, var(--accent) 7%, transparent); }
+
+/* An alarm sweeps, slowly. Not a blink: a blink is noise and an analyst learns to ignore it. */
+.banner-alarm::after {
+  content: "";
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(100deg, transparent 40%,
+              rgba(227,93,74,.14) 50%, transparent 60%);
+  animation: sweep 3.4s linear infinite;
+}
+
+/* The verdict banner. The one place with real typographic scale. */
+.verdict {
+  display: flex; align-items: center; gap: var(--s5);
+  padding: var(--s5);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--hairline-2);
+  background: var(--panel);
+  position: relative; overflow: hidden;
+}
+.verdict-word {
+  font-family: var(--mono);
+  font-size: clamp(1.8rem, 4.5vw, 2.9rem);
+  font-weight: 700; letter-spacing: -.04em; line-height: 1;
+}
+.verdict-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.verdict.is-quarantine { border-color: var(--quarantine-edge); background: var(--quarantine-bg); }
+.verdict.is-quarantine .verdict-word { color: var(--quarantine); }
+.verdict.is-review { border-color: var(--review-edge); background: var(--review-bg); }
+.verdict.is-review .verdict-word { color: var(--review); }
+.verdict.is-accept { border-color: var(--accept-edge); background: var(--accept-bg); }
+.verdict.is-accept .verdict-word { color: var(--accept); }
+
+/* ============================================================ the seal badge */
+.seal {
+  display: inline-flex; align-items: center; gap: var(--s2);
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-2);
+  background: var(--panel-2);
+  font-family: var(--mono); font-size: .73rem; font-weight: 600;
+  position: relative;
+}
+.seal-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+.seal-sealed { color: var(--accept); border-color: var(--accept-edge); background: var(--accept-bg); }
+.seal-sealed .seal-dot { background: var(--accept); animation: breathe 3.2s ease-in-out infinite; }
+.seal-differs { color: var(--quarantine); border-color: var(--quarantine-edge); background: var(--quarantine-bg); }
+.seal-differs .seal-dot { background: var(--quarantine); animation: alarm 1.6s ease-in-out infinite; }
+.seal-not_sealed { color: var(--absent); border-color: var(--absent-edge); background: var(--absent-bg); }
+.seal-unknown { color: var(--faint); }
+
+/* ============================================================ tables */
+.table-wrap { overflow-x: auto; }
+table.data { width: 100%; border-collapse: collapse; font-size: .86rem; }
+table.data th {
+  text-align: left; padding: var(--s2) var(--s3);
+  font-family: var(--mono); font-size: .66rem; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--faint); font-weight: 600;
+  border-bottom: 1px solid var(--hairline-2); white-space: nowrap;
+}
+table.data td { padding: var(--s3); border-bottom: 1px solid var(--hairline); vertical-align: top; }
+table.data tbody tr:last-child td { border-bottom: none; }
+table.data tbody tr { transition: background .12s; }
+table.data tbody tr:hover { background: var(--panel-2); }
+table.data td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+table.data td.mono, table.data th.mono { font-family: var(--mono); }
+
+/* A confidence interval, drawn. The bar is the interval; the notch is the posterior mean;
+ * the tick is the cohort rate this row was actually decided against. */
+.ci { position: relative; height: 18px; min-width: 130px; }
+.ci-track { position: absolute; inset: 8px 0 auto; height: 2px; background: var(--hairline-2); border-radius: 2px; }
+.ci-span  { position: absolute; top: 6px; height: 6px; border-radius: 3px; background: var(--accent-dim); }
+.ci-mean  { position: absolute; top: 3px; width: 2px; height: 12px; background: var(--ink); border-radius: 1px; }
+.ci-base  { position: absolute; top: 1px; width: 1px; height: 16px; background: var(--review); }
+.ci.excludes .ci-span { background: color-mix(in srgb, var(--quarantine) 45%, transparent); }
+
+/* ============================================================ finding cards */
+.finding {
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  margin-bottom: var(--s3);
+  overflow: hidden;
+  transition: border-color .15s, transform .15s;
+}
+.finding:hover { border-color: var(--hairline-2); }
+.finding:focus-within { border-color: var(--accent); }
+.finding.is-target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+
+.finding-head {
+  display: flex; align-items: flex-start; gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  cursor: pointer;
+  background: none; border: none; width: 100%; text-align: left;
+  color: inherit; font: inherit;
+}
+.finding-head:hover { background: var(--panel-2); }
+.finding-id {
+  font-family: var(--mono); font-size: .72rem; color: var(--faint);
+  padding-top: 3px; flex: none;
+}
+.finding-main { min-width: 0; flex: 1; }
+.finding-reason { font-size: .92rem; line-height: 1.5; color: var(--ink); margin-bottom: 5px;
+                  overflow-wrap: anywhere; }
+.finding-meta { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.finding-body { padding: 0 var(--s4) var(--s4); border-top: 1px solid var(--hairline); }
+.finding-body[hidden] { display: none; }
+
+/* severity and confidence, side by side and NEVER merged — they answer different questions */
+.pair { display: flex; gap: var(--s4); flex-wrap: wrap; }
+.pair > div { min-width: 96px; }
+
+.kv { display: grid; grid-template-columns: minmax(130px, auto) 1fr; gap: var(--s2) var(--s4); }
+.kv dt { font-family: var(--mono); font-size: .7rem; letter-spacing: .1em;
+         text-transform: uppercase; color: var(--faint); padding-top: 3px; }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
+.hash {
+  font-family: var(--mono); font-size: .78rem;
+  background: var(--bg-deep); border: 1px solid var(--hairline);
+  border-radius: var(--r-sm); padding: 2px 6px;
+  overflow-wrap: anywhere;
+}
+
+/* ============================================================ evidence */
+.evidence-grid { display: grid; gap: var(--s3);
+                 grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.evidence-item {
+  border: 1px solid var(--hairline); border-radius: var(--r);
+  background: var(--bg-deep); overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.evidence-thumb {
+  aspect-ratio: 16 / 10; width: 100%; object-fit: contain;
+  background: var(--bg-deep); display: block;
+  border-bottom: 1px solid var(--hairline);
+}
+.evidence-cap { padding: var(--s2) var(--s3); font-size: .78rem; color: var(--ink-2); }
+.evidence-cap .tiny { display: block; margin-top: 2px; }
+.evidence-missing {
+  aspect-ratio: 16 / 10; display: grid; place-items: center; text-align: center;
+  padding: var(--s3); font-size: .76rem; color: var(--muted);
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* ============================================================ controls */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 34px; padding: 0 var(--s3);
+  border-radius: var(--r);
+  border: 1px solid var(--hairline-2);
+  background: var(--panel-2);
+  color: var(--ink);
+  font-family: var(--sans); font-size: .84rem; font-weight: 550;
+  cursor: pointer; text-decoration: none;
+  transition: background .13s, border-color .13s, transform .08s;
+}
+.btn:hover { background: var(--raised); border-color: var(--accent-dim); }
+.btn:active { transform: translateY(1px); }
+.btn[disabled], .btn[aria-disabled="true"] {
+  opacity: .45; cursor: not-allowed; pointer-events: none;
+}
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover { background: color-mix(in srgb, var(--accent) 86%, #fff); }
+.btn-danger { color: var(--quarantine); border-color: var(--quarantine-edge); background: var(--quarantine-bg); }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.btn-ghost:hover { color: var(--ink); background: var(--panel-2); }
+.btn-sm { min-height: 28px; font-size: .78rem; padding: 0 var(--s2); }
+
+.filters { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.filter {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 30px; padding: 0 11px;
+  border-radius: 999px; border: 1px solid var(--hairline);
+  background: var(--panel); color: var(--muted);
+  font-family: var(--mono); font-size: .74rem; text-decoration: none;
+  transition: color .13s, border-color .13s, background .13s;
+}
+.filter:hover { color: var(--ink); border-color: var(--hairline-2); }
+.filter[aria-pressed="true"] {
+  color: var(--accent); border-color: var(--accent); background: var(--accent-glow);
+}
+.filter .count { color: var(--faint); font-variant-numeric: tabular-nums; }
+
+label { display: block; font-size: .82rem; color: var(--ink-2); margin-bottom: var(--s1); }
+label .req { color: var(--quarantine); }
+
+input[type="text"], input[type="password"], input[type="search"], select, textarea {
+  width: 100%;
+  background: var(--bg-deep);
+  color: var(--ink);
+  border: 1px solid var(--hairline-2);
+  border-radius: var(--r);
+  padding: 8px 10px;
+  font-family: var(--sans); font-size: .88rem;
+  transition: border-color .13s, box-shadow .13s;
+}
+textarea { font-family: var(--sans); line-height: 1.55; resize: vertical; min-height: 96px; }
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.field { margin-bottom: var(--s4); }
+.field-hint { font-size: .78rem; color: var(--muted); margin-top: var(--s1); }
+.field-count { font-family: var(--mono); font-size: .74rem; color: var(--faint); }
+.field-count.short { color: var(--review); }
+.field-count.ok { color: var(--accept); }
+
+fieldset { border: 1px solid var(--hairline); border-radius: var(--r); padding: var(--s4);
+           margin: 0 0 var(--s4); }
+legend { font-family: var(--mono); font-size: .7rem; letter-spacing: .1em;
+         text-transform: uppercase; color: var(--faint); padding: 0 var(--s2); }
+
+/* ============================================================ interstitial */
+.interstitial {
+  border: 1px solid var(--quarantine-edge);
+  border-left-width: 3px;
+  background: var(--quarantine-bg);
+  border-radius: var(--r);
+  padding: var(--s4);
+  margin-bottom: var(--s4);
+}
+.interstitial h3 { color: var(--quarantine); margin-bottom: var(--s2); }
+
+/* ============================================================ toasts */
+.toasts {
+  position: fixed; right: var(--s5); bottom: var(--s5); z-index: 100;
+  display: flex; flex-direction: column; gap: var(--s2);
+  max-width: min(420px, calc(100vw - 32px));
+}
+.toast {
+  display: flex; gap: var(--s3); align-items: flex-start;
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r);
+  border: 1px solid var(--hairline-2); border-left-width: 3px;
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  font-size: .86rem;
+  animation: toast-in .28s cubic-bezier(.2,.9,.3,1);
+}
+.toast-ok      { border-left-color: var(--accept); }
+.toast-failed  { border-left-color: var(--quarantine); }
+.toast-deduped, .toast-unavailable { border-left-color: var(--review); }
+.toast-recorded { border-left-color: var(--accept); }
+
+/* ============================================================ empty states
+ * "0 findings" must say WHICH detectors ran and which did not. An empty state here is
+ * content, never a shrug. */
+.empty {
+  border: 1px dashed var(--hairline-2);
+  border-radius: var(--r-lg);
+  padding: var(--s6) var(--s5);
+  text-align: left;
+  background: var(--panel-2);
+}
+.empty h3 { margin-bottom: var(--s2); }
+
+.plan-row {
+  display: flex; align-items: baseline; gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+  margin-bottom: var(--s1);
+  font-size: .84rem;
+}
+.plan-row .plan-id { font-family: var(--mono); font-size: .8rem; min-width: 190px; }
+.plan-row .plan-reason { color: var(--muted); }
+
+/* ============================================================ misc */
+.pager { display: flex; gap: var(--s2); align-items: center; justify-content: center;
+         margin-top: var(--s5); }
+.pager .page-of { font-family: var(--mono); font-size: .8rem; color: var(--muted); }
+
+.kbd {
+  display: inline-block; font-family: var(--mono); font-size: .72rem;
+  padding: 1px 5px; border-radius: var(--r-sm);
+  border: 1px solid var(--hairline-2); border-bottom-width: 2px;
+  background: var(--panel-2); color: var(--ink-2);
+}
+
+.bar { height: 6px; border-radius: 3px; background: var(--hairline); overflow: hidden;
+       display: flex; }
+.bar > i { display: block; height: 100%; }
+.bar .b-a { background: var(--accept); }
+.bar .b-r { background: var(--review); }
+.bar .b-q { background: var(--quarantine); }
+.bar .b-u { background: var(--absent); }
+
+.reliability { display: flex; align-items: flex-end; gap: 3px; height: 92px;
+               padding-top: var(--s2); }
+.reliability > div { flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
+                     gap: 2px; align-items: center; }
+.reliability i { display: block; width: 100%; border-radius: 2px 2px 0 0; }
+.reliability .r-pred { background: var(--accent-dim); }
+.reliability .r-emp  { background: var(--accept); }
+
+.skiplink {
+  position: absolute; left: -9999px; top: 0; z-index: 200;
+  background: var(--accent); color: #fff; padding: var(--s2) var(--s4);
+  border-radius: 0 0 var(--r) 0;
+}
+.skiplink:focus { left: 0; }
+
+hr.rule { border: none; border-top: 1px solid var(--hairline); margin: var(--s5) 0; }
+
+/* ============================================================ animation */
+@keyframes sweep       { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@keyframes hatch-drift { to { background-position: 12.73px 12.73px; } }
+@keyframes rail-travel { 0% { top: 0; opacity: 0; } 12% { opacity: .55; }
+                         88% { opacity: .55; } 100% { top: 100%; opacity: 0; } }
+@keyframes breathe     { 0%, 100% { box-shadow: 0 0 0 0 var(--accept-edge); }
+                         50% { box-shadow: 0 0 0 5px transparent; } }
+@keyframes alarm       { 0%, 100% { box-shadow: 0 0 0 0 var(--quarantine-edge); opacity: 1; }
+                         50% { box-shadow: 0 0 0 6px transparent; opacity: .65; } }
+@keyframes toast-in    { from { opacity: 0; transform: translateY(10px) scale(.98); }
+                         to { opacity: 1; transform: none; } }
+@keyframes fade-up     { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* A page-load sequence, once. Sections arrive in the report's fixed read order, which is
+ * the order an analyst is meant to read them in. */
+.content > section.block { animation: fade-up .4s cubic-bezier(.2,.9,.3,1) backwards; }
+.content > section.block:nth-child(1) { animation-delay: .02s; }
+.content > section.block:nth-child(2) { animation-delay: .06s; }
+.content > section.block:nth-child(3) { animation-delay: .10s; }
+.content > section.block:nth-child(4) { animation-delay: .14s; }
+.content > section.block:nth-child(5) { animation-delay: .18s; }
+.content > section.block:nth-child(n+6) { animation-delay: .22s; }
+
+/* An analyst under stress is the user, and some of them have vestibular disorders.
+ * Everything ambient stops; nothing that carries meaning was ever carried by motion alone. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ============================================================ responsive */
+@media (max-width: 860px) {
+  .rail {
+    position: static; width: 100%; height: auto; flex: none;
+    flex-direction: row; justify-content: flex-start;
+    padding: var(--s2) var(--s4); gap: var(--s2);
+    border-right: none; border-bottom: 1px solid var(--hairline);
+  }
+  .shell { flex-direction: column; }
+  .rail-nav { flex-direction: row; width: auto; }
+  .rail-spacer { display: none; }
+  .content { padding: var(--s4) var(--s4); }
+  .topbar { padding: var(--s3) var(--s4); flex-wrap: wrap; }
+  .verdict { flex-direction: column; align-items: flex-start; gap: var(--s3); }
+  .kv { grid-template-columns: 1fr; gap: var(--s1) 0; }
+  .kv dt { padding-top: var(--s2); }
+  .seqrail { padding-left: 46px; }
+  .seqrail::before, .seqrail::after { left: 13px; }
+  .seqitem > .seqtick { left: -46px; width: 34px; }
+  .seqitem > .seqtick::after { right: -17px; }
+  .toasts { right: var(--s3); left: var(--s3); bottom: var(--s3); max-width: none; }
+}
+
+@media print {
+  .rail, .topbar-actions, .filters, .toasts, .btn, form { display: none !important; }
+  body::before { display: none; }
+  .panel, .finding { break-inside: avoid; }
+}
