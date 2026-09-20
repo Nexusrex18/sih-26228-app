@@ -53,8 +53,12 @@ def two_object(tmp_path_factory):
 
 
 def test_registry_row():
+    # Item 10: DATASET_CONTRIBUTOR_META moved to `optional`. Hard-requiring it gave a §3
+    # tier-5 dataset — no contributor attribution, an explicitly supported case — ZERO
+    # coverage of negative_space_poisoning, although the §6.4 signal needs no identity.
     assert {str(c) for c in NegativeSpace.requires} == {
-        "DATASET_IMAGES", "DATASET_LABELS", "DATASET_CONTRIBUTOR_META", "MODEL_PREDICT"}
+        "DATASET_IMAGES", "DATASET_LABELS", "MODEL_PREDICT"}
+    assert {str(c) for c in NegativeSpace.optional} == {"DATASET_CONTRIBUTOR_META"}
 
 
 def test_fully_annotated_dataset_zero_findings(two_object):
@@ -96,13 +100,54 @@ def test_no_model(two_object):
     assert len(fs) == 1 and fs[0].availability.value == "UNAVAILABLE"
 
 
-def test_no_contributors_is_reported_not_silently_empty(two_object):
+def test_no_contributors_runs_degraded_per_sample_rather_than_not_at_all(two_object):
+    """Item 10. A tier-5 dataset used to get `UNAVAILABLE` here — a coverage row claiming
+    `negative_space_poisoning` was assessed by a detector that structurally could not
+    assess it. It now runs DEGRADED: the per-image signal survives, the cohort comparison
+    does not, and every finding says which of the two it is."""
     import dataclasses
     anon = type(two_object)([dataclasses.replace(s, contributor=None, contributor_source=None)
                              for s in two_object.samples], two_object.categories)
     fs = NegativeSpace().detect(anon, None, FakeBoxDetector(two_object), None)
-    assert len(fs) == 1 and fs[0].availability.value == "UNAVAILABLE"
-    assert "contributor" in fs[0].reason
+    assert fs
+    assert all(f.availability.value == "DEGRADED" for f in fs), [f.availability for f in fs]
+    assert all("contributor" in f.reason.lower() or "contributor" in " ".join(f.limitations).lower()
+               for f in fs)
+    # It may not claim a systematic pattern it cannot see: capped low, and below D5's floor.
+    for f in fs:
+        if f.severity.value != "info":
+            assert f.severity.value == "low", f.severity
+            assert f.confidence < 0.6, f.confidence
+
+
+def test_both_modes_record_which_input_path_the_model_actually_got(two_object):
+    """The degraded branch omitted `preprocess_note` while the contributor branch carried
+    it, so a tier-5 scan's findings did not say whether the model was fed the declared
+    preprocessing or bare [0,1] — the one fact item 5 exists to make explicit, missing from
+    exactly the findings that are already the weaker claim.
+
+    Asserted on BOTH branches together, because the defect was the two drifting apart."""
+    import dataclasses
+
+    from cva.detectors.data.base import preprocess_note
+
+    model = FakeBoxDetector(two_object)          # the model still sees the true objects
+    note = preprocess_note(model)
+    # Annotations withheld from one contributor, so BOTH branches actually emit findings:
+    # on a clean dataset neither does, and the assertion below would be vacuous.
+    poisoned, _ = drop_annotations(two_object, seed=72, target_contributor="B", fraction=0.6)
+
+    cohort = NegativeSpace().detect(poisoned, None, model, None)
+    anon_ds = type(poisoned)(
+        [dataclasses.replace(s, contributor=None, contributor_source=None)
+         for s in poisoned.samples], poisoned.categories)
+    degraded = NegativeSpace().detect(anon_ds, None, model, None)
+
+    for label, findings in (("cohort", cohort), ("degraded", degraded)):
+        sample_level = [f for f in findings if f.target_type == "sample"]
+        assert sample_level, label
+        for f in sample_level:
+            assert note in f.access_assumptions, (label, f.access_assumptions)
 
 
 def test_single_contributor_has_no_cohort_and_says_so(two_object):

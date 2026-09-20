@@ -229,13 +229,30 @@ def test_a_missing_file_is_a_clear_error_not_a_silent_no_spec(tmp_path):
 
 # --- the ref ------------------------------------------------------------------------------------
 
-def test_the_ref_is_the_bare_name_the_evidence_store_returns(tmp_path):
+def test_the_ref_uses_module_cs_record_grammar_and_the_store_keeps_its_filename(tmp_path):
+    """Item 28. `config.preprocess_ref` is a field Backend produces FOR Module C's record
+    (§9.2), so it is spelled the way Crypto's `_ref` validator reads it: `sha256:<64 hex>`.
+    Backend emitted the bare `<hex>.json` — the hashes agreed, the strings did not, and
+    nothing mapped between them. The evidence store's FILENAME for the same bytes is a
+    different thing and is unchanged; the two used to be one string doing both jobs."""
+    from cva.loaders.preprocess import preprocess_store_name
+
     h, blob = preprocess_digest(IMAGENET)
-    ref = preprocess_ref_of(h)
-    assert ref == f"{h}.json"
+    assert preprocess_ref_of(h) == f"sha256:{h}"
+    name = preprocess_store_name(h)
+    assert name == f"{h}.json"
     stored = EvidenceStore(tmp_path).put_bytes(blob, ".json")
-    assert stored == ref
-    assert EvidenceStore(tmp_path).path_for(ref).read_bytes() == blob
+    assert stored == name
+    assert EvidenceStore(tmp_path).path_for(name).read_bytes() == blob
+
+
+def test_the_ref_is_accepted_by_module_cs_own_validator():
+    """The point of the ruling, asserted against the other side of the seam rather than
+    against a copy of its regex."""
+    from cva.provenance.seal.records import _ref
+
+    h, _ = preprocess_digest(IMAGENET)
+    assert _ref(preprocess_ref_of(h), "config.preprocess_ref") == preprocess_ref_of(h)
 
 
 # --- attaching to a handle ------------------------------------------------------------------------
@@ -256,8 +273,51 @@ def test_a_sidecar_beside_the_model_is_found_by_name(model_copy):
     h = detect_and_load(model_copy)
     digest, blob = preprocess_digest(IMAGENET)
     assert h.preprocess_hash == digest
-    assert h.preprocess_ref == f"{digest}.json"
+    assert h.preprocess_ref == f"sha256:{digest}"
     assert h.preprocess_spec_bytes == blob
+
+
+class _Handle:
+    """Only what `attach_preprocess` reads of a handle."""
+
+    def __init__(self, input_shape=None):
+        if input_shape is not None:
+            self.input_shape = input_shape
+
+
+def test_item27_a_spec_whose_channels_the_model_cannot_accept_is_a_load_error(tmp_path):
+    """A three-channel spec against a one-channel model used to attach in silence. It cannot
+    be the spec the model was trained with, and `prov.recompute` — whose job is to re-run it
+    and get the same answer — would fail on it. Raises, like any malformed spec."""
+    spec = _write(tmp_path, IMAGENET, "three_channel.json")
+    with pytest.raises(PreprocessSpecError) as exc:
+        attach_preprocess(_Handle((1, 32, 32)), None, spec)
+    assert "3 channel" in str(exc.value) and "accepts 1" in str(exc.value)
+
+
+def test_item27_a_matching_spec_still_attaches_and_a_resize_is_not_a_mismatch(tmp_path):
+    """Height and width are a resize the preprocessing is allowed to perform; only the
+    channel count is a claim about what the model can consume."""
+    spec = _write(tmp_path, IMAGENET, "ok.json")
+    h = _Handle((3, 224, 224))
+    assert attach_preprocess(h, None, spec) is True
+    assert attach_preprocess(_Handle((3, 8, 8)), None, spec) is True
+
+
+def test_item27_a_model_with_no_declared_shape_is_left_alone(tmp_path):
+    """A query-only model has no input shape to check against, so there is nothing to
+    contradict — the check must not invent a mismatch out of an absence."""
+    assert attach_preprocess(_Handle(), None, _write(tmp_path, IMAGENET, "q.json")) is True
+
+
+# The four `apply_preprocess` tests that stood here are gone with the function.
+# Module A implemented the inference-path half of item 5 in their own seat
+# (`detectors/data/base.py`: `declared_preprocess` + `to_model_input(spec)` +
+# `preprocess_note`), and theirs is better — it handles the HWC layout and validates the
+# channel count, which this one did not. Keeping a second implementation with no caller
+# would have been the audit's own finding shape, so it was deleted rather than left to
+# rot. `declared_preprocess` un-quantises correctly (`/ 1e6`), so the trap these tests
+# were written for does not exist on their path.
 
 
 def test_load_model_finds_the_sidecar_too(model_copy):

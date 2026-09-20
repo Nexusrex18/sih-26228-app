@@ -111,6 +111,13 @@ class ContributorSource(str, Enum):
     SIDECAR = "sidecar"
     DIRECTORY = "directory"
     FORMAT_FIELD = "format_field"
+    #: Tier 4. **Defined here and set by NO loader** — audit item 24. It stays because the
+    #: contract is frozen and lists it, and because deleting it would remove the vocabulary
+    #: for a tier the precedence table ratified. What was NOT acceptable was leaving it to
+    #: resolve silently never: the coverage statement now carries a standing limitation
+    #: saying tier 4 is skipped, so the absence is declared rather than discovered. Module
+    #: A's `metadata_anomaly` clustering is a different mechanism that shares the word
+    #: "clustering" and does not populate this.
     EXIF_CLUSTER = "exif_cluster"
     NONE = "none"
 

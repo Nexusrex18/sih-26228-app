@@ -45,9 +45,9 @@
         "arch_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$",
           "description": "sha256 over the model's STRUCTURE (module/op types and parameter shapes), never its weights. Absent for a query-only model, which has no structure to read." },
         "preprocess_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$",
-          "description": "sha256 of the JCS canonical form of the DECLARED preprocessing spec after quantisation (mean/std/value_range as floor(x*1e6+0.5) integers). Absent when the operator declared no spec." },
-        "preprocess_ref": { "type": "string", "minLength": 1,
-          "description": "The bare content-addressed name (<preprocess_hash>.json) of the stored quantised spec in the shared evidence store, so prov.recompute can re-run it." },
+          "description": "sha256 of the JCS canonical form of the DECLARED preprocessing spec after quantisation (mean/std/value_range as floor(x*1e6+0.5) integers). Absent when the operator declared no spec. Its PRESENCE also means the spec was APPLIED to scan-time inputs — value_range, then per-channel mean/std — so a prov.recompute honouring the same spec reproduces the inputs this scan used. It did not, until item 5: scan-time inference resized and divided by 255 and ignored the declared normalisation entirely, which would have had prov.recompute flagging our own scan." },
+        "preprocess_ref": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Content-addressed pointer to the stored quantised spec, so prov.recompute can re-run it. Module C's record grammar, `sha256:<64 lowercase hex>` — the same string its `config.preprocess_ref` validator accepts. Backend emitted the bare `<hex>.json` until item 28: the hashes agreed, the strings did not, and nothing mapped between them. The evidence store's own filename for the same bytes remains `<preprocess_hash>.json`; a wire ref and a filename are two different things." },
         "model_opset": { "type": ["integer", "null"],
           "description": "READ from the model and recorded, never gated: ONNX Runtime accepts opset 7+ and a gate would reject valid models." },
         "dataset_path": { "type": ["string", "null"] },
@@ -123,6 +123,7 @@
           "ci_low": { "type": "number" },
           "ci_high": { "type": "number" },
           "excludes_cohort_rate": { "type": "boolean", "description": "ci_low is above this group's cohort rate: the flag rate of the OTHER non-outlier groups, so a group never informs its own baseline." },
+          "cohort_rate_used": { "type": "number", "description": "The leave-one-out cohort rate THIS row was decided against — the number `excludes_cohort_rate` compares `ci_low` to. It differs per row and is not `contributor_baseline.cohort_rate`, which is the all-survivors rate over every group. Both are defensible; publishing only the one that was not used meant a reader recomputing the decision from the report could not reproduce it." },
           "excludes_reference_rate": { "type": "boolean", "description": "Present only when a reference dataset was usable: ci_low is above the upper 95% bound of the reference dataset's flag rate. Informational; D4 stays keyed on excludes_cohort_rate." },
           "disposition": { "$ref": "#/$defs/disposition" }
         }
@@ -139,7 +140,7 @@
         "reference_flagged": { "type": "integer", "description": "of those, sample-level findings that ran and were routed to review or quarantine: the same definition of 'flagged' the cohort uses" },
         "reference_rate": { "type": "number" },
         "reference_rate_ci_high": { "type": "number", "description": "upper end of the 95% Jeffreys interval on reference_rate; what the cohort is compared to, since a reference that flagged nothing does not show a true rate of zero" },
-        "cohort_rate": { "type": "number", "description": "the scanned dataset's robust cohort rate: the flag rate of its groups after upper-tail outlier groups are set aside (first grouping key with data)" },
+        "cohort_rate": { "type": "number", "description": "the scanned dataset's robust cohort rate: the flag rate of its groups after upper-tail outlier groups are set aside (first grouping key with data). This is the ALL-SURVIVORS rate and it is what this baseline comparison uses; it is NOT what any individual contributor_risk row was decided against — each of those carries its own leave-one-out `cohort_rate_used`." },
         "cohort_exceeds_reference": { "type": "boolean", "description": "cohort_rate is above reference_rate_ci_high: the cohort prior is unreliable here, because the baseline every group is compared with is itself dirtier than clean data" }
       }
     },
@@ -171,7 +172,8 @@
         "records_after_last_anchor": { "type": "integer", "description": "the unwitnessed window" },
         "custody_type": { "type": "string" },
         "durability_window": { "type": "string" },
-        "ledger_state": { "enum": ["sealed", "differs", "not_sealed"] }
+        "ledger_state": { "enum": ["sealed", "differs", "not_sealed"] },
+        "not_assessed_reason": { "type": "string", "description": "Present when an inference ledger WAS supplied and the capability resolved, but no prov.* check is registered with the scanner, so nothing in the ledger was verified. Without it the report shows a satisfied capability and no provenance rows, which reads as 'nothing to report' when the truth is 'nothing was checked'." }
       }
     },
 
@@ -184,6 +186,14 @@
       "properties": {
         "method": { "type": "string" },
         "brier": { "type": ["number", "null"] },
+        "scored_on": {
+          "enum": ["out_of_fold", "none"],
+          "description": "How `brier` and `reliability_bins` were measured. `out_of_fold` means every prediction scored here came from a curve fitted without the point it predicted — the only basis on which a reliability diagram may be read as a quality claim. `none` means the fit had no second group to hold out, so no score is reported rather than an in-sample one presented as held out."
+        },
+        "calibrated_detectors": {
+          "type": "array", "items": { "type": "string" },
+          "description": "The detector ids a calibrator was actually fitted for. Everything else in the report carries its detector's OWN raw score, and the disposition table's confidence thresholds (D3, D5) are not applied to those findings — they route on severity alone and are capped at review. Without this list a reader cannot tell which confidences are on the calibrated scale."
+        },
         "reliability_bins": {
           "type": "array",
           "items": {

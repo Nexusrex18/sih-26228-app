@@ -8,6 +8,7 @@ one that decides whether an analyst keeps reading the reports.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -21,12 +22,56 @@ from cva.core.orchestrator import RunContext, scan
 from cva.core.types import Disposition
 from cva.loaders.models import load_model
 from cva.report.render_html import render
+from cva.risk.calibration import fit_calibrators_grouped, save_calibration
 
 
 def _fired(f) -> bool:
     return (f.availability in (Availability.OK, Availability.DEGRADED)
             and f.disposition in (Disposition.QUARANTINE, Disposition.REVIEW)
             and f.severity.rank >= 2)          # medium or above
+
+
+def calibration_records(result, attacked: bool, family: str
+                        ) -> list[tuple[str, float, bool, str]]:
+    """The labelled outcomes one scanned corpus model contributes to the isotonic fit.
+
+    `(detector_id, raw score, was_attack, family)` for every finding that actually ran. The
+    RAW score, never `confidence` — fitting a curve to the output of a curve is circular —
+    and `family` so `fit_calibrators_grouped` can hold an attack family out.
+
+    `prov.*` is not filtered here: `fit_calibrators_grouped` owns that exclusion, records it
+    in `excluded_detectors`, and having one owner means the report's excluded list matches
+    what was actually excluded.
+    """
+    return [(f.detector_id, float(f.score_raw), attacked, family)
+            for f in result.findings
+            if f.availability in (Availability.OK, Availability.DEGRADED)]
+
+
+def calibration_family(entry: dict, attack_families: list[str]) -> str:
+    """Which fold a corpus model belongs to.
+
+    Attacked models group by trigger, which is the grouping that makes a fold mean anything:
+    a family shares base images, harness and pipeline, so splitting any other way leaves
+    siblings of the held-out model in the fitting fold (`bench/protocol.py`).
+
+    Clean models are NOT a family. Pooling them into one would make `"clean"` a fold with no
+    positives in it and every attack fold a fold with no negatives — PAV on one class returns
+    the constant curve, so both halves of the score would measure the split rather than the
+    detector. They are dealt across the attack families instead, deterministically by model
+    id so the same corpus fits the same calibrator twice running.
+
+    `protocol.group_split` puts clean models on BOTH sides for the same reason; it can,
+    because it measures a rate at a threshold. A calibration score cannot — a point that
+    appears in the fitting fold and the held-out fold is not held out.
+    """
+    if entry["backdoored"]:
+        return str(entry.get("trigger") or "unlabelled")
+    if not attack_families:
+        return "clean"
+    return attack_families[
+        int(hashlib.sha256(str(entry["id"]).encode()).hexdigest()[:8], 16)
+        % len(attack_families)]
 
 
 def run_bench(corpus: Path, out: Path, profile: str = "deep",
@@ -39,6 +84,9 @@ def run_bench(corpus: Path, out: Path, profile: str = "deep",
     refs = [m for m in man["models"] if not m["backdoored"] and "pt" in m
             and not m.get("modified") and not m.get("benign_variant")]
     rows, results = [], []
+    records: list[tuple[str, float, bool, str]] = []
+    attack_families = sorted({str(m.get("trigger") or "unlabelled")
+                              for m in man["models"] if m["backdoored"]})
 
     for entry in man["models"]:
         for fmt in formats:
@@ -57,6 +105,9 @@ def run_bench(corpus: Path, out: Path, profile: str = "deep",
                              out_dir=out, seed=7)
             res = scan(model, ctx, profile)
             results.append(res)
+            records += calibration_records(
+                res, bool(entry["backdoored"]),
+                calibration_family(entry, attack_families))
             row = {"model": mid, "truth": "backdoored" if entry["backdoored"] else "clean",
                    "trigger": entry.get("trigger"), "asr": entry.get("asr"),
                    "verdict": res.verdict}
@@ -85,7 +136,16 @@ def run_bench(corpus: Path, out: Path, profile: str = "deep",
             "ran_on": f"{ran}/{len(rows)}",
         })
 
-    summary = {"rows": rows, "scoreboard": scoreboard}
+    # --- the calibration set (plan §7, §11; gate B7) -----------------------
+    # THIS is the artefact `cva scan --calibration` has always advertised and nothing ever
+    # produced. Without it every report ships `calibration: null` by construction, every
+    # confidence in every report is the detector's own raw score, and the disposition table's
+    # confidence thresholds cannot be applied to anything (see risk/disposition.py). The
+    # benchmark is the only place in the system that has labelled outcomes, so it is the only
+    # place that can fit one.
+    cal = fit_calibrators_grouped(records)
+    cal_path = save_calibration(cal, out / "calibration.json")
+    summary = {"rows": rows, "scoreboard": scoreboard, "calibration": cal.summary()}
     (out / "bench.json").write_text(json.dumps(summary, indent=2))
     _render_matrix(rows, scoreboard, detectors, out / "bench.html")
     render(results, out / "all_models.report.html", "CV Assurance — Module B — full corpus")
@@ -95,6 +155,26 @@ def run_bench(corpus: Path, out: Path, profile: str = "deep",
         dr = "  n/a" if s["detection_rate"] is None else f"{s['detection_rate']:5.2f}"
         fa = "  n/a" if s["false_alarm_rate"] is None else f"{s['false_alarm_rate']:5.2f}"
         print(f"  {s['detector']:32} {dr}      {fa}    {s['ran_on']}")
+
+    fitted = sorted(cal.calibrators)
+    print(f"\n  calibration -> {cal_path}")
+    if fitted:
+        print(f"  fitted for {len(fitted)} detector(s): {', '.join(fitted)}")
+        print(f"  brier {cal.brier} ({cal.summary()['scored_on']})"
+              if cal.brier is not None else
+              "  brier: not scored — only one attack family, so nothing could be held out")
+    else:
+        # Said plainly, because a silent empty file would leave `--calibration` looking
+        # wired up while every confidence in every report stayed raw.
+        print("  NO detector reached the minimum labelled outcomes; every confidence in a "
+              "scan using this file stays raw and is routed on severity alone.")
+    print("  pass it to a scan with: cva scan ... --calibration "
+          f"{cal_path}")
+    # Item 29, same as cva/demo.py: this path calls `scan()` directly and writes no
+    # report.json, so no scan record binds its output and nothing attests it was unaltered.
+    # A benchmark number that gets quoted should say which of the two it is.
+    print("\n  NOTE: benchmark output is NOT sealed — it calls scan() directly and writes no\n"
+          "  report.json, so no scan record binds it. `cva scan` is the sealed path.")
     return summary
 
 

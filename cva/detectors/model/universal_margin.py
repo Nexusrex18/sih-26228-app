@@ -68,7 +68,6 @@ class UniversalMarginCheck:
                 (Capability.REFERENCE_CLEAN_SET,), "backdoor_trigger")]
 
         K = model.num_classes
-        ctx.profile.get("nc_class_order") or list(range(K))
         costs = np.array([universal_shift_cost(
             model, x, c, steps=int(ctx.opt("um_steps", 60)), seed=ctx.rng_seed)[0]
             for c in range(K)], dtype=np.float64)

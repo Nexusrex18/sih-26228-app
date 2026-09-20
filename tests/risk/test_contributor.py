@@ -554,10 +554,14 @@ def test_keys_every_row_has_the_schema_row_shape(v15: GroupAssessment) -> None:
     rows = assess_groups(samples, {f"s{i}" for i in range(0, 60, 4)}, POLICY, SEED)[0]
     rows = [*rows, *v15.rows]
     allowed = REQUIRED_ROW_KEYS | {"contributor_source", "excludes_cohort_rate",
-                                   "excludes_reference_rate", "disposition"}
+                                   "cohort_rate_used", "excludes_reference_rate",
+                                   "disposition"}
     assert rows
     for r in rows:
         assert REQUIRED_ROW_KEYS <= set(r) <= allowed
+        # Item 26: the row publishes the rate its own decision used, which is the
+        # leave-one-out rate and not the all-survivors rate the baseline block prints.
+        assert r["excludes_cohort_rate"] == (r["ci_low"] > r["cohort_rate_used"])
         assert r["group_key"] in SCHEMA_GROUP_KEYS
         assert isinstance(r["group_value"], str)
         assert type(r["n_samples"]) is int and type(r["n_flagged"]) is int

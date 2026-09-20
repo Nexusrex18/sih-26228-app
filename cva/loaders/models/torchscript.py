@@ -5,6 +5,7 @@ probe must actually attempt rather than infer from the file extension.
 """
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,24 @@ import torch
 from cva.core.capability import Capability, CapabilitySet
 
 from .base import ProbeLog, arch_hash_of, digest_weights, softmax
+
+#: The TorchScript archive's own members. `torch.save` writes `data.pkl` and `data/` too, so
+#: those cannot discriminate; the serialised GRAPH is what only TorchScript has.
+_TS_MARKERS = ("code/", "constants.pkl")
+
+
+def _is_torchscript_archive(path: Path) -> bool:
+    """True if `path` is a TorchScript zip archive, decided from the zip's central directory.
+
+    Shared by both loaders' `supports()` so the two can never disagree about which of them
+    owns a `.pt`. Reads no member and unpickles nothing — see `TorchScriptLoader.supports`.
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = zf.namelist()
+    except (OSError, zipfile.BadZipFile):
+        return False                       # legacy non-zip .pt, or not an archive at all
+    return any(n.partition("/")[2].startswith(_TS_MARKERS) for n in names)
 
 
 class TorchScriptHandle:
@@ -175,13 +194,22 @@ class TorchScriptLoader:
     name = "TorchScriptLoader"
 
     def supports(self, path: Path) -> bool:
+        """Sniff the archive DIRECTORY. Never deserialise here.
+
+        `load()` runs under S3's sandbox; `supports()` does not, and it runs for every
+        registered loader against every candidate file — so a `torch.jit.load` here executed
+        an attacker-controlled archive outside the boundary `safety.S3_SANDBOX_LIMITATION`
+        describes. That write-up is accurate about what an attacker can do INSIDE the
+        sandbox; it says nothing about code that runs outside it, which is what this was.
+
+        `zipfile.namelist()` reads the central directory only: no member is decompressed and
+        no pickle is touched. A TorchScript archive carries the serialised graph as
+        `code/…` and `constants.pkl`; a `torch.save` checkpoint has neither (verified
+        against both real layouts — `scripts/probe_archive_layout.py` reproduces it).
+        """
         if path.suffix not in {".pt", ".pth", ".ts"}:
             return False
-        try:
-            torch.jit.load(str(path), map_location="cpu")
-            return True
-        except Exception:
-            return False
+        return _is_torchscript_archive(path)
 
     #: Read back by `torch.jit.load(_extra_files=...)`. An exporter that writes it gives
     #: the loader the input shape, which is the one fact a TorchScript graph does not

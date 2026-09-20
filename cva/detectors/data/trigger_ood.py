@@ -35,7 +35,7 @@
     requires DATASET_IMAGES, REFERENCE_CLEAN_SET. Mean cosine distance to the k nearest
     reference embeddings, thresholded at the reference set's own leave-one-out distribution.
     The reference set cannot travel through ``detect()``'s arguments, so it arrives as
-    ``ctx.profile["reference_embeddings"]`` (an ``(M, d)`` array in the embedding space) — see the
+    ``ctx.reference_embeddings`` (an ``(M, d)`` array in the embedding space) — see the
     ``OutOfDistribution`` docstring and the module README for why ``ctx.probes_x`` cannot serve.
 """
 from __future__ import annotations
@@ -476,10 +476,15 @@ OOD_DEFAULTS = {"k": 5, "quantile": 0.99, "margin": 1.15, "min_reference": 50,
 
 @register_detector
 class OutOfDistribution:
-    """Reference embeddings arrive as ``ctx.profile["reference_embeddings"]`` (an ``(M, d)`` array in
-    the SAME space as ``embeddings``). ``ctx.probes_x`` is NOT usable for this: it holds raw
-    images, and comparing them with embeddings needs an extractor this detector does not (and must
-    not) own — an open contract question for Backend, see the module README."""
+    """Reference embeddings arrive as ``ctx.reference_embeddings`` — an ``(M, d)`` array in the
+    SAME space as ``embeddings``, built by the orchestrator from ``--reference-dataset`` through
+    the same extractor. ``ctx.probes_x`` is NOT usable for this: it holds raw images, and
+    comparing them with embeddings needs an extractor this detector does not (and must not) own.
+
+    That was the open contract question, and it is closed (audit item 4). It used to be read out
+    of ``ctx.profile["reference_embeddings"]``, which no non-test code ever wrote — so this row
+    resolved OK at negotiation and then returned ``not_performed`` on every real scan, which is
+    coverage advertising a runnable row that could never produce a result."""
 
     id = "data.ood"
     version = "1.0.0"
@@ -495,13 +500,16 @@ class OutOfDistribution:
 
     def _detect(self, dataset: Dataset, embeddings: EmbeddingIndex | None, ctx: CheckContext) -> list:
         p = self.p
-        ref = ctx.profile.get("reference_embeddings")
+        ref = getattr(ctx, "reference_embeddings", None)
+        if ref is None:
+            ref = ctx.profile.get("reference_embeddings")   # legacy path, tests only
         if ref is None:
             return [not_performed(
                 self.id, self.version, self.attack_classes,
-                "no reference embeddings were supplied (ctx.profile['reference_embeddings']); "
-                "ctx.probes_x carries raw images and cannot be compared with embeddings without "
-                "an extractor")]
+                "no reference embeddings were supplied: pass a known-clean second dataset "
+                "with --reference-dataset and it is embedded through the same extractor. "
+                "ctx.probes_x carries raw images and cannot be compared with embeddings "
+                "without an extractor")]
         if embeddings is None:
             return [not_performed(self.id, self.version, self.attack_classes, "no embedding index supplied")]
         R = np.asarray(ref, dtype=np.float32)

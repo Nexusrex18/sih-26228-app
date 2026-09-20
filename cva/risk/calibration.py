@@ -75,8 +75,36 @@ class CalibrationSet:
     excluded: list[str] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
+        """What the report prints. `scored_on` and `calibrated_detectors` are not decoration:
+        a Brier score says nothing without its measurement basis, and a reader cannot tell
+        which of the report's confidences went through a curve without the list."""
         return {"method": "isotonic", "brier": self.brier, "reliability_bins": self.bins,
+                "scored_on": "out_of_fold" if self.brier is not None else "none",
+                "calibrated_detectors": sorted(self.calibrators),
                 "excluded_detectors": sorted(self.excluded)}
+
+
+def _reliability(p: list[float], y: list[float]) -> tuple[float | None, list[dict[str, Any]]]:
+    """Brier score and reliability bins from (predicted, outcome) pairs. Nothing is fitted
+    here — the caller decides which pairs are honest to score."""
+    if not p:
+        return None, []
+    p_arr, y_arr = np.array(p), np.array(y)
+    bins: list[dict[str, Any]] = []
+    for lo in np.linspace(0, 0.9, 10):
+        m = (p_arr >= lo) & (p_arr < lo + 0.1 + (1e-9 if lo > 0.85 else 0))
+        if m.any():
+            bins.append({"p_mean": round(float(p_arr[m].mean()), 6),
+                         "empirical": round(float(y_arr[m].mean()), 6),
+                         "n": int(m.sum())})
+    return round(float(np.mean((p_arr - y_arr) ** 2)), 6), bins
+
+
+def _fit_one(pts: list[tuple[float, bool]]) -> Calibrator:
+    s = np.array([p for p, _ in pts])
+    y = np.array([q for _, q in pts], dtype=float)
+    edges, values = pav(s, y)
+    return Calibrator(tuple(edges), tuple(values))
 
 
 def fit_calibrators(records: Iterable[tuple[str, float, bool]],
@@ -84,36 +112,78 @@ def fit_calibrators(records: Iterable[tuple[str, float, bool]],
                     exclude_prefixes: tuple[str, ...] = EXCLUDE_PREFIXES) -> CalibrationSet:
     """`records` = (detector_id, raw score, was_attack). Detectors with fewer than
     `min_points` labelled outcomes get no calibrator, so their confidence is left as the
-    detector reported it instead of being fitted to noise."""
-    by: dict[str, list[tuple[float, bool]]] = {}
+    detector reported it instead of being fitted to noise.
+
+    Records carry no grouping key here, so there is nothing to hold out and the returned set
+    has `brier = None` and no reliability bins — deliberately. An isotonic fit scored on the
+    points it was fitted to reports a calibration quality it will not reproduce on anything
+    else, and that number sits inside the coverage statement as the report's own evidence
+    about how far its confidences can be trusted. Callers that want the diagram use
+    `fit_calibrators_grouped`, which fits the shipped curve on everything and scores it on a
+    held-out family.
+    """
+    return fit_calibrators_grouped(
+        ((det, score, hit, "") for det, score, hit in records),
+        min_points=min_points, exclude_prefixes=exclude_prefixes)
+
+
+def fit_calibrators_grouped(records: Iterable[tuple[str, float, bool, str]],
+                            min_points: int = MIN_POINTS,
+                            exclude_prefixes: tuple[str, ...] = EXCLUDE_PREFIXES
+                            ) -> CalibrationSet:
+    """Fit per detector, and score the fit OUT OF FOLD — `backend_plan.md:1532`, gate B7:
+    *"reliability diagram + Brier on the held-out family"*.
+
+    `records` = (detector_id, raw score, was_attack, group). `group` is the attack family,
+    the only grouping that makes a fold mean anything: families share base images, harness
+    and pipeline, so a random split puts siblings of the held-out model in the fitting fold
+    and the held-out set is not held out in any useful sense (`bench/protocol.py`).
+
+    Two different things come out, deliberately:
+
+      * the SHIPPED calibrator is fitted on every point, because a curve fitted on less data
+        is a worse curve and the report's confidences should use the best one available;
+      * `brier` and `reliability_bins` are computed only from predictions made by a curve
+        that never saw the point being predicted. An isotonic fit scored in sample reports a
+        quality it cannot reproduce, and this number sits inside the coverage statement where
+        the plan says the system's own confidence is evidence.
+
+    A group with too few points to leave out (one group, or a fold whose remainder falls
+    under `min_points`) contributes a calibrator and no score, never an in-sample score
+    dressed up as a held-out one.
+    """
+    by: dict[str, list[tuple[float, bool, str]]] = {}
     excluded: set[str] = set()
-    for det, score, hit in records:
+    for det, score, hit, group in records:
         if det.startswith(exclude_prefixes):
             excluded.add(det)
             continue
-        by.setdefault(det, []).append((score, hit))
+        by.setdefault(det, []).append((score, hit, group))
     out = CalibrationSet(excluded=sorted(excluded))
-    all_p: list[float] = []
-    all_y: list[float] = []
+    oof_p: list[float] = []
+    oof_y: list[float] = []
     for det, pts in sorted(by.items()):
         if len(pts) < min_points:
             continue
-        s = np.array([p for p, _ in pts])
-        y = np.array([q for _, q in pts], dtype=float)
-        edges, values = pav(s, y)
-        cal = Calibrator(tuple(edges), tuple(values))
-        out.calibrators[det] = cal
-        all_p += [cal(float(v)) for v in s]
-        all_y += list(y)
-    if all_p:
-        p_arr, y_arr = np.array(all_p), np.array(all_y)
-        out.brier = round(float(np.mean((p_arr - y_arr) ** 2)), 6)
-        for lo in np.linspace(0, 0.9, 10):
-            m = (p_arr >= lo) & (p_arr < lo + 0.1 + (1e-9 if lo > 0.85 else 0))
-            if m.any():
-                out.bins.append({"p_mean": round(float(p_arr[m].mean()), 6),
-                                 "empirical": round(float(y_arr[m].mean()), 6),
-                                 "n": int(m.sum())})
+        out.calibrators[det] = _fit_one([(s, h) for s, h, _ in pts])
+        groups = sorted({g for _, _, g in pts})
+        if len(groups) < 2:
+            continue                       # nothing to hold out; no score, rather than a lie
+        for held in groups:
+            fit = [(s, h) for s, h, g in pts if g != held]
+            test = [(s, h) for s, h, g in pts if g == held]
+            if len(fit) < min_points or not test:
+                continue
+            # A single-label fold on either side is not a fold. PAV on one class returns the
+            # constant curve, so a fit fold with no negatives predicts 1.0 for everything and
+            # the score measures the split rather than the detector. Skipping is the honest
+            # answer; the alternative is a Brier inflated by construction.
+            if len({h for _, h in fit}) < 2 or len({h for _, h in test}) < 2:
+                continue
+            cal = _fit_one(fit)
+            oof_p += [cal(float(s)) for s, _ in test]
+            oof_y += [float(h) for _, h in test]
+    out.brier, out.bins = _reliability(oof_p, oof_y)
     return out
 
 

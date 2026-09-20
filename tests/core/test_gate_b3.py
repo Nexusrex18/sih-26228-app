@@ -109,8 +109,10 @@ def test_a_raising_plugin_resolves_ERROR_never_DEGRADED():
     assert f.availability is not Availability.DEGRADED
     assert f.attack_class == "tool.error"
     assert "RuntimeError" in f.reason
-    # The ERROR finding must not move the verdict: it is a defect in us, not in the model.
-    assert res.verdict == "ACCEPT"
+    # An ERROR is a defect in us, not in the model — and it is still not a declared gap, so
+    # it may not be dropped from the verdict. Plan's "never a silent skip": a crashed check
+    # forces REVIEW, where UNAVAILABLE (a declared gap, carried by coverage) does not.
+    assert res.verdict == "REVIEW"
 
 
 def test_an_ERROR_does_not_contaminate_a_sibling_check():

@@ -17,7 +17,14 @@ from __future__ import annotations
 import numpy as np
 
 from cva.core.capability import Availability, Capability
-from cva.core.types import Disposition, Evidence, Finding, Nature, Severity
+from cva.core.types import (
+    Disposition,
+    Evidence,
+    Finding,
+    Nature,
+    Severity,
+    unavailable_finding,
+)
 from cva.detectors.base import CheckContext, register
 
 
@@ -149,13 +156,26 @@ class NeuralCleanseCheck:
 
     def check(self, model, ctx: CheckContext) -> list[Finding]:
         x = ctx.probes_x
+        # REFERENCE_CLEAN_SET is granted by a clean probe ARRAY or a clean reference DATASET
+        # (`RunContext.capabilities`), and this method needs the array: it optimises a patch
+        # against the model's own responses. Resolving OK on the dataset grant and then
+        # crashing on a None would surface as `tool.error` — a defect in the tool — where the
+        # honest answer is an unavailable row naming what was missing.
+        if x is None or not len(x):
+            return [unavailable_finding(
+                self.id, self.version, model.model_id,
+                "needs clean probe images as an array; a reference dataset alone does not "
+                "supply them (use --corpus, or --reference for a probe set)",
+                (Capability.REFERENCE_CLEAN_SET,), "backdoor_trigger")]
         K = model.num_classes
         caps = model.capabilities()
         has_grad = Capability.MODEL_GRADIENTS in caps
 
         # Top-K driven by the intrinsic ranking when one is available, so class count
         # stops being the thing that makes this infeasible.
-        order = ctx.profile.get("nc_class_order") or list(range(K))
+        # `run_state`, not `profile`: the ranking is a per-run input derived by
+        # model.intrinsic_probes, and the profile is hashed before any check runs.
+        order = ctx.run_state.get("nc_class_order") or list(range(K))
         topk = int(ctx.opt("nc_top_k", K))
         classes = list(order)[:topk]
 

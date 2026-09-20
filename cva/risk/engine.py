@@ -51,7 +51,12 @@ def _route(findings: list[Finding], prof: dict[str, Any],
     policy: dict[str, Any] = prof.get("disposition") or default_policy()
     prefixes = tuple((prof.get("calibration") or {}).get("exclude_detector_prefixes") or ("prov.",))
     apply_calibration(findings, calibration, prefixes)
-    apply_dispositions(findings, policy)
+    # WHICH detectors were actually calibrated, not merely whether a set was supplied.
+    # `apply_calibration` rewrites the confidence of detectors that have a calibrator and
+    # leaves every other finding at its raw score; the disposition table's confidence
+    # thresholds are on the calibrated scale, so they may only be applied to the first group.
+    calibrated = set(calibration.calibrators) if calibration is not None else set()
+    apply_dispositions(findings, policy, calibrated, prefixes)
     return policy
 
 

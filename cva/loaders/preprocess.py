@@ -239,11 +239,60 @@ def preprocess_digest(spec: dict[str, Any]) -> tuple[str, bytes]:
 
 
 def preprocess_ref_of(preprocess_hash: str) -> str:
-    """The bare content-addressed name the evidence store gives these bytes."""
+    """`config.preprocess_ref` as Module C's record grammar defines it: `sha256:<64 hex>`.
+
+    Backend used to emit the bare `<hex>.json` here. The hashes agreed, the strings did not,
+    and nothing mapped between them — so a field Backend produces FOR Crypto's record (§9.2)
+    would have been rejected by Crypto's own `_ref` validator. **Backend moved, by ruling:**
+    §9.2 frames these as fields Backend produces for that record, and Module C ships frozen
+    byte-identical spec vectors. The side holding frozen artefacts is not the side that moves.
+
+    The evidence-store FILENAME is a separate thing and keeps its own form — see
+    `preprocess_store_name`. Conflating the two is what let the grammar drift in the first
+    place: one string was doing a wire field's job and a filename's job at once.
+    """
+    return f"sha256:{preprocess_hash}"
+
+
+def preprocess_store_name(preprocess_hash: str) -> str:
+    """The name the shared evidence store gives these bytes — a filename, not a wire ref."""
     return f"{preprocess_hash}.json"
 
 
 # --- attaching to a handle -------------------------------------------------------------------
+
+def check_spec_against_model(spec: dict[str, Any], handle: Any, source: str) -> None:
+    """Cross-check the DECLARED spec against what the model actually accepts.
+
+    `validate_preprocess_spec` checks the spec's internal consistency — `mean` against `std`
+    against its own `input_shape` — but nothing compared it with the model standing next to
+    it, so a three-channel spec against a one-channel model was accepted in silence. That is
+    a spec that cannot possibly be the one the model was trained with, and the first thing it
+    breaks is `prov.recompute`, whose entire job is to re-run this spec and get the same
+    answer.
+
+    A mismatch raises, the same way a malformed spec already does: the spec is an operator
+    declaration, and an unusable declaration is a load error, not a quiet degradation.
+    `input_shape` is read only when the handle reports one; a query-only model has no shape
+    to check and is left alone.
+    """
+    shape = getattr(handle, "input_shape", None)
+    if not shape or len(tuple(shape)) != 3:
+        return
+    dims = tuple(int(d) for d in shape)
+    # Handle shapes are CHW throughout the loader stack (`(3, 32, 32)`); the SPEC declares
+    # its own layout and `validate_preprocess_spec` has already reconciled the two for the
+    # spec's own `input_shape`. Only the channel count is compared here — height and width
+    # are a resize the preprocessing is allowed to perform.
+    model_channels = dims[0]
+    declared = len(spec["mean"])
+    if declared != model_channels:
+        raise PreprocessSpecError(
+            f"{source}: the spec declares {declared} channel(s) (mean/std) but the model "
+            f"accepts {model_channels} (input shape {dims}). A spec the model cannot "
+            "consume is not the spec it was trained with, and prov.recompute would fail on "
+            "it.")
+
 
 def attach_preprocess(handle: Any, model_path: str | Path | None = None,
                       explicit: str | Path | None = None) -> bool:
@@ -265,7 +314,9 @@ def attach_preprocess(handle: Any, model_path: str | Path | None = None,
         spec_path = None
     if spec_path is None:
         return False
-    digest, blob = preprocess_digest(load_preprocess_spec(spec_path))
+    spec = load_preprocess_spec(spec_path)
+    check_spec_against_model(spec, handle, str(spec_path))
+    digest, blob = preprocess_digest(spec)
     handle.preprocess_hash = digest
     handle.preprocess_ref = preprocess_ref_of(digest)
     handle.preprocess_spec_bytes = blob

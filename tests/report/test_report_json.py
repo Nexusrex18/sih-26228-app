@@ -90,7 +90,7 @@ class PreprocessedModel(HashedModel):
     """What a file loader returns when the operator declared a preprocessing spec: the three
     facts are plain attributes on the handle (`cva.loaders.preprocess.attach_preprocess`)."""
     preprocess_hash = "cd" * 32
-    preprocess_ref = "cd" * 32 + ".json"
+    preprocess_ref = "sha256:" + "cd" * 32          # Module C's record grammar, item 28
 
     def arch_hash(self) -> str:
         return "ef" * 32
@@ -312,7 +312,7 @@ def test_target_carries_the_preprocess_and_structure_facts_when_the_handle_has_t
     res = scan(PreprocessedModel(), RunContext(dataset=FakeDataset(3)), "deep", registries=EMPTY)
     rep = report_json.build(res)
     assert rep["target"]["preprocess_hash"] == "cd" * 32
-    assert rep["target"]["preprocess_ref"] == "cd" * 32 + ".json"
+    assert rep["target"]["preprocess_ref"] == "sha256:" + "cd" * 32
     assert rep["target"]["arch_hash"] == "ef" * 32
     assert all(v not in ("", None) for v in rep["target"].values())
     _assert_valid(rep)
@@ -343,6 +343,9 @@ def test_target_drops_a_preprocess_or_arch_value_that_is_not_what_it_claims_to_b
 @pytest.mark.parametrize("member, bad", [
     ("preprocess_hash", "nothex"), ("preprocess_hash", "AB" * 32), ("arch_hash", "ab" * 31),
     ("preprocess_ref", ""), ("preprocess_ref", 5), ("unknown_member", "x"),
+    # Item 28: the bare `<hex>.json` Backend used to emit is now a schema violation, because
+    # Module C's `config.preprocess_ref` validator would have rejected it on the wire.
+    ("preprocess_ref", "cd" * 32 + ".json"), ("preprocess_ref", "sha1:" + "cd" * 32),
 ], ids=lambda v: str(v))
 def test_the_schema_rejects_a_malformed_preprocess_member_and_still_forbids_extras(member, bad):
     rep = report_json.build(scan(PreprocessedModel(), RunContext(), "deep", registries=EMPTY))
@@ -442,9 +445,14 @@ def test_with_an_inference_ledger_the_counts_are_unknown_not_zero():
         "provenance_summary"]
     assert "records_verified" not in summ and "anchors_checked" not in summ
     assert summ["ledger_state"] == "not_sealed"
+    # Item 7: the capability resolved but no prov.* check is registered, so nothing in the
+    # ledger was verified. Absent counts say "unknown"; without this line the report would
+    # show a satisfied capability and no provenance rows, which reads as "nothing to report"
+    # when the truth is "nothing was checked".
+    assert "no prov.* check is registered" in summ["not_assessed_reason"]
 
 
-def test_with_a_ledger_and_a_key_nothing_is_known_and_the_summary_is_null():
+def test_with_a_ledger_and_a_key_the_summary_still_says_nothing_was_checked():
     class Both:
         def append(self, record) -> str:
             return "seq-1"
@@ -457,7 +465,13 @@ def test_with_a_ledger_and_a_key_nothing_is_known_and_the_summary_is_null():
 
     ctx = RunContext(audit_ledger=Both(), inference_ledger=Both())
     rep = report_json.build(scan(FakeModel(), ctx, "deep", registries=EMPTY))
-    assert rep["provenance_summary"] is None
+    summ = rep["provenance_summary"]
+    # Everything IS known in the capability sense — a ledger opened and a key signed — so
+    # neither the counts nor `ledger_state` is written. What remains to say, and what used
+    # to be a `null` section, is that no prov.* check ran over that ledger.
+    assert summ is not None and set(summ) == {"not_assessed_reason"}
+    assert "nothing in this ledger" in summ["not_assessed_reason"].lower() or \
+        "NOTHING in this ledger" in summ["not_assessed_reason"]
     _assert_valid(rep)
 
 
@@ -579,8 +593,11 @@ def test_the_limitations_reach_report_json_from_the_target():
     assert len(declared["coverage"]["standing_limitations"]) == len(STANDING_LIMITATIONS) + 1
 
 
-NO_SPEC_LIMITATION = ("No preprocessing spec was declared for this model, so prov.recompute "
-                      "cannot be performed for it.")
+NO_SPEC_LIMITATION = (
+    "No preprocessing spec was declared for this model, so prov.recompute cannot be "
+    "performed for it, and scan-time inputs were scaled to [0,1] only — no mean/std "
+    "normalisation was applied, because guessing one would be a fact about the model that "
+    "nobody declared.")
 
 
 def test_the_no_preprocessing_limitation_appears_iff_a_model_has_no_declared_spec():
@@ -590,7 +607,7 @@ def test_the_no_preprocessing_limitation_appears_iff_a_model_has_no_declared_spe
     # A declared spec removes it, whatever else is (or is not) known about the model.
     assert NO_SPEC_LIMITATION not in _limits(
         {"model_format": "onnx", "model_sha256": HEX64, "preprocess_hash": HEX64,
-         "preprocess_ref": f"{HEX64}.json"})
+         "preprocess_ref": f"sha256:{HEX64}"})
     # No model at all — dataset-only, or nothing — there is nothing to recompute.
     assert NO_SPEC_LIMITATION not in _limits({})
     assert NO_SPEC_LIMITATION not in _limits({"n_samples": 5, "n_categories": 2})

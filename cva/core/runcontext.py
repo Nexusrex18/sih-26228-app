@@ -41,10 +41,19 @@ class RunContext:
     inference_ledger: InferenceLedgerSource = field(default_factory=NullInferenceLedger)
     code_commit: str = "unknown"
     dataset: Any = None
-    # A second, operator-supplied dataset known to be clean: B7's "reference clean set" for the
-    # absolute-rate check. Deliberately NOT a Capability (`REFERENCE_CLEAN_SET` means
-    # `probes_x`, a model-side array) and never read by `capabilities()`: the orchestrator runs
-    # the data detectors over it and hands the risk engine only a flag count.
+    # A second, operator-supplied dataset known to be clean. It does two jobs, and the second
+    # one was missing until item 4: B7's absolute-rate baseline (the orchestrator runs the
+    # data detectors over it and hands the risk engine only a flag count), AND the reference
+    # the data-side checks compare against.
+    #
+    # It GRANTS `REFERENCE_CLEAN_SET`. `backend_plan.md:904` types that capability
+    # `reference_probes: Dataset | None  # REFERENCE_CLEAN_SET — probe IMAGES`, and §12
+    # (:1685) says `data.ood` and every `drift.distribution` test resolve UNAVAILABLE for
+    # want of it — both of which are dataset-side checks that no array of model probes could
+    # ever satisfy. An earlier comment here asserted the capability "means `probes_x`, a
+    # model-side array"; that was the code contradicting Plan, and Plan wins. Granting from
+    # either source is what makes `data.ood`'s declared `requires` true instead of a row that
+    # resolves OK and then returns `not_performed` on every real scan.
     reference_dataset: Any = None
     # A fitted `CalibrationSet` from the benchmark, or None. A scan has no labels of its own,
     # so with None the report says `calibration: null` rather than inventing a curve.
@@ -52,10 +61,19 @@ class RunContext:
 
     def capabilities(self) -> CapabilitySet:
         caps, notes = set(), []
+        # Two sources, one capability: a model-side probe ARRAY and a data-side reference
+        # DATASET. A check declaring `REFERENCE_CLEAN_SET` must therefore still say which
+        # form it needs when only the other one is present — see the guards in
+        # `model.neural_cleanse` and `model.anomalous`, which return an unavailable row
+        # rather than crashing on a probe array that was never supplied.
         if self.probes_x is not None and len(self.probes_x):
             caps.add(Capability.REFERENCE_CLEAN_SET)
+        elif getattr(self.reference_dataset, "samples", None):
+            caps.add(Capability.REFERENCE_CLEAN_SET)
         else:
-            notes.append((Capability.REFERENCE_CLEAN_SET, "no clean probe set supplied"))
+            notes.append((Capability.REFERENCE_CLEAN_SET,
+                          "no clean probe set supplied: neither a probe array nor a "
+                          "--reference-dataset"))
         if self.suspect_x is not None and len(self.suspect_x):
             caps.add(Capability.SUSPECT_INPUTS)
         else:
