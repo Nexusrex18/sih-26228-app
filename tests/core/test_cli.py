@@ -406,7 +406,7 @@ def test_build_model_attaches_an_explicit_spec_to_a_query_only_handle(tmp_path):
     h = cli.build_model(a)
     digest, blob = preprocess_digest(SPEC)
     assert (h.preprocess_hash, h.preprocess_ref, h.preprocess_spec_bytes) \
-        == (digest, f"{digest}.json", blob)
+        == (digest, f"sha256:{digest}", blob)
     a.preprocess = None
     assert not hasattr(cli.build_model(a), "preprocess_hash")
 
@@ -426,14 +426,15 @@ def test_execute_scan_writes_reference_json_with_every_known_fact(
     fingerprint = ref.pop("fingerprint")
     assert fingerprint and all(isinstance(v, float) for v in fingerprint)
     assert ref == {"model_id": "ref-001", "weights_sha256": HEX64, "arch_hash": "cd" * 32,
-                   "preprocess_hash": digest, "preprocess_ref": f"{digest}.json"}
-    # The ref resolves: the spec bytes sit in the shared evidence store, under that name.
+                   "preprocess_hash": digest, "preprocess_ref": f"sha256:{digest}"}
+    # The ref resolves: the spec bytes sit in the shared evidence store, under the store's
+    # own filename for them — `<hash>.json`, which is NOT the wire ref (item 28).
     stored = tmp_path / "out" / "evidence" / f"{digest}.json"
     assert stored.read_bytes() == blob
     # ...and the report carries the same three facts in `target`, but does not list the file.
     rep = json.loads((out / "report.json").read_text())
     assert rep["target"]["preprocess_hash"] == digest
-    assert rep["target"]["preprocess_ref"] == f"{digest}.json"
+    assert rep["target"]["preprocess_ref"] == f"sha256:{digest}"
     assert rep["target"]["arch_hash"] == "cd" * 32
     assert "reference.json" not in (out / "report.json").read_text()
 
@@ -522,8 +523,9 @@ def test_emit_reference_stores_the_spec_beside_the_manifest_it_points_at(tmp_pat
     dest.parent.mkdir()
     cli.emit_reference(model, dest)
     ref = json.loads(dest.read_text())
-    assert ref["preprocess_ref"] == f"{preprocess_digest(SPEC)[0]}.json"
-    assert (dest.parent / "evidence" / ref["preprocess_ref"]).is_file()
+    digest_of_spec = preprocess_digest(SPEC)[0]
+    assert ref["preprocess_ref"] == f"sha256:{digest_of_spec}"
+    assert (dest.parent / "evidence" / f"{digest_of_spec}.json").is_file()
     assert ref["fingerprint"], "the corpus path has probes, so it registers a fingerprint"
     # ...and the emitted manifest is still what `manifest_from` reads back.
     assert cli.manifest_from(dest).weights_sha256 == HEX64
@@ -599,8 +601,9 @@ def test_selftest_exercises_the_preprocess_hash_path(first_selftest):
     rep = json.loads(report.read_text())
     target = rep["target"]
     assert len(target["preprocess_hash"]) == 64 and len(target["arch_hash"]) == 64
-    assert target["preprocess_ref"] == f"{target['preprocess_hash']}.json"
-    assert (out / "reports" / "evidence" / target["preprocess_ref"]).is_file()
+    assert target["preprocess_ref"] == f"sha256:{target['preprocess_hash']}"
+    assert (out / "reports" / "evidence"
+            / f"{target['preprocess_hash']}.json").is_file()
     assert not any("No preprocessing spec was declared" in s
                    for s in rep["coverage"]["standing_limitations"])
     ref = json.loads((report.parent / "reference.json").read_text())

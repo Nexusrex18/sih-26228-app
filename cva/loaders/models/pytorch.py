@@ -6,6 +6,7 @@ untrusted by premise, so weights_only=True is mandatory, not advisory
 """
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from cva.loaders.safety import check_torch_version as _check_torch_version
 from cva.loaders.safety import load_in_sandbox as _load_in_sandbox
 
 from .base import ProbeLog, arch_hash_of, digest_weights, softmax
+from .torchscript import _is_torchscript_archive
 
 
 def load_checkpoint_untrusted(path: str | Path) -> bytes:
@@ -212,21 +214,30 @@ class PyTorchLoader:
         self.arch_registry = arch_registry or {}
 
     def supports(self, path: Path) -> bool:
-        """A modern torch.save writes a zip archive, exactly like a TorchScript archive,
-        so the magic bytes cannot tell them apart. The only reliable test is to try."""
+        """Sniff the archive DIRECTORY. Never deserialise here.
+
+        A modern `torch.save` writes a zip archive exactly as a TorchScript archive does, so
+        the magic bytes alone cannot tell them apart — but the zip's member NAMES can, and
+        reading them decompresses nothing. This used to call `torch.jit.load` and then
+        `torch.load`, both of which deserialise attacker-controlled bytes, and `supports()`
+        runs OUTSIDE the sandbox that `load()` runs inside: every registered loader sniffs
+        every candidate file, so this was the widest-reach code path in the loader stack and
+        the least protected. `weights_only=True` narrows the primitive; it is not a sandbox,
+        and the threat model's boundary is the sandbox.
+
+        The cost is precision, and it is the right trade: a zip that is not TorchScript and
+        carries no `state_dict` reaches `load()`, where the sandbox holds and the error is
+        raised with a name on it. A sniff that is wrong in that direction fails safely.
+        """
         if path.suffix not in {".pt", ".pth"}:
             return False
-        try:
-            torch.jit.load(str(path), map_location="cpu")
-            return False                       # it is TorchScript; that loader owns it
-        except Exception:
-            pass
+        if _is_torchscript_archive(path):
+            return False                       # that loader owns it
         try:
             _check_torch_version()
-            blob = torch.load(path, map_location="cpu", weights_only=True)
-            return isinstance(blob, dict) and "state_dict" in blob
         except Exception:
             return False
+        return zipfile.is_zipfile(path)
 
     def load(self, path: Path, model_id: str | None = None,
              sandboxed: bool = True) -> TorchModelHandle:
@@ -248,10 +259,41 @@ class PyTorchLoader:
             )
         module = self.arch_registry[arch](**meta.get("arch_kwargs", {}))
         module.load_state_dict(state)
+        # PR #6 fixed exactly this in TorchScriptLoader and the fix was not carried here:
+        # `int(meta.get("num_classes", 10))` fabricates a fact about the model under audit
+        # and it reaches the report as though it had been read off the model. The
+        # architecture is instantiated by then, so the forward pass is available — ask it,
+        # and fail loudly rather than default. `input_shape` keeps its declared default
+        # because it is the one fact a checkpoint does not carry and the probe needs it to
+        # run at all; a wrong shape makes the probe return None, which raises below.
+        shape = tuple(meta.get("input_shape", (3, 32, 32)))
+        declared = meta.get("num_classes")
+        probed = _probe_num_classes(module, shape)
+        if probed is None and declared is None:
+            raise ValueError(
+                f"{path.name}: cannot determine num_classes — a forward pass at input shape "
+                f"{shape} did not yield a 2-D output. Add 'num_classes' (and 'input_shape' "
+                "if it is not 3x32x32) to the checkpoint, or export to TorchScript/ONNX.")
+        if probed is not None and declared is not None and int(declared) != probed:
+            raise ValueError(
+                f"{path.name}: declared num_classes={declared} but the model actually "
+                f"outputs {probed}. The declaration is metadata the supplier controls; the "
+                "forward pass is the model. They must agree or neither can be reported.")
         return TorchModelHandle(
             module,
             model_id or path.stem,
-            tuple(meta.get("input_shape", (3, 32, 32))),
-            int(meta.get("num_classes", 10)),
+            shape,
+            probed if probed is not None else int(declared),
             source=path,
         )
+
+
+def _probe_num_classes(module, input_shape: tuple[int, ...]) -> int | None:
+    """Ask the model, rather than the file that ships alongside it."""
+    try:
+        module.eval()
+        with torch.no_grad():
+            out = module(torch.zeros((1, *input_shape)))
+        return int(out.shape[1]) if out.ndim == 2 else None
+    except Exception:
+        return None

@@ -1,0 +1,132 @@
+name: CI
+
+# Item 11: there was no CI in this repository at all, and that is why several gates read
+# green. A gate whose tests skip is not met — plan §16, "delivered or declared, never
+# silently absent". The specific consequences the audit found:
+#
+#   * the import-boundary invariants (CI invariant 2: core/ must never import detectors/),
+#     ruff and mypy ran only when someone remembered to run them;
+#   * Module C's tests skipped wholesale for want of libsodium and sqlite3 headers, so gate
+#     C9 was green because its 48 tests did not run;
+#   * the embedding path was exercised on nobody's machine, so a regression there would have
+#     been invisible (item 20).
+#
+# One job with the three system packages closes the first two outright.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # CPU wheels only. A CUDA wheel in this environment is a §5.7 violation and `make lock`
+  # already fails on one; pinning the index here keeps the CI install on the same footing.
+  CVA_CPU_INDEX: https://download.pytorch.org/whl/cpu
+
+jobs:
+  gate:
+    name: gate (lint, types, tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages
+        # libsodium-dev and libsqlite3-dev are what Module C's 48 tests need in order to run
+        # rather than skip; cargo builds any Rust-backed wheel that has no manylinux build.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libsodium-dev libsqlite3-dev cargo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install (CPU torch first, per §5.7)
+        # `provenance` is NOT an extra — it sits under [tool.cva.index] in pyproject.toml.
+        # `seal` already carries cryptography + rfc8785.
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url "$CVA_CPU_INDEX" torch torchvision
+          pip install -e ".[dev,data,seal]"
+
+      - name: Cache the vendored backbone
+        # Keyed on the pins themselves, so changing a digest in vendor.py invalidates the
+        # cache rather than silently reusing the old bytes.
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: vendor-${{ hashFiles('cva/features/vendor.py') }}
+
+      - name: Fetch the backbone
+        # CI is Mode A (plan:202), the one place network is allowed. This is item 20's
+        # "a CI job that fetches once and caches" option: without it `build_extractor`
+        # raises, three of Module A's nine detectors report not_performed, and the tests
+        # that would catch a regression there skip themselves — which is exactly the
+        # "green because it did not run" state item 11 exists to end.
+        run: python -m cva.features.vendor fetch
+
+      - name: No CUDA wheel leaked
+        run: |
+          if pip list --format=freeze | grep -Ei '^(nvidia|triton)'; then
+            echo "CUDA wheel leaked into the CPU environment — see backend_plan.md §5.7"
+            exit 1
+          fi
+
+      - name: Lint
+        run: ruff check cva attacklab tests
+
+      - name: Types (strict on core/)
+        run: mypy cva/core
+
+      - name: Import-boundary invariants
+        # Run first and on their own: if core/ has started importing detectors/, the plug-in
+        # architecture is dead and every other test still passes. That is the failure this
+        # repository is least able to notice without a machine checking.
+        run: pytest tests/boundaries -q
+
+      - name: Tests
+        run: pytest -q -m "not slow and not corpus"
+
+      - name: Report which tests skipped
+        # A skip is not a pass. Printing the reasons keeps a gate from going quietly green
+        # because its dependency is missing on the runner — the exact mechanism behind
+        # items 11, 12 and 25.
+        if: always()
+        run: pytest -q -m "not slow and not corpus" --collect-only -rs 2>&1 | tail -40
+
+  selftest:
+    name: selftest (egress guard)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url "$CVA_CPU_INDEX" torch torchvision
+          pip install -e ".[dev,data,seal]"
+      - name: Cache the vendored backbone
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: vendor-${{ hashFiles('cva/features/vendor.py') }}
+      - name: Fetch the backbone
+        # NOT optional for this job: `cva selftest` exits 1 unless the embedding index was
+        # actually built, so without the backbone this job is red by construction.
+        run: python -m cva.features.vendor fetch
+      - name: cva selftest
+        # The product proving its own claims offline: every canary fires, the scan runs, and
+        # its report validates against the published schema. Exit 0 only if all of that held.
+        run: python -m cva.cli selftest

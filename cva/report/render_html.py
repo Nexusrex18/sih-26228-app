@@ -339,8 +339,14 @@ def _provenance_section(doc: _Doc, r) -> None:
     # ledger_state is omitted from the JSON when a signing key exists (the scan record is
     # appended after report.json is hashed); the sequence number is known by render time.
     seq = getattr(r, "ledger_seq", None)
+    err = getattr(r, "ledger_error", None)
     if seq:
         state = f"sealed, seq {_e(seq)}"
+    elif err:
+        # The ledger RAISED. Distinct from "no key was supplied", and previously
+        # indistinguishable from it: `append_scan_record` swallowed the exception, so the
+        # report said the record was not sealed and could not say why.
+        state = f"NOT SEALED — the audit ledger raised: {_e(err)}"
     elif summ.get("ledger_state") == "not_sealed":
         state = "not sealed — no audit ledger with a signing key"
     else:

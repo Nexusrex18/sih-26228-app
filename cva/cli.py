@@ -33,7 +33,7 @@ from cva.core.scanid import EvidenceStore, scan_out_dir
 from cva.loaders.models import load_model
 from cva.loaders.models.http_model import HTTPModel, require_loopback
 from cva.loaders.models.subprocess_model import SubprocessModel
-from cva.loaders.preprocess import attach_preprocess
+from cva.loaders.preprocess import attach_preprocess, preprocess_store_name
 from cva.report.coverage import write as write_coverage
 from cva.report.render_html import render
 from cva.report.report_json import verdict_line
@@ -106,10 +106,11 @@ def store_preprocess(model, out_root: Path) -> None:
     if blob is None:
         return
     name = EvidenceStore(out_root).put_bytes(blob, ".json")
-    if name != getattr(model, "preprocess_ref", None):
+    expected = preprocess_store_name(getattr(model, "preprocess_hash", ""))
+    if name != expected:
         raise RuntimeError(
-            f"the stored preprocessing spec is named {name}, but the model handle says "
-            f"{getattr(model, 'preprocess_ref', None)}")
+            f"the stored preprocessing spec is named {name}, but the model handle's "
+            f"preprocess_hash implies {expected}")
 
 
 def write_reference(model, path: Path, evidence_root: Path, *, with_fingerprint: bool) -> Path:
@@ -149,10 +150,52 @@ def run_scan(model_path: Path, corpus: Path, out_dir: Path, profile: str = "deep
         json.dumps([f.to_dict() for f in res.findings], indent=2))
     report_path = write_report_json(res, out_dir / f"{model.model_id}.report.json")
     seal_report(res, ctx, report_path)     # AFTER the report is on disk, BEFORE the HTML shows the seq
+    warn_unsealed(res)
     write_coverage(res, out_dir / f"{model.model_id}.coverage.md")
     render([res], out_dir / f"{model.model_id}.report.html",
            f"CV Assurance — Module B — {model.model_id}")
     return res
+
+
+def _ledgers(a) -> dict[str, Any]:
+    """Construct the two ledger slots from `--inference-ledger` / `--audit-ledger`.
+
+    Item 7, Backend half. The capability slot has existed since `core/capability.py:37` and
+    `core/ledger.py`, but nothing on the CLI ever filled it, so every scan ran with
+    `NullAuditLedger`, reported "not sealed", and left all 24 of Module C's attack classes
+    uncovered with no way for an operator to change that.
+
+    Both stubs probe ACTIVELY — `JsonlInferenceLedger` reports `INFERENCE_LEDGER` only if
+    the file opened and its first record parsed — so a path that exists but holds garbage
+    does not present itself as a ledger. Nothing here asserts a capability on the strength
+    of a flag having been passed.
+
+    Module C's half is independent and not done here: `PROV_CHECKS` is not registered with
+    `core.registry`, and `LedgerVerify` exposes `resolve(caps)` but no `check(model, ctx)`,
+    so the orchestrator has nothing to call. `_prov_gap` says so in the report rather than
+    letting the capability appear while the rows do not.
+    """
+    from cva.core.ledger import JsonlAuditLedger, JsonlInferenceLedger
+
+    out: dict[str, Any] = {}
+    if _opt(a, "inference_ledger"):
+        out["inference_ledger"] = JsonlInferenceLedger(Path(a.inference_ledger))
+    if _opt(a, "audit_ledger"):
+        out["audit_ledger"] = JsonlAuditLedger(Path(a.audit_ledger))
+    return out
+
+
+def warn_unsealed(res) -> None:
+    """Say out loud that the scan record could not be sealed, and why.
+
+    `append_scan_record` used to swallow the exception entirely, so a report whose
+    tamper-evidence was missing was indistinguishable at the terminal from one that was
+    sealed. The report still gets written — the scan's findings are not in doubt — but the
+    operator has to be told which of the two they are holding.
+    """
+    if getattr(res, "ledger_error", None):
+        print(f"WARNING: the scan record was NOT sealed — the audit ledger raised: "
+              f"{res.ledger_error}")
 
 
 def code_commit() -> str:
@@ -298,7 +341,8 @@ def execute_scan(a, command: str | None = None) -> tuple[ScanResult, Path | None
                               if _opt(a, "reference_dataset") else None)
         ctx = RunContext(out_dir=Path(a.out), seed=a.seed, dataset=ds,
                          code_commit=code_commit(), calibration=calibration,
-                         reference_dataset=ref_ds)
+                         reference_dataset=ref_ds,
+                         **_ledgers(a))
         res = scan(model, ctx, a.profile, dry_run=a.dry_run, plan_sink=print,
                    budget_tier=a.budget_tier)
     if a.dry_run:
@@ -316,6 +360,7 @@ def execute_scan(a, command: str | None = None) -> tuple[ScanResult, Path | None
     # Seal AFTER report.json is final and BEFORE the HTML, which may show the seq. The seq is
     # never written into report.json: the ledger holds that file's digest (plan §7.9).
     seal_report(res, ctx, report_path)
+    warn_unsealed(res)
     write_coverage(res, out / "coverage.md")
     # The report sits in <out>/<scan_id>/ and the shared evidence store in <out>/evidence/.
     render([res], out / "report.html", f"CV Assurance — {res.model_id}",
@@ -440,6 +485,17 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--calibration", default=None,
                    help="a calibration set saved by the benchmark; without it the report "
                         "says calibration: null")
+    # --- Module C seam (item 7, Backend half) -------------------------------------------
+    s.add_argument("--inference-ledger", default=None,
+                   help="the FIELD ledger to audit (JSONL): the artefact prov.* checks "
+                        "verify. Supplying it grants INFERENCE_LEDGER. Without it every "
+                        "prov.* row resolves UNAVAILABLE with that as the stated reason")
+    s.add_argument("--audit-ledger", default=None,
+                   help="where this scan's own scan_record is appended. The default is a "
+                        "Null ledger and the report says plainly that the record was not "
+                        "sealed; the built-in JSONL ledger is a sha256 chain with NO key, "
+                        "so it still reports no SIGNING_KEY and the report still says "
+                        "not sealed. Module C's signed store replaces it")
 
     t = sub.add_parser("selftest")
     t.add_argument("--out", default=None, help="default: a fresh temp dir")

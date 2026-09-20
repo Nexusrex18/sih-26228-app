@@ -44,6 +44,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from cva.core.quantise import canonical_bytes, q_e6
 from cva.loaders.safety import UnsafeArtifact, check_json_safety
 
@@ -239,11 +241,111 @@ def preprocess_digest(spec: dict[str, Any]) -> tuple[str, bytes]:
 
 
 def preprocess_ref_of(preprocess_hash: str) -> str:
-    """The bare content-addressed name the evidence store gives these bytes."""
+    """`config.preprocess_ref` as Module C's record grammar defines it: `sha256:<64 hex>`.
+
+    Backend used to emit the bare `<hex>.json` here. The hashes agreed, the strings did not,
+    and nothing mapped between them — so a field Backend produces FOR Crypto's record (§9.2)
+    would have been rejected by Crypto's own `_ref` validator. **Backend moved, by ruling:**
+    §9.2 frames these as fields Backend produces for that record, and Module C ships frozen
+    byte-identical spec vectors. The side holding frozen artefacts is not the side that moves.
+
+    The evidence-store FILENAME is a separate thing and keeps its own form — see
+    `preprocess_store_name`. Conflating the two is what let the grammar drift in the first
+    place: one string was doing a wire field's job and a filename's job at once.
+    """
+    return f"sha256:{preprocess_hash}"
+
+
+def preprocess_store_name(preprocess_hash: str) -> str:
+    """The name the shared evidence store gives these bytes — a filename, not a wire ref."""
     return f"{preprocess_hash}.json"
 
 
 # --- attaching to a handle -------------------------------------------------------------------
+
+def apply_preprocess(handle: Any, array: Any) -> tuple[Any, str]:
+    """Apply the model's DECLARED preprocessing to `array`, or say why it was not applied.
+
+    Returns `(array, how)`, where `how` is one line for `access_assumptions` naming which
+    path ran. The caller records it; a scan that fed the model one way and reported another
+    is the failure this return value exists to prevent.
+
+    `array` is float32 CHW in [0, 1] — the shared convention at the inference boundary. The
+    spec's `value_range` rescales from [0, 1] to whatever the model expects, then `mean` and
+    `std` normalise per channel.
+
+    **Why this exists (item 5).** §7.7/§9.2 bind Backend to PRODUCING `preprocess_hash` and
+    the stored spec so `prov.recompute` can re-run it, and that obligation is met. What no
+    section said is WHO APPLIES the spec at inference — and so nobody did: the scan-time path
+    did a bilinear resize and `/255.0` and ignored the declared `mean`/`std` entirely. Two
+    consequences, both real: detector evidence computed on wrongly-scaled inputs, and a
+    recompute that honours the spec cannot reproduce the scan that ignored it, which puts
+    `prov.recompute` in the position of flagging our own scan.
+
+    A model with no declared spec keeps `/255.0`, which is the honest default rather than a
+    guess at normalisation — and the report already carries a standing limitation saying
+    `prov.recompute` cannot be performed for such a model.
+    """
+    # `preprocess_spec`, the VALIDATED FLOAT form, and never `preprocess_spec_bytes`. Those
+    # bytes are the QUANTISED spec — `mean`/`std`/`value_range` as `floor(x*1e6 + 0.5)`
+    # integers (`quantise_spec`) — which exist to be hashed, not to be computed with.
+    # Normalising by `mean = [485000, 456000, 406000]` would feed every detector garbage,
+    # which is a worse state than the `/255.0` this replaced. The trap is that with a
+    # `value_range` present the error cancels by homogeneity and looks correct; with
+    # `value_range` absent (it is optional) it does not.
+    spec = getattr(handle, "preprocess_spec", None)
+    if spec is None:
+        return array, ("No preprocessing spec was declared for this model, so scan-time "
+                       "inputs are scaled to [0,1] only (no mean/std normalisation).")
+    a = np.asarray(array, dtype=np.float32)
+    mean = np.asarray(spec["mean"], dtype=np.float32)
+    std = np.asarray(spec["std"], dtype=np.float32)
+    if a.ndim != 3 or a.shape[0] != len(mean):
+        return array, (
+            f"The declared preprocessing spec has {len(mean)} channel(s) but the scan-time "
+            f"array is {a.shape}; the spec was NOT applied and inputs are scaled to [0,1] "
+            "only. prov.recompute will not reproduce this scan.")
+    lo, hi = spec.get("value_range", (0.0, 1.0))
+    a = a * (float(hi) - float(lo)) + float(lo)
+    shaped = (len(mean), 1, 1)
+    a = (a - mean.reshape(shaped)) / std.reshape(shaped)
+    return a, ("The model's declared preprocessing spec was applied to scan-time inputs "
+               f"(value_range {lo}..{hi}, then per-channel mean/std), so prov.recompute "
+               "reproduces the same inputs this scan used.")
+
+
+def check_spec_against_model(spec: dict[str, Any], handle: Any, source: str) -> None:
+    """Cross-check the DECLARED spec against what the model actually accepts.
+
+    `validate_preprocess_spec` checks the spec's internal consistency — `mean` against `std`
+    against its own `input_shape` — but nothing compared it with the model standing next to
+    it, so a three-channel spec against a one-channel model was accepted in silence. That is
+    a spec that cannot possibly be the one the model was trained with, and the first thing it
+    breaks is `prov.recompute`, whose entire job is to re-run this spec and get the same
+    answer.
+
+    A mismatch raises, the same way a malformed spec already does: the spec is an operator
+    declaration, and an unusable declaration is a load error, not a quiet degradation.
+    `input_shape` is read only when the handle reports one; a query-only model has no shape
+    to check and is left alone.
+    """
+    shape = getattr(handle, "input_shape", None)
+    if not shape or len(tuple(shape)) != 3:
+        return
+    dims = tuple(int(d) for d in shape)
+    # Handle shapes are CHW throughout the loader stack (`(3, 32, 32)`); the SPEC declares
+    # its own layout and `validate_preprocess_spec` has already reconciled the two for the
+    # spec's own `input_shape`. Only the channel count is compared here — height and width
+    # are a resize the preprocessing is allowed to perform.
+    model_channels = dims[0]
+    declared = len(spec["mean"])
+    if declared != model_channels:
+        raise PreprocessSpecError(
+            f"{source}: the spec declares {declared} channel(s) (mean/std) but the model "
+            f"accepts {model_channels} (input shape {dims}). A spec the model cannot "
+            "consume is not the spec it was trained with, and prov.recompute would fail on "
+            "it.")
+
 
 def attach_preprocess(handle: Any, model_path: str | Path | None = None,
                       explicit: str | Path | None = None) -> bool:
@@ -265,8 +367,14 @@ def attach_preprocess(handle: Any, model_path: str | Path | None = None,
         spec_path = None
     if spec_path is None:
         return False
-    digest, blob = preprocess_digest(load_preprocess_spec(spec_path))
+    spec = load_preprocess_spec(spec_path)
+    check_spec_against_model(spec, handle, str(spec_path))
+    digest, blob = preprocess_digest(spec)
     handle.preprocess_hash = digest
     handle.preprocess_ref = preprocess_ref_of(digest)
     handle.preprocess_spec_bytes = blob
+    # The validated FLOAT spec, for `apply_preprocess` to compute with. `preprocess_spec_bytes`
+    # beside it is the QUANTISED form and exists to be hashed and stored; the two are not
+    # interchangeable and normalising with the quantised one is silently wrong.
+    handle.preprocess_spec = spec
     return True

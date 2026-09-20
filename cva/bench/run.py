@@ -170,6 +170,11 @@ def run_bench(corpus: Path, out: Path, profile: str = "deep",
               "scan using this file stays raw and is routed on severity alone.")
     print("  pass it to a scan with: cva scan ... --calibration "
           f"{cal_path}")
+    # Item 29, same as cva/demo.py: this path calls `scan()` directly and writes no
+    # report.json, so no scan record binds its output and nothing attests it was unaltered.
+    # A benchmark number that gets quoted should say which of the two it is.
+    print("\n  NOTE: benchmark output is NOT sealed — it calls scan() directly and writes no\n"
+          "  report.json, so no scan record binds it. `cva scan` is the sealed path.")
     return summary
 
 

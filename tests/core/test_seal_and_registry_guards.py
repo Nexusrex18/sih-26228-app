@@ -17,6 +17,7 @@ the guard fails the test rather than only changing an internal.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -101,6 +102,146 @@ def test_item13_a_check_cannot_reach_the_hashed_profile_through_the_context():
     res = scan(FakeModel(), RunContext(), "deep", registries=({Peek.id: Peek}, {}))
     assert seen["run_state"] is not seen["profile"]
     assert profile_hash_of(res.profile) == res.profile_hash
+
+
+class _RefDataset:
+    """Minimal dataset: enough for capability resolution and for the reference pass."""
+
+    def __init__(self, prefix: str, n: int) -> None:
+        self.samples = [SimpleNamespace(sample_id=f"{prefix}{i}", contributor="A",
+                                        batch=None, source_meta={},
+                                        contributor_source=None) for i in range(n)]
+        self.categories: list = []
+
+    def capabilities(self) -> CapabilitySet:
+        return CapabilitySet(frozenset({Capability.DATASET_IMAGES}), ())
+
+    def annotations(self):
+        return []
+
+
+class RefReader:
+    """Stands in for `data.ood`: records what reached `ctx.reference_embeddings`."""
+
+    id = "data.ood"
+    version = "0.0.1"
+    requires = {Capability.DATASET_IMAGES, Capability.REFERENCE_CLEAN_SET}
+    optional: set = set()
+    attack_classes = {"out_of_distribution"}
+    seen: list = []
+
+    def detect(self, dataset, embeddings, model, ctx=None):
+        RefReader.seen.append(getattr(ctx, "reference_embeddings", None))
+        return []
+
+
+def test_item4_a_reference_dataset_grants_the_capability_and_reaches_the_detector(monkeypatch):
+    """Item 4 end to end. `data.ood` declares REFERENCE_CLEAN_SET and reads reference
+    EMBEDDINGS; before this, the capability was granted only by `probes_x` (raw model-side
+    arrays) and the embeddings had no non-test writer, so the row resolved OK at negotiation
+    and returned `not_performed` on every real scan — coverage advertising a runnable row
+    that could never produce a result. Plan:904 types the capability `Dataset`."""
+    import numpy as np
+
+    from cva.core import orchestrator
+    from cva.detectors.data._stub_types import ArrayEmbeddingIndex
+
+    def build(ctx, prof):
+        ids = [s.sample_id for s in ctx.dataset.samples]
+        rng = np.random.default_rng(0)
+        return ArrayEmbeddingIndex(ids, rng.random((len(ids), 8))), None
+
+    monkeypatch.setattr(orchestrator, "build_embeddings", build)
+    RefReader.seen = []
+    ctx = RunContext(dataset=_RefDataset("", 6), reference_dataset=_RefDataset("ref-", 5))
+
+    assert Capability.REFERENCE_CLEAN_SET in ctx.capabilities().caps, \
+        "a known-clean reference dataset IS a reference clean set (plan:904)"
+
+    res = scan(None, ctx, "deep", registries=({}, {RefReader.id: RefReader}))
+    row = next(r for r in res.plan if r.check_id == "data.ood")
+    assert row.resolution.runnable
+    # Twice: the scan's own pass, then B7's pass over the reference dataset itself.
+    assert len(RefReader.seen) == 2
+    got = RefReader.seen[0]
+    assert got is not None, "the row resolved runnable, so it must receive the reference"
+    assert got.shape == (5, 8), "one row per reference sample, in the embedding space"
+
+
+def test_item4_without_a_reference_the_row_is_unavailable_not_silently_empty():
+    """The other half: with neither a probe array nor a reference dataset the capability is
+    absent, so the row says so at minute zero instead of running and finding nothing."""
+    ctx = RunContext(dataset=_RefDataset("", 6))
+    assert Capability.REFERENCE_CLEAN_SET not in ctx.capabilities().caps
+    res = scan(None, ctx, "deep", registries=({}, {RefReader.id: RefReader}))
+    row = next(r for r in res.plan if r.check_id == "data.ood")
+    assert not row.resolution.runnable
+    assert Capability.REFERENCE_CLEAN_SET in row.resolution.missing
+
+
+def test_item19_a_ledger_that_raises_is_reported_with_its_reason():
+    """`append_scan_record` was a bare `except Exception: return None`, so a report whose
+    scan record could not be sealed said so and could not say why — for the one artefact
+    whose entire purpose is tamper-evidence."""
+    from cva.core.orchestrator import append_scan_record
+
+    class Exploding:
+        def append(self, record) -> str:
+            raise RuntimeError("ledgerd refused the connection")
+
+        def capabilities(self) -> set:
+            return set()
+
+    res = scan(FakeModel(), RunContext(), "deep", registries=({}, {}))
+    assert append_scan_record(res, RunContext(audit_ledger=Exploding()), "ab" * 32) is None
+    assert res.ledger_error is not None
+    assert "RuntimeError" in res.ledger_error
+    assert "ledgerd refused the connection" in res.ledger_error
+
+
+def test_item19_a_successful_append_leaves_no_error_behind():
+    """A stale `ledger_error` from an earlier attempt would say a sealed report was not."""
+    from cva.core.orchestrator import append_scan_record
+
+    class Works:
+        def append(self, record) -> str:
+            return "seq-7"
+
+        def capabilities(self) -> set:
+            return set()
+
+    res = scan(FakeModel(), RunContext(), "deep", registries=({}, {}))
+    res.ledger_error = "left over from a previous attempt"
+    assert append_scan_record(res, RunContext(audit_ledger=Works()), "ab" * 32) == "seq-7"
+    assert res.ledger_error is None
+
+
+def test_item18_an_unavailable_data_row_is_not_reported_against_a_model():
+    """`_plan_finding` hardcoded `("model", model_id)` for every unavailable row — and on a
+    dataset scan `model_id` is `"-"`, so the finding named nothing at all. The target now
+    comes from the registry the row came from, the same way the ERROR path already did."""
+    res = scan(None, RunContext(dataset=_RefDataset("", 3)), "deep",
+               registries=({}, {RefReader.id: RefReader}))
+    (row,) = [f for f in res.findings if f.detector_id == "data.ood"]
+    assert (row.target_type, row.target_ref) == ("dataset", "dataset")
+
+
+def test_item16_dispatch_does_not_depend_on_the_registries_tuple_order():
+    """`build_plan` decided "model check" by registry POSITION and the run loop decided the
+    opposite way by registry MEMBERSHIP. The kind is now carried on the row, so a registered
+    plug-in routes the same way whichever position its registry is passed in."""
+    import cva.detectors.data.registry  # noqa: F401
+    import cva.detectors.model.registry  # noqa: F401
+    from cva.core.registry import DETECTOR_REGISTRY, KIND_DATA, KIND_MODEL, REGISTRY, kind_of
+
+    for cls in REGISTRY.values():
+        assert kind_of(cls, 0) == kind_of(cls, 1) == KIND_MODEL, cls.id
+    for cls in DETECTOR_REGISTRY.values():
+        assert kind_of(cls, 0) == kind_of(cls, 1) == KIND_DATA, cls.id
+    # A bare stub that never went through a decorator is still positional, because the
+    # zero-detector gate and much of the suite pass literal tuples of such classes.
+    assert kind_of(RankingReader, 0) == KIND_MODEL
+    assert kind_of(RankingReader, 1) == KIND_DATA
 
 
 def test_item14_an_undeclared_attack_class_is_a_startup_error():

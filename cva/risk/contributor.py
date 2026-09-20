@@ -228,6 +228,12 @@ def assess_groups_detailed(samples: Iterable[Any], flagged_ids: set[str],
                 "group_key": key, "group_value": g, "n_samples": int(n), "n_flagged": int(k),
                 "posterior_mean": round(mean, 6), "ci_low": round(lo, 6),
                 "ci_high": round(hi, 6), "excludes_cohort_rate": bool(excludes),
+                # The rate THIS row was decided against — its leave-one-out cohort rate,
+                # which differs per row. The report's `contributor_baseline.cohort_rate` is
+                # the all-survivors rate, so a reader who recomputed `excludes_cohort_rate`
+                # from the printed number did not reproduce the decision. Both are
+                # defensible; publishing only the one that was not used is not.
+                "cohort_rate_used": round(float(cohort), 6),
                 "disposition": contributor_disposition(policy, mean, bool(excludes)),
             }
             if reference_ceiling is not None:

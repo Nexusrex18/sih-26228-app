@@ -13,7 +13,18 @@ corrections the implementation must honour:
     DIGEST or FINGERPRINT. Neither is expressible as a `Dataset`. Splitting the parameter
     is what lets each plug-in declare the reference capability it actually needs and
     resolve UNAVAILABLE independently, rather than as one undifferentiated missing
-    reference.
+    reference. **Both references — and everything else a plug-in is handed — now arrive
+    inside `CheckContext`**, so the signature is `check(model, ctx)`; the argument above is
+    unchanged and is why `ctx` carries `probes_x`, `battery` and `suspect_x` as separate
+    typed fields rather than one `reference`.
+
+**These Protocols were stale, and nothing caught it** (item 17). `Detector.detect` was
+declared 3-arg while every detector in the tree runs 4-arg with `ctx`, and `ModelCheck.check`
+still named `reference_probes` / `reference_battery`. Nothing imported this file at all —
+the Protocols are `@runtime_checkable` and no `isinstance` check existed — so the drift was
+invisible until `core/drift_scan.py` became the first real consumer. There is now a test
+(`tests/core/test_interfaces_match_reality.py`) asserting every registered plug-in's
+signature against its Protocol, so the next drift is a failure rather than a discovery.
   * **`DriftTest` declares capabilities and receives images** — it previously had neither,
     yet Module D is precisely the module that needs `REFERENCE_CLEAN_SET`, and the
     interpretable axes (brightness, RMS contrast, Laplacian sharpness, JPEG quality, EXIF
@@ -29,7 +40,8 @@ from pathlib import Path
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from .capability import Capability
-from .types import Dataset, EmbeddingIndex, Finding, ModelBattery, ModelHandle
+from .context import CheckContext
+from .types import Dataset, EmbeddingIndex, Finding, ModelHandle
 
 
 @runtime_checkable
@@ -59,9 +71,12 @@ class _PlugIn(Protocol):
 
     id: ClassVar[str]
     version: ClassVar[str]
-    requires: ClassVar[frozenset[Capability]]
-    optional: ClassVar[frozenset[Capability]]
-    attack_classes: ClassVar[frozenset[str]]
+    # Widened to match `registry.Registrable`, which is what the orchestrator actually
+    # resolves against. Declaring `frozenset` here while the registry accepted
+    # `frozenset | set | tuple` meant the two descriptions of one contract disagreed.
+    requires: ClassVar[frozenset[Capability] | set[Capability] | tuple[Capability, ...]]
+    optional: ClassVar[frozenset[Capability] | set[Capability] | tuple[Capability, ...]]
+    attack_classes: ClassVar[frozenset[str] | set[str] | tuple[str, ...]]
 
 
 @runtime_checkable
@@ -69,15 +84,14 @@ class Detector(_PlugIn, Protocol):
     """Module A — training-data integrity (PS §2.2.1)."""
 
     def detect(self, dataset: Dataset, embeddings: EmbeddingIndex | None,
-               model: ModelHandle | None) -> list[Finding]: ...
+               model: ModelHandle | None, ctx: CheckContext) -> list[Finding]: ...
 
 
 @runtime_checkable
 class ModelCheck(_PlugIn, Protocol):
     """Module B — model integrity (PS §2.2.2)."""
 
-    def check(self, model: ModelHandle, reference_probes: Dataset | None,
-              reference_battery: ModelBattery | None) -> list[Finding]: ...
+    def check(self, model: ModelHandle, ctx: CheckContext) -> list[Finding]: ...
 
 
 @runtime_checkable

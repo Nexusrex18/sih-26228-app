@@ -5,9 +5,17 @@ This is the test that makes the freeze real. §5.11 puts the freeze in force fro
 have built against them. Keeping code and spec in lockstep by TEST rather than by
 discipline is what stops the spec quietly becoming fiction while every other test passes.
 
-The vault lives outside the repo, so the test SKIPS when it is absent rather than failing:
-a teammate cloning only the app repo has not broken anything. It fails loudly when the
-vault IS present and disagrees, which is the case that matters.
+**The contract is VENDORED into this repo** — `spec/frozen/Plugin-Interfaces.md` (item 25).
+It used to be read from a sibling vault clone outside the repo, and skipped when that clone
+was absent. B1's definition of done is "the contract agrees field-for-field, ASSERTED BY A
+TEST", and a skip is not an assertion: on a machine without the vault — every CI runner, and
+any teammate who cloned only the app — the gate proved nothing while reading green. A test
+that reports agreement it never checked is the failure shape this whole system exists to
+prevent, one level up.
+
+The vendored copy is now the authority the test compares against, so it always runs. When a
+vault clone IS present, a separate test compares the two and fails if the vendored copy has
+drifted from it — the freeze is only real if the copy cannot go stale unnoticed.
 """
 from __future__ import annotations
 
@@ -29,14 +37,32 @@ from cva.core.types import (
     Severity,
 )
 
-VAULT = Path(__file__).resolve().parents[2].parent / "sih26228-notes"
-SPEC = VAULT / "Architecture" / "Plugin-Interfaces.md"
+REPO = Path(__file__).resolve().parents[2]
+#: The frozen contract, in-repo. Present on every checkout, so these tests never skip.
+SPEC = REPO / "spec" / "frozen" / "Plugin-Interfaces.md"
+#: The sibling vault, when someone has it. Used ONLY to detect drift in the vendored copy.
+VAULT_SPEC = REPO.parent / "sih26228-notes" / "Architecture" / "Plugin-Interfaces.md"
 
 
 def _spec_text() -> str:
-    if not SPEC.exists():
-        pytest.skip(f"vault not present at {SPEC}; nothing to compare against")
+    # Deliberately NOT a skip. The vendored contract ships with the repo, so its absence is
+    # a broken checkout, not a missing optional dependency — and B1 is asserted, not hoped.
+    assert SPEC.exists(), (
+        f"the frozen contract is missing from the repo at {SPEC}. It is vendored precisely "
+        "so this gate cannot pass by skipping; restore it rather than relaxing this test.")
     return SPEC.read_text()
+
+
+def test_the_vendored_contract_has_not_drifted_from_the_vault():
+    """The one test that may legitimately skip: it needs the vault, and its subject is
+    whether the in-repo copy is stale. Everything else reads the vendored copy and runs
+    everywhere."""
+    if not VAULT_SPEC.exists():
+        pytest.skip(f"no vault clone at {VAULT_SPEC}; nothing to compare the copy against")
+    assert SPEC.read_text() == VAULT_SPEC.read_text(), (
+        f"{SPEC} has drifted from {VAULT_SPEC}. The vendored copy is what every other test "
+        "in this file asserts against, so a stale copy means the freeze is being checked "
+        "against the wrong contract. Re-copy it and re-run.")
 
 
 def _block(text: str, header: str) -> str:

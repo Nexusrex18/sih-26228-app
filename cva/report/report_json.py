@@ -57,7 +57,8 @@ def build(result, command: str | None = None) -> dict:
         "drift_summary": None,
         "calibration": getattr(result, "calibration", None),
         "coverage": {**coverage_of(result),
-                     "standing_limitations": standing_limitations(target)},
+                     "standing_limitations": standing_limitations(
+                         target, getattr(result, "embedding_gap", None))},
         "reproduction": reproduction_of(result, command),
     })
     unavailable = getattr(result, "contributor_baseline_unavailable", None)
@@ -90,6 +91,23 @@ def provenance_summary_of(result) -> dict[str, Any] | None:
     if Capability.INFERENCE_LEDGER not in result.capabilities:
         out["records_verified"] = 0
         out["anchors_checked"] = 0
+    elif not any(r.check_id.startswith("prov.") for r in getattr(result, "plan", ()) or ()):
+        # An inference ledger WAS supplied — the capability is present — and yet no prov.*
+        # row exists, because `PROV_CHECKS` is not registered with `core.registry` and
+        # `LedgerVerify` has no `check(model, ctx)` for the orchestrator to call (item 7,
+        # Module C's half). Without this the report would show the capability satisfied and
+        # simply have no provenance rows, which reads as "nothing to report". It is not:
+        # nothing was checked.
+        #
+        # The counts stay ABSENT, not zero. `records_verified: 0` beside a supplied ledger
+        # reads as "the ledger holds nothing", which is a claim about the artefact; the
+        # truth is that this build verified nothing, which is a claim about us. Unknown is
+        # an absent key here, exactly as it is everywhere else in this file.
+        out["not_assessed_reason"] = (
+            "An inference ledger was supplied and INFERENCE_LEDGER resolved, but no prov.* "
+            "check is registered with the scanner, so NOTHING in this ledger was verified "
+            "and all of Module C's attack classes are unassessed in this scan. This is a "
+            "wiring gap on the scan side, not a property of the ledger.")
     if Capability.SIGNING_KEY not in result.capabilities:
         out["ledger_state"] = "not_sealed"
     return out or None
@@ -121,9 +139,22 @@ def reproduction_of(result, command: str | None = None) -> dict[str, Any]:
             "determinism_notes": notes}
 
 
-def standing_limitations(target: dict[str, Any]) -> list[str]:
+def standing_limitations(target: dict[str, Any],
+                         embedding_gap: str | None = None) -> list[str]:
     from cva.loaders.safety import S3_SANDBOX_LIMITATION  # lazy: keeps the report import light
     out = [*STANDING_LIMITATIONS, str(S3_SANDBOX_LIMITATION)]
+    if embedding_gap:
+        # Item 20. Without an embedding index, `data.label_consistency` and
+        # `data.systematic_mislabel` return `not_performed` and `data.near_dup` silently
+        # degrades to pHash-only. Each finding already said so individually; the coverage
+        # statement is where a reader looks to find out what this scan could not do, and
+        # three detectors failing for one shared reason belongs there as one sentence.
+        out.append(
+            f"No embedding index was built for this scan ({embedding_gap}). Without one, "
+            "data.label_consistency and data.systematic_mislabel cannot run at all and "
+            "data.near_dup falls back to perceptual hashing only, which finds near-exact "
+            "copies but not semantic near-duplicates. Those detectors are also never "
+            "benchmarked on such a machine, so no calibrator is fitted for them.")
     if "model_format" in target and "model_sha256" not in target:
         fmt = str(target["model_format"])
         if fmt == "torchscript":
@@ -143,7 +174,12 @@ def standing_limitations(target: dict[str, Any]) -> list[str]:
     if "model_format" in target and "preprocess_hash" not in target:
         out.append(
             "No preprocessing spec was declared for this model, so prov.recompute cannot be "
-            "performed for it.")
+            "performed for it, and scan-time inputs were scaled to [0,1] only — no "
+            "mean/std normalisation was applied, because guessing one would be a fact about "
+            "the model that nobody declared.")
+    # The POSITIVE case — a declared spec, applied at scan time — is not a limitation and is
+    # not asserted here. `target.preprocess_hash` is the report's statement that a spec was
+    # declared and used; the schema's description of that field says what its presence means.
     return out
 
 

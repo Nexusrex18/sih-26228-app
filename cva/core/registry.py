@@ -26,6 +26,8 @@ class Registrable(Protocol):
 
     id: ClassVar[str]
     version: ClassVar[str]
+    #: Set by the decorators, read by the orchestrator — see `KIND_MODEL` / `kind_of`.
+    kind: ClassVar[str]
     requires: ClassVar[frozenset[Any] | set[Any] | tuple[Any, ...]]
     optional: ClassVar[frozenset[Any] | set[Any] | tuple[Any, ...]]
     attack_classes: ClassVar[frozenset[str] | set[str] | tuple[str, ...]]
@@ -57,7 +59,16 @@ def _identity(cls: type[Registrable]) -> tuple[str, str]:
     return (cls.__module__, cls.__qualname__)
 
 
-def _claim(reg: dict[str, type[Registrable]], cls: _C) -> _C:
+#: What a plug-in IS, carried on the class itself. Before this, the orchestrator decided
+#: "model check" by registry POSITION in `build_plan` (`reg_index == 0`) and by registry
+#: MEMBERSHIP in the run loop (`check_id not in check_registry`) — two mechanisms, neither
+#: declared. Reordering the `registries` tuple silently misrouted every row, and an id present
+#: in both registries resolved one way in one place and the other way in the other.
+KIND_MODEL = "model"
+KIND_DATA = "data"
+
+
+def _claim(reg: dict[str, type[Registrable]], cls: _C, kind: str) -> _C:
     """The guard both decorators share: declared attack classes, then the id.
 
     `taxonomy.require()` is called HERE because §9.5 says an undeclared `attack_class` is a
@@ -78,15 +89,30 @@ def _claim(reg: dict[str, type[Registrable]], cls: _C) -> _C:
             f"{prior.__module__}.{prior.__qualname__}; {cls.__module__}.{cls.__qualname__} "
             f"would replace it silently and the coverage statement would keep claiming the "
             f"id while a different implementation ran. Give one of them a distinct id.")
+    cls.kind = kind
     reg[cls.id] = cls
     return cls
 
 
 def register(cls: _C) -> _C:
     """Register a ModelCheck — check(model, ctx)."""
-    return _claim(REGISTRY, cls)
+    return _claim(REGISTRY, cls, KIND_MODEL)
 
 
 def register_detector(cls: _C) -> _C:
     """Register a Detector — detect(dataset, embeddings, model, ctx)."""
-    return _claim(DETECTOR_REGISTRY, cls)
+    return _claim(DETECTOR_REGISTRY, cls, KIND_DATA)
+
+
+def kind_of(cls: Any, reg_index: int) -> str:
+    """What kind of plug-in `cls` is — read from the class, falling back to the registry it
+    was found in.
+
+    The fallback exists for classes that never went through a decorator: the zero-detector
+    gate and a good deal of the suite pass literal `({...}, {...})` tuples of stub classes,
+    and those are legitimately positional. Registered plug-ins carry the kind, so for them
+    the tuple's order stops being load-bearing.
+    """
+    kind = getattr(cls, "kind", None)
+    return kind if kind in (KIND_MODEL, KIND_DATA) else (
+        KIND_MODEL if reg_index == 0 else KIND_DATA)

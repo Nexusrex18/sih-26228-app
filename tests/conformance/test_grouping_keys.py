@@ -339,7 +339,8 @@ def test_resolve_grouping_declared_batch_beats_a_directory_but_not_when_unusable
 REQUIRED_ROW_KEYS = {"group_key", "group_value", "n_samples", "n_flagged", "posterior_mean",
                      "ci_low", "ci_high"}
 ALLOWED_ROW_KEYS = REQUIRED_ROW_KEYS | {"contributor_source", "excludes_cohort_rate",
-                                        "excludes_reference_rate", "disposition"}
+                                        "cohort_rate_used", "excludes_reference_rate",
+                                        "disposition"}
 
 
 def _rows_of(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:

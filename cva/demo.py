@@ -24,6 +24,15 @@ from cva.core.orchestrator import RunContext, scan
 from cva.loaders.models import load_model
 from cva.report.render_html import render
 
+UNSEALED_NOTE = (
+    "  NOTE: this demo output is NOT sealed. It calls scan() directly and writes no\n"
+    "  report.json, so no scan record binds it and nothing attests it was unaltered.\n"
+    "  Use `cva scan` for a sealed report.")
+"""Item 29. The demo writes no `report.json`, so there is no file digest for a scan record
+to bind and nothing is sealed. That is defensible for a demonstration — and this is the
+path most likely to be run in front of an evaluator, which is exactly why it may not be the
+one that quietly omits the tamper-evidence. Said out loud rather than left to be noticed."""
+
 
 def run(corpus: Path, out: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
@@ -66,3 +75,4 @@ def run(corpus: Path, out: Path) -> None:
 
     render(results, out / "demo.report.html", "CV Assurance — Module B — demo scenarios")
     print(f"\n  report: {out}/demo.report.html")
+    print(UNSEALED_NOTE)

@@ -27,7 +27,7 @@ from cva.core.capability import Availability, CapabilitySet, Resolution, budget_
 from cva.core.context import CheckContext
 from cva.core.ledger import scan_record
 from cva.core.profile import CALIBRATION, EMBED_IMG_PER_S, POLICIES, PROFILES, TIERS
-from cva.core.registry import DETECTOR_REGISTRY, REGISTRY
+from cva.core.registry import DETECTOR_REGISTRY, KIND_DATA, KIND_MODEL, REGISTRY, kind_of
 from cva.core.runcontext import RunContext
 from cva.core.scanid import (
     SELFTEST_EPOCH,
@@ -46,6 +46,11 @@ class PlanRow:
     check_id: str
     resolution: Resolution
     attack_classes: set[str]
+    #: `"model"` or `"data"`, decided ONCE in `build_plan` and read everywhere else — which
+    #: registry a row came from is not re-derived downstream. It drives dispatch in the run
+    #: loop and the target of the row's not-performed finding: a `data.*` check reported
+    #: against a model target named `"-"` is a statement about the wrong thing.
+    kind: str = KIND_MODEL
 
 
 @dataclass
@@ -63,6 +68,15 @@ class ScanResult:
     code_commit: str = "unknown"
     access_assumptions: str = ""
     ledger_seq: str | None = None
+    #: Why the scan record was NOT sealed, when it was not. `None` means either that it was
+    #: sealed or that sealing was never attempted — `ledger_seq` distinguishes those.
+    ledger_error: str | None = None
+    #: Why no embedding index was built, when none was. It reaches the coverage statement as
+    #: a standing limitation: three of Module A's nine detectors cannot produce a finding
+    #: without one, and until now that fact lived only in individual findings' `limitations`
+    #: — so a scan where they all returned `not_performed` did not say, anywhere a reader
+    #: looks first, that one missing artefact was the reason (item 20).
+    embedding_gap: str | None = None
     coverage: dict[str, Any] = field(default_factory=dict)
     # What the report needs and only the orchestrator knows (B5).
     created_at_utc: str = ""
@@ -221,11 +235,12 @@ def build_plan(caps: CapabilitySet, prof: dict[str, Any], profile_name: str,
         for cid, cls in sorted(reg.items()):
             inst: Any = cls()
             classes = set(inst.attack_classes)
+            kind = kind_of(cls, reg_index)
             if cid in disabled:
                 rows.append(PlanRow(cid, Resolution(
                     Availability.UNAVAILABLE,
                     f"disabled by policy '{profile_name}' — not asked to run, as distinct "
-                    f"from could not run", (), exclusion_reason="budget"), classes))
+                    f"from could not run", (), exclusion_reason="budget"), classes, kind))
             else:
                 res = caps.resolve(set(inst.requires), set(inst.optional))
                 # Capability BEFORE budget, deliberately. A check that is both
@@ -235,18 +250,18 @@ def build_plan(caps: CapabilitySet, prof: dict[str, Any], profile_name: str,
                 # that it could not have run at any tier. Budget exclusion is only
                 # reported for checks that would otherwise have been runnable.
                 if res.state is Availability.UNAVAILABLE:
-                    rows.append(PlanRow(cid, res, classes))
-                elif reg_index == 0 and not model_present:
+                    rows.append(PlanRow(cid, res, classes, kind))
+                elif kind == KIND_MODEL and not model_present:
                     rows.append(PlanRow(cid, Resolution(
                         Availability.UNAVAILABLE,
                         "no model was supplied to this scan, so a model check has nothing "
-                        "to inspect", (), exclusion_reason="capability"), classes))
+                        "to inspect", (), exclusion_reason="capability"), classes, kind))
                 elif (enabled is not None and cid not in enabled) or cid in except_checks:
                     rows.append(PlanRow(cid, budget_excluded(
                         prof.get("budget_tier", profile_name),
-                        cost_of.get(cid)), classes))
+                        cost_of.get(cid)), classes, kind))
                 else:
-                    rows.append(PlanRow(cid, res, classes))
+                    rows.append(PlanRow(cid, res, classes, kind))
     return sorted(rows, key=lambda r: r.check_id)
 
 
@@ -436,24 +451,34 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
     # scan with no data detectors still never loads a backbone.
     reference_embeddings: Any = None
     reference_embedding_gap: str | None = None
+    # The same index as an (M, d) matrix, which is what a check comparing the scanned data
+    # with a known-clean reference actually wants (`data.ood`). Kept beside the index rather
+    # than derived per check, so one extractor pass serves both.
+    reference_vectors: Any = None
 
     for row in ordered:
         if not row.resolution.runnable:
             findings.append(_plan_finding(row, scan_id, model_id, profile_name))
             continue
-        is_detector = row.check_id not in check_registry
-        if is_detector and row.check_id not in detector_registry:
+        # `row.kind`, decided once in `build_plan` — not `check_id not in check_registry`,
+        # which was a second, independent mechanism that disagreed with the first for any id
+        # present in both registries.
+        is_detector = row.kind == KIND_DATA
+        registry = detector_registry if is_detector else check_registry
+        if row.check_id not in registry:
             continue
-        inst = (detector_registry if is_detector else check_registry)[row.check_id]()
+        inst = registry[row.check_id]()
         if is_detector and not embeddings_built:
             embeddings, embedding_gap = build_embeddings(ctx, prof)
             if ctx.reference_dataset is not None:
                 reference_embeddings, reference_embedding_gap = build_embeddings(
                     replace(ctx, dataset=ctx.reference_dataset), prof)
+                reference_vectors = _index_matrix(reference_embeddings,
+                                                  ctx.reference_dataset)
             embeddings_built = True
         cctx = CheckContext(ctx.probes_x, ctx.probes_y, ctx.suspect_x, ctx.battery,
                             prof, scan_id, ctx.out_dir, ctx.seed, run_state=run_state,
-                            reference_embeddings=reference_embeddings)
+                            reference_embeddings=reference_vectors)
         t0 = time.time()
         findings.extend(_run_check(row, inst, is_detector, ctx.dataset, embeddings,
                                    embedding_gap, model, cctx, scan_id, model_id))
@@ -487,7 +512,8 @@ def scan(model: Any, ctx: RunContext, profile_name: str = "deep",
                         target=_target_of(model, ctx), contributor_risk=risk.contributor_risk,
                         permutation_test=risk.permutation_test, calibration=risk.calibration,
                         contributor_baseline=risk.contributor_baseline,
-                        contributor_baseline_unavailable=risk.contributor_baseline_unavailable)
+                        contributor_baseline_unavailable=risk.contributor_baseline_unavailable,
+                        embedding_gap=embedding_gap)
     # Sealing is NOT done here: the scan record binds the sha256 of report.json, which does
     # not exist yet. The caller writes the report, then calls `seal_report` (plan §7.9).
     return result
@@ -553,8 +579,12 @@ def _reference_flags(model: Any, ctx: RunContext, prof: dict[str, Any], plan: li
     ref = ctx.reference_dataset
     if not getattr(ref, "samples", None):
         return None, "the reference dataset has no samples"
+    # `r.kind`, not membership — the same single mechanism the run loop uses (item 16). The
+    # two passes must agree about which rows are data checks, or the reference flag count is
+    # computed over a different set of detectors than the cohort's and the baseline compares
+    # two things that were not treated alike.
     rows = [r for r in plan if r.resolution.runnable
-            and r.check_id not in check_registry and r.check_id in detector_registry]
+            and r.kind == KIND_DATA and r.check_id in detector_registry]
     if not rows:
         return None, ("no data.* check was runnable in this scan, so there was nothing to "
                       "run over the reference dataset")
@@ -577,6 +607,26 @@ def _reference_flags(model: Any, ctx: RunContext, prof: dict[str, Any], plan: li
             return None, f"{row.check_id} raised while scanning the reference dataset"
         found.extend(got)
     return reference_flag_counts(found, ref, prof, ctx.calibration), None
+
+
+def _index_matrix(index: Any, dataset: Any) -> Any:
+    """An EmbeddingIndex as the `(M, d)` matrix a reference comparison needs, or None.
+
+    The index is keyed by sample id and a check comparing two datasets wants the vectors,
+    not the lookup. Returning None on any failure is deliberate: the consumers already treat
+    a missing reference as `not_performed` and say so, which is a better outcome than an
+    ERROR finding that reads as a defect in the tool.
+    """
+    if index is None or dataset is None:
+        return None
+    ids = [s.sample_id for s in getattr(dataset, "samples", ()) or ()]
+    if not ids:
+        return None
+    try:
+        vectors = index.vectors(ids)
+    except Exception:
+        return None
+    return vectors if getattr(vectors, "size", 0) else None
 
 
 def build_embeddings(ctx: RunContext, prof: dict[str, Any]) -> tuple[Any, str | None]:
@@ -648,15 +698,29 @@ def append_scan_record(result: ScanResult, ctx: RunContext,
     rec = scan_record(result.scan_id, report_sha256, result.profile_hash,
                       result.code_commit, counts)
     try:
+        result.ledger_error = None
         return ctx.audit_ledger.append(rec)
-    except Exception:
+    except Exception as exc:
+        # A bare `except: return None` left the report saying the scan record was not sealed
+        # and unable to say why — for the one artefact whose whole purpose is tamper-evidence.
+        # This matters more once a real ledger is wired in: sealing failures are exactly what
+        # this swallowed. The traceback is not carried; a ledger error is an operational fact
+        # about this run, not evidence about the model.
+        result.ledger_error = f"{type(exc).__name__}: {exc}"
         return None
 
 
 def _plan_finding(row: PlanRow, scan_id: str, model_id: str, profile: str) -> Finding:
+    # The target comes from the registry the row came from. Hardcoding `("model", model_id)`
+    # reported every unavailable `data.*` row against a model — and on a dataset scan
+    # `model_id` is `"-"`, so the finding named nothing at all. The ERROR path 130 lines up
+    # already chose this way; the two now agree, and the detectors' own not-performed
+    # findings use the same `("dataset", "dataset")` pair.
+    is_detector = row.kind == KIND_DATA
     return Finding(
         detector_id=row.check_id, detector_version="-", scan_id=scan_id,
-        target_type="model", target_ref=model_id,
+        target_type="dataset" if is_detector else "model",
+        target_ref="dataset" if is_detector else model_id,
         severity=Severity.INFO, confidence=0.0,
         reason=f"Not performed: {row.resolution.reason}",
         attack_class=sorted(row.attack_classes)[0] if row.attack_classes else "unknown",
