@@ -1,6 +1,6 @@
 /* cvseal — the C core of the inference provenance seal (Module C, gate C9).
  *
- * Wire format: cva-seal/1 (the published spec: Plan/cva-seal-spec-v1.md in the notes repo, https://github.com/Suvrat1629/sih26228-notes). This library is a second, native
+ * Wire format: cva-seal/1 (the published spec: spec/cva-seal-spec-v1.md in this repository). This library is a second, native
  * implementation of the WRITER side (canonicalise, sign, chain, Merkle, checkpoint, rotate, append to the same
  * SQLite store the Python reference uses) plus a compact verifier of the chain. Deliberate narrowing, stated:
  * it enforces the JSON profile, the header, the cryptography and the analyst_event rules (an override without a

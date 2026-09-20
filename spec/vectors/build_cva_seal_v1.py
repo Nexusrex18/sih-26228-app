@@ -5,6 +5,14 @@ The output is a function of nothing but this file and the reference implementati
 every machine and Python version; `tests/provenance/test_vectors_frozen.py` regenerates it and compares it with
 the frozen file, and (where a second interpreter has the dependencies) runs the same generator there.
 
+WHAT THAT PROVES, AND WHAT IT DOES NOT. These vectors are generated FROM the reference implementation, so regenerating
+and comparing them proves DETERMINISM, not conformance to the specification: a divergence between the reference and
+`spec/cva-seal-spec-v1.md` would be frozen into the file as if it were correct, and `test_vectors_frozen` would still
+pass. Conformance to the wire format is evidenced separately, by a reader written from the spec text alone that
+reproduced every check in the file (see `docs/provenance/VERIFICATION-PROCEDURE.md` §2) — and by the independent
+verifier, which shares an author with the reference and so shows only that the spec is self-consistent. Do not read a
+green `test_vectors_frozen` as "the spec is right".
+
 Run from the repo root to (re)freeze:  .venv/bin/python spec/vectors/build_cva_seal_v1.py --write
 A change to the frozen file is a change to the wire format: it needs a decision entry, not a quiet regeneration.
 """

@@ -1,4 +1,4 @@
-"""An independent verifier for cva-seal/1, written from `cva-seal-spec-v1.md` ONLY (plan §11.9, gate C8).
+"""An independent verifier for cva-seal/1, written from `spec/cva-seal-spec-v1.md` ONLY (plan §11.9, gate C8).
 
 It imports nothing from the `cva` package: only the standard library and `cryptography` (for Ed25519 — the one
 primitive nobody should hand-roll). JSON parsing, canonicalisation, Merkle trees, the schema checks, the key state
