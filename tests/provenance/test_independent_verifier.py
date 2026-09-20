@@ -281,3 +281,17 @@ def test_a_tamper_after_the_anchored_prefix_does_not_hide_a_fork_inside_it_for_b
     ref = verify_ledger(data, trust_root=b.trust, anchors=[anchor])
     assert signature(ind) == ref_signature(ref)
     assert "ledger_fork" in ind.classes and "record_edit" in ind.classes
+
+
+def test_a_ledger_whose_only_finding_is_a_declared_gap_is_not_labelled_problems(tmp_path, capsys):
+    """A declared hole is evidence, not tampering (final-review nit): the frozen ledger must not read as 'PROBLEMS'."""
+    (tmp_path / "x.jsonl").write_bytes(EXPORT)
+    (tmp_path / "t.json").write_text(json.dumps(TRUST))
+    (tmp_path / "a.json").write_text(json.dumps(VEC["anchor"]))
+    sys.argv = ["iv", str(tmp_path / "x.jsonl"), "--trust", str(tmp_path / "t.json"), "--anchor", str(tmp_path / "a.json")]
+    assert iv.main() == 2                                                     # exit code unchanged: low > info
+    out = capsys.readouterr().out
+    assert "INTACT, WITH DECLARED GAPS" in out and "PROBLEMS" not in out
+    from cva.provenance.seal.cli import main
+    assert main(["verify", "--records", str(tmp_path / "x.jsonl"), "--trust", str(tmp_path / "t.json"), "--anchor", str(tmp_path / "a.json")]) == 2
+    assert "INTACT, WITH DECLARED GAPS" in capsys.readouterr().out

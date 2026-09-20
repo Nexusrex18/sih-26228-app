@@ -184,7 +184,9 @@ def main() -> int:
         OUT.write_bytes(data)
         print(f"wrote {OUT} ({len(data)} bytes, sha256 {hashlib.sha256(data).hexdigest()})")
     else:
-        print("frozen file matches" if OUT.read_bytes() == data else "DIFFERS from the frozen file")
+        same = OUT.read_bytes() == data
+        print("frozen file matches" if same else "DIFFERS from the frozen file")
+        return 0 if same else 1          # a CI matrix cell per Python version turns this into cross-version byte identity
     return 0
 
 

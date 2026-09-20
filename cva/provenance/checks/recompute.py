@@ -101,8 +101,17 @@ class Recompute:
                   input_resolver: Callable[[Mapping[str, Any]], bytes | None],
                   scope: str = "flagged+sample", sample: int = 50, seed: int | None = None,
                   payloads: Mapping[str, bytes] | None = None, weights_digest: str | None = None,
-                  eps_conf: float = DEFAULT_EPS_CONF, eps_px: float = DEFAULT_EPS_PX, eps_iou: float = DEFAULT_EPS_IOU,
+                  eps_conf: float | None = None, eps_px: float | None = None, eps_iou: float | None = None,
+                  profile: Mapping[str, Any] | None = None,
                   on_nonfinite: str = "seal_marker", scan_id: str = "", produced_by: str = "") -> list[Finding]:
+        """`eps_*` decide what counts as float jitter (the line between `boundary_flip`/review and `output_mismatch`/
+        quarantine). Precedence: explicit argument > the scan profile's `detector_options["prov.recompute"]` (keys
+        `boundary_eps_conf`, `boundary_eps_px`, `boundary_eps_iou`) > the plan §7.9 defaults. The values used are recorded
+        in the summary evidence, so a report always shows what was applied."""
+        opts = ((profile or {}).get("detector_options") or {}).get(DETECTOR_ID, {})
+        eps_conf = _pick(eps_conf, opts.get("boundary_eps_conf"), DEFAULT_EPS_CONF)
+        eps_px = _pick(eps_px, opts.get("boundary_eps_px"), DEFAULT_EPS_PX)
+        eps_iou = _pick(eps_iou, opts.get("boundary_eps_iou"), DEFAULT_EPS_IOU)
         if scope not in ("flagged+sample", "all"):
             raise ValueError("scope must be 'flagged+sample' or 'all'")
         report = verify_ledger(_fresh(source, payloads), trust_root=trust_root)
@@ -131,7 +140,8 @@ class Recompute:
                 elif res is not None:
                     out.append(self._finding(res, rec, scan_id, produced_by, pipeline))
             out.append(self._summary(len(records), todo, priority, scope, sample, seed, tally, pipeline, digest,
-                                     scan_id, produced_by))
+                                     scan_id, produced_by, {"boundary_eps_conf": eps_conf, "boundary_eps_px": eps_px,
+                                                              "boundary_eps_iou": eps_iou}))
             return out
         finally:
             src.close()
@@ -248,7 +258,8 @@ class Recompute:
                        nature=Nature(nat), availability=Availability.OK)
 
     def _summary(self, eligible: int, todo: list[int], priority: list[int], scope: str, sample: int, seed: int,
-                 tally: _Tally, pipe: Pipeline, digest: str, scan_id: str, produced_by: str) -> Finding:
+                 tally: _Tally, pipe: Pipeline, digest: str, scan_id: str, produced_by: str,
+                 eps: Mapping[str, float]) -> Finding:
         c = tally.counts
         skipped = sum(tally.unavailable.values())
         done = c["verified_exact"] + c["verified_decision"] + c["boundary_flip"] + c["output_mismatch"]
@@ -258,13 +269,13 @@ class Recompute:
                  "boundary_flip": c["boundary_flip"], "output_mismatch": c["output_mismatch"],
                  "input_swap": c["input_swap"], "model_swap": c["model_swap"], "could_not_be_rederived": skipped,
                  "why_not": dict(tally.unavailable), "examples": tally.examples,
-                 "recompute_runtime": pipe.runtime, "loaded_weights_digest": digest}
+                 "recompute_runtime": pipe.runtime, "loaded_weights_digest": digest, "boundary_eps": dict(eps)}
         frac = (len(todo) / eligible) if eligible else 0.0
         stats["sampled_fraction"] = round(frac, 6)
         reason = (f"Recompute: {len(todo)} of {eligible} sealed inference(s) selected ({frac:.1%}; {len(priority)} already "
                   f"flagged, the rest a random sample, seed {seed}"
                   + ("" if scope == "all" or len(todo) >= eligible else
-                     " — a SAMPLE, so the unselected records are unassessed, not cleared") + "); {c['verified_exact']} re-derived bit-exact, "
+                     " — a SAMPLE, so the unselected records are unassessed, not cleared") + f"); {c['verified_exact']} re-derived bit-exact, "
                   f"{c['verified_decision']} re-derived at decision level, {c['boundary_flip']} boundary flip(s), "
                   f"{c['output_mismatch']} mismatch(es), {skipped} could not be re-derived"
                   + (f" ({'; '.join(f'{n}× {w}' for w, n in tally.unavailable.items())})" if skipped else "") + ".")
@@ -282,6 +293,13 @@ class Recompute:
                        disposition=Disposition.ACCEPT, disposition_rule="prov.summary — information only",
                        nature=Nature.INDETERMINATE,
                        availability=Availability.DEGRADED if degraded else Availability.OK)
+
+
+def _pick(explicit: float | None, from_profile: Any, default: float) -> float:
+    v = explicit if explicit is not None else (from_profile if from_profile is not None else default)
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v < 1:
+        raise ValueError(f"a boundary epsilon must be a number in (0, 1), got {v!r}")
+    return float(v)
 
 
 class _Missing(Exception):

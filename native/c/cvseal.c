@@ -373,6 +373,7 @@ static int verify_tagged(const char *tag, const char *msg, size_t n, const uint8
 
 /* ================================ one record ================================ */
 static int ts_ok(const char *s) {
+    /* shape AND a real calendar time (spec 4.1): 2026-13-45T99:99:99.000000Z has the right shape and is not a time */
     if (strlen(s) != 27) return 0;
     for (int i = 0; i < 27; i++) {
         char c = s[i];
@@ -383,7 +384,42 @@ static int ts_ok(const char *s) {
         else if (i == 26) { if (c != 'Z') return 0; }
         else if (c < '0' || c > '9') return 0;
     }
+    #define D2(k) ((s[k] - '0') * 10 + (s[(k) + 1] - '0'))
+    int year = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + D2(2), mon = D2(5), day = D2(8), hh = D2(11), mm = D2(14), ss = D2(17);
+    static const int dim[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (year < 1 || mon < 1 || mon > 12 || hh > 23 || mm > 59 || ss > 59) return 0;
+    int leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    return day >= 1 && day <= dim[mon - 1] + (mon == 2 && leap);
+}
+
+/* the header rule (spec 4.1): exactly the header fields, the type's sections and the signature — with the right shapes */
+static int is_hex_n(const char *s, size_t n) {
+    if (!s || strlen(s) != n) return 0;
+    for (; *s; s++) if (!((*s >= '0' && *s <= '9') || (*s >= 'a' && *s <= 'f'))) return 0;
     return 1;
+}
+static int check_header(const jv *o, const char *type) {
+    static const struct { const char *type, *sections[5]; } T[] = {
+        {"genesis", {"deployment_manifest"}}, {"model_registration", {"model", "config"}},
+        {"inference", {"input", "model", "config", "output"}}, {"checkpoint", {"checkpoint"}},
+        {"anchor_event", {"anchor"}}, {"key_rotation", {"rotation"}}, {"degraded_marker", {"gap"}},
+        {"scan_record", {"scan"}}, {"analyst_event", {"analyst"}}};
+    static const char *const hdr[] = {"v", "type", "seq", "prev_record_hash", "key_id", "created_at_utc", "nonce", "signature", NULL};
+    const char *const *secs = NULL;
+    for (size_t t = 0; t < sizeof T / sizeof T[0]; t++) if (!strcmp(T[t].type, type)) secs = T[t].sections;
+    if (!secs) return fail("unknown record type \"%s\"", type);
+    size_t nsec = 0;
+    while (nsec < 5 && secs[nsec]) nsec++;
+    if (o->n != 8 + nsec) return fail("a record has exactly the header fields, its type's sections and the signature");
+    for (const char *const *h = hdr; *h; h++) if (!jget(o, *h)) return fail("missing header field \"%s\"", *h);
+    for (size_t k = 0; k < nsec; k++) if (!jget(o, secs[k])) return fail("missing section \"%s\"", secs[k]);
+    if (!jgets(o, "v") || strcmp(jgets(o, "v"), CVS_VERSION)) return fail("v must be \"%s\"", CVS_VERSION);
+    if (!is_hex_n(jgets(o, "prev_record_hash"), 64) || !is_hex_n(jgets(o, "key_id"), 64) || !is_hex_n(jgets(o, "nonce"), 32) ||
+        !is_hex_n(jgets(o, "signature"), 128)) return fail("a header hash, key id, nonce or signature is not lowercase hex of the right length");
+    if (!jgets(o, "created_at_utc") || !ts_ok(jgets(o, "created_at_utc"))) return fail("created_at_utc is not a real calendar time");
+    jv *sq_ = jget(o, "seq");
+    if (!sq_ || sq_->t != J_INT || sq_->i < 0) return fail("seq must be a non-negative integer");
+    return CVS_OK;
 }
 int cvs_seal_record(const char *type, uint64_t seq, const char *prev_hash, const uint8_t pub[32], const uint8_t sk[64],
                     const char *created_at_utc, const uint8_t nonce[16], const char *body_json, char **stored,
@@ -592,6 +628,7 @@ int cvs_ledger_init_at(const char *path, const uint8_t seed[32], const char *man
     jfree(m);
     /* genesis prev_record_hash = SHA-256(0x03 || canon(manifest)) */
     uint8_t *tmp = malloc(mn + 1);
+    if (!tmp) { free(mc); sqlite3_close(l->db); free(l); return fail("out of memory"); }
     tmp[0] = 3; memcpy(tmp + 1, mc, mn);
     uint8_t mh[32]; char mhx[65];
     cvs_sha256(tmp, mn + 1, mh); hex(mh, 32, mhx);
@@ -845,6 +882,7 @@ static int verify_records(char **recs, size_t *lens, size_t n, const uint8_t gpu
         uint8_t sig[64];
         if (!type || !kid || !prv || !sh || !sq_ || sq_->t != J_INT || unhex(sh, sig, 64)) { r = fail("record %zu: malformed header", i); jfree(o); break; }
         if (sq_->i != (int64_t)i) { r = fail("record %zu: seq %lld is not its position", i, (long long)sq_->i); jfree(o); break; }
+        if (check_header(o, type)) { char m[512]; snprintf(m, sizeof m, "%s", g_err); r = fail("record %zu: %s", i, m); jfree(o); break; }
         if ((i == 0) != !strcmp(type, "genesis")) { r = fail("record %zu: genesis must be first and only first", i); jfree(o); break; }
         if (strcmp(kid, active)) { r = fail("record %zu: signed by key %.16s…, not the active key %.16s…", i, kid, active); jfree(o); break; }
         char *cu = NULL; size_t cn = 0;
@@ -857,7 +895,9 @@ static int verify_records(char **recs, size_t *lens, size_t n, const uint8_t gpu
             jv *man = jget(o, "deployment_manifest");
             char *mc = NULL; size_t mn = 0;
             if (!man || canon_of(man, &mc, &mn)) { r = fail("genesis has no manifest"); jfree(o); break; }
-            uint8_t *t = malloc(mn + 1); t[0] = 3; memcpy(t + 1, mc, mn);
+            uint8_t *t = malloc(mn + 1);
+            if (!t) return fail("out of memory");
+            t[0] = 3; memcpy(t + 1, mc, mn);
             uint8_t mh[32]; char mx[65];
             cvs_sha256(t, mn + 1, mh); hex(mh, 32, mx);
             free(t); free(mc);
@@ -918,10 +958,18 @@ int cvs_verify_file(const char *path, const char *genesis_pubkey_hex, const char
         sqlite3_stmt *s;
         sqlite3_prepare_v2(db, "SELECT rec FROM records ORDER BY rowid", -1, &s, NULL);
         while (sqlite3_step(s) == SQLITE_ROW) {
-            if (n == cap) { cap = cap ? cap * 2 : 64; recs = realloc(recs, cap * sizeof *recs); lens = realloc(lens, cap * sizeof *lens); }
+            if (n == cap) {
+                cap = cap ? cap * 2 : 64;
+                char **nr = realloc(recs, cap * sizeof *recs);
+                size_t *nl = realloc(lens, cap * sizeof *lens);
+                if (!nr || !nl) { r = fail("out of memory"); break; }
+                recs = nr; lens = nl;
+            }
             lens[n] = (size_t)sqlite3_column_bytes(s, 0);
             recs[n] = malloc(lens[n] + 1);
+            if (!recs[n]) { r = fail("out of memory"); break; }
             memcpy(recs[n], sqlite3_column_text(s, 0), lens[n]);
+            recs[n][lens[n]] = 0;
             n++;
         }
         sqlite3_finalize(s);
@@ -938,10 +986,18 @@ int cvs_verify_file(const char *path, const char *genesis_pubkey_hex, const char
         for (size_t i = 0; !r && i < all.n; i++) {
             if (all.p[i] != '\n') continue;
             if (i == start) { r = fail("blank line at position %zu", n); break; }
-            if (n == cap) { cap = cap ? cap * 2 : 64; recs = realloc(recs, cap * sizeof *recs); lens = realloc(lens, cap * sizeof *lens); }
+            if (n == cap) {
+                cap = cap ? cap * 2 : 64;
+                char **nr = realloc(recs, cap * sizeof *recs);
+                size_t *nl = realloc(lens, cap * sizeof *lens);
+                if (!nr || !nl) { r = fail("out of memory"); break; }
+                recs = nr; lens = nl;
+            }
             lens[n] = i - start;
             recs[n] = malloc(lens[n] + 1);
+            if (!recs[n]) { r = fail("out of memory"); break; }
             memcpy(recs[n], all.p + start, lens[n]);
+            recs[n][lens[n]] = 0;
             n++;
             start = i + 1;
         }
@@ -981,9 +1037,14 @@ int cvs_roots_stream(FILE *in, FILE *out) {
     if (!all) return CVS_ERR;
     size_t cap = 64, count = 0, start = 0;
     uint8_t (*leaves)[32] = malloc(cap * 32);
+    if (!leaves) { free(all); return fail("out of memory"); }
     for (size_t i = 0; i < n; i++) {
         if (all[i] != '\n') continue;
-        if (count == cap) { cap *= 2; leaves = realloc(leaves, cap * 32); }
+        if (count == cap) {
+            uint8_t (*nl)[32] = realloc(leaves, cap * 2 * 32);
+            if (!nl) { free(leaves); free(all); return fail("out of memory"); }
+            leaves = nl; cap *= 2;
+        }
         cvs_leaf_hash((const uint8_t *)all + start, i - start, leaves[count++]);
         start = i + 1;
         uint8_t root[32]; char rx[65];
@@ -1030,7 +1091,9 @@ int cvs_reseal_stream(const char *seeds_file, FILE *in, FILE *out) {
             jv *man = jget(o, "deployment_manifest");
             char *mc = NULL; size_t mn;
             if (!man || canon_of(man, &mc, &mn)) return fail("genesis has no manifest");
-            uint8_t *t = malloc(mn + 1); t[0] = 3; memcpy(t + 1, mc, mn);
+            uint8_t *t = malloc(mn + 1);
+            if (!t) return fail("out of memory");
+            t[0] = 3; memcpy(t + 1, mc, mn);
             uint8_t mh[32];
             cvs_sha256(t, mn + 1, mh); hex(mh, 32, pv);
             free(t); free(mc);

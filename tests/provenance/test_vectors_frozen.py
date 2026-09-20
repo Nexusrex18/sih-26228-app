@@ -57,8 +57,11 @@ def test_the_frozen_ledger_verifies_with_the_reference_verifier():
     assert rep.classes() == ["degraded_gap"] and rep.anchors_verified == 1 and rep.rotations == 1
 
 
-@pytest.mark.skipif(not os.environ.get("CVA_SEAL_OTHER_PYTHONS"), reason="set CVA_SEAL_OTHER_PYTHONS to run this on other interpreters")
 def test_the_vectors_are_byte_identical_on_other_python_versions():
+    if not os.environ.get("CVA_SEAL_OTHER_PYTHONS"):
+        if os.environ.get("CVA_SEAL_REQUIRE_NATIVE"):
+            pytest.fail("CVA_SEAL_REQUIRE_NATIVE is set but CVA_SEAL_OTHER_PYTHONS is not: cross-version identity was not exercised")
+        pytest.skip("set CVA_SEAL_OTHER_PYTHONS to run this on other interpreters (the CI matrix runs the generator per version instead)")
     for py in os.environ["CVA_SEAL_OTHER_PYTHONS"].split(":"):
         out = subprocess.run([py, str(ROOT / "spec/vectors/build_cva_seal_v1.py"), "--stdout"], capture_output=True, check=True)
         assert out.stdout == FROZEN.read_bytes(), f"{py} produced different bytes"

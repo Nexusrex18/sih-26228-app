@@ -392,3 +392,52 @@ def test_a_sample_says_how_much_it_covered_so_it_cannot_read_as_a_clean_bill_of_
     assert stats(out)["sampled_fraction"] == 0.1 and "10.0%" in s.reason and "unassessed, not cleared" in s.reason
     full = summary(rc(run, p, scope="all"))
     assert "100.0%" in full.reason and "unassessed, not cleared" not in full.reason
+
+
+# --- final review: P1 (the rendered summary) and P4 (profile-settable boundary epsilon) ----------------------------------------------
+
+def test_the_summary_renders_its_counts_instead_of_printing_its_own_template(tmp_path):
+    p = toy_pipeline()
+    run = seal_run(tmp_path, p, make_frames(12, seed=21))
+    for out in (rc(run, p, scope="all"), rc(run, p, sample=3, seed=5)):
+        reason = summary(out).reason
+        assert "{" not in reason and "}" not in reason, reason               # no un-interpolated template text, anywhere
+        done = stats(out)["verified_exact"]
+        assert f"{done} re-derived bit-exact" in reason
+        assert done > 0
+
+
+def test_every_finding_reason_is_fully_rendered(tmp_path):
+    good, bad = toy_pipeline(), toy_pipeline(lie="drop_top")
+    run = seal_run(tmp_path, bad, make_frames(6, seed=22))
+    for f in rc(run, good, scope="all", model=ToyModel(digest="9" * 64)):
+        assert "{" not in f.reason and "}" not in f.reason, f.reason
+
+
+def _edge_run(tmp_path):
+    edge = det(2, 0.25 + 5e-4, (40.0, 40.0, 60.0, 60.0))                  # 5e-4 above the 0.25 threshold
+    below = det(2, 0.25 - 5e-4, (40.0, 40.0, 60.0, 60.0))
+    sealed = fixed_pipeline("gpu", [edge], [edge])
+    again = fixed_pipeline("cpu", [below], [])
+    return seal_run(tmp_path, sealed, make_frames(1)), again
+
+
+def test_the_boundary_epsilon_comes_from_the_profile_and_the_explicit_argument_wins(tmp_path):
+    run, again = _edge_run(tmp_path)
+    default = rc(run, again, scope="all")
+    assert [f.attack_class for f in problems(default)] == ["output_mismatch"]              # 5e-4 > the 1e-4 default
+    prof = {"detector_options": {"prov.recompute": {"boundary_eps_conf": 2e-3}}}
+    widened = rc(run, again, scope="all", profile=prof)
+    assert [f.attack_class for f in problems(widened)] == ["boundary_flip"]
+    assert stats(widened)["boundary_eps"] == {"boundary_eps_conf": 2e-3, "boundary_eps_px": 1e-3, "boundary_eps_iou": 1e-4}
+    tightened = rc(run, again, scope="all", profile=prof, eps_conf=1e-4)                   # explicit beats the profile
+    assert [f.attack_class for f in problems(tightened)] == ["output_mismatch"]
+    assert stats(default)["boundary_eps"]["boundary_eps_conf"] == 1e-4                    # what was applied is always recorded
+
+
+@pytest.mark.parametrize("bad", [0, -1e-4, 1.0, 5, "x", True])
+def test_a_nonsense_epsilon_is_refused_not_applied(tmp_path, bad):
+    p = toy_pipeline()
+    run = seal_run(tmp_path, p, make_frames(2))
+    with pytest.raises(ValueError, match="epsilon"):
+        rc(run, p, profile={"detector_options": {"prov.recompute": {"boundary_eps_conf": bad}}})

@@ -354,10 +354,6 @@ def mth(leaves: list[bytes]) -> bytes:
     return sha(b"\x01" + mth(leaves[:k]) + mth(leaves[k:]))
 
 
-def _fold_root(leaves: list[bytes]) -> bytes:
-    return mth(leaves)
-
-
 def verify_inclusion(leaf_h: bytes, index: int, size: int, path: list[bytes], root: bytes) -> bool:
     """RFC 9162 §2.1.3.2."""
     if index >= size or index < 0:
@@ -865,7 +861,8 @@ def main() -> int:
                  anchors=[json.load(open(x)) for x in a.anchor], payloads=pl)
     for f in rep.above_info:
         print(f"[{f.severity}] {f.cls} @ {f.seq}" + (f"  (+{f.folded} folded)" if f.folded else ""))
-    print(f"{'CLEAN' if not rep.above_info else 'PROBLEMS'}: {rep.records} records, {rep.anchors_verified} anchor(s) verified, "
+    declared_only = bool(rep.above_info) and all(f.cls == "degraded_gap" for f in rep.above_info)
+    print(f"{'CLEAN' if not rep.above_info else ('INTACT, WITH DECLARED GAPS' if declared_only else 'PROBLEMS')}: {rep.records} records, {rep.anchors_verified} anchor(s) verified, "
           f"{rep.unwitnessed} in the unwitnessed window" + ("" if rep.anchors_verified else
                                                           " (NO anchor: tail truncation and a key-holder rewrite are not excluded)"))
     return 0 if not rep.above_info else 2

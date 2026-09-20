@@ -8,7 +8,7 @@ fn main() {
     let obj = out.join("cvseal.o");
     let cc = env::var("CC").unwrap_or_else(|_| "cc".into());
     let st = Command::new(&cc)
-        .args(["-std=c11", "-O2", "-fPIC", "-c"])
+        .args(["-std=c11", "-O2", "-Wall", "-Wextra", "-fPIC", "-c"])
         .arg(c_dir.join("cvseal.c"))
         .arg("-o")
         .arg(&obj)

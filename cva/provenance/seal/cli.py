@@ -105,7 +105,9 @@ def _verify(a: argparse.Namespace) -> int:
     if a.json:
         _dump(summary)
     else:
-        print(f"{'CLEAN' if r.clean else 'PROBLEMS FOUND'}: {r.records_checked} record(s), {r.checkpoints_verified} "
+        only_declared = not r.clean and all(f.attack_class == "degraded_gap" for f in r.findings if f.severity != "info")
+        label = "CLEAN" if r.clean else ("INTACT, WITH DECLARED GAPS" if only_declared else "PROBLEMS FOUND")
+        print(f"{label}: {r.records_checked} record(s), {r.checkpoints_verified} "
               f"checkpoint(s) recomputed, {r.rotations} key rotation(s), {r.anchors_verified} anchor(s) verified"
               + (f", {r.anchors_invalid} unusable" if r.anchors_invalid else ""))
         if r.anchors_verified:

@@ -7,6 +7,7 @@ Skipped when there is no C toolchain / libsodium / sqlite3 headers (the build is
 from __future__ import annotations
 
 import json
+import os
 import random
 import shutil
 import sqlite3
@@ -28,14 +29,22 @@ NATIVE = ROOT / "native" / "c"
 VEC = json.loads((ROOT / "spec/vectors/cva_seal_v1.json").read_text())
 
 
+def _unavailable(why: str) -> None:
+    """A missing toolchain SKIPS locally but FAILS where it is required (CI sets CVA_SEAL_REQUIRE_NATIVE=1): the C9 gate
+    must not be green merely because nothing ran."""
+    if os.environ.get("CVA_SEAL_REQUIRE_NATIVE"):
+        pytest.fail(f"CVA_SEAL_REQUIRE_NATIVE is set but {why}")
+    pytest.skip(why)
+
+
 @pytest.fixture(scope="session")
 def cvseal() -> Path:
     if not (shutil.which("cc") and shutil.which("make")):
-        pytest.skip("no C toolchain")
+        _unavailable("no C toolchain")
     probe = subprocess.run(["cc", "-x", "c", "-", "-o", "/dev/null", "-lsodium", "-lsqlite3"],
                            input=b"#include <sodium.h>\n#include <sqlite3.h>\nint main(void){return 0;}", capture_output=True)
     if probe.returncode:
-        pytest.skip("libsodium / sqlite3 development files are not installed")
+        _unavailable("libsodium / sqlite3 development files are not installed")
     r = subprocess.run(["make", "-C", str(NATIVE)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     return NATIVE / "cvseal"
@@ -374,7 +383,7 @@ def test_c_payloads_are_content_addressed_in_the_same_store(cvseal, tmp_path):
 
 def test_the_cpp_binding_builds_runs_and_its_ledger_verifies_in_python(cvseal, tmp_path):
     if not shutil.which("g++"):
-        pytest.skip("no C++ compiler")
+        _unavailable("no C++ compiler")
     exe = tmp_path / "test_cvseal"
     r = subprocess.run(["g++", "-std=c++17", "-Wall", "-Wextra", "-Werror", str(ROOT / "native/cpp/test_cvseal.cpp"), str(NATIVE / "libcvseal.a"),
                         "-lsodium", "-lsqlite3", "-o", str(exe)], capture_output=True, text=True)
@@ -388,7 +397,7 @@ def test_the_cpp_binding_builds_runs_and_its_ledger_verifies_in_python(cvseal, t
 
 def test_the_rust_binding_builds_tests_and_its_ledger_verifies_in_python(cvseal, tmp_path):
     if not shutil.which("cargo"):
-        pytest.skip("no Rust toolchain")
+        _unavailable("no Rust toolchain")
     env = {**__import__("os").environ, "CVSEAL_OUT": str(tmp_path), "CVSEAL_PUBKEY": provider(SEED_A).public_key.hex(),
            "CARGO_TARGET_DIR": str(tmp_path / "target")}
     r = subprocess.run(["cargo", "test", "--offline", "--quiet"], cwd=ROOT / "native/rust/cvseal", env=env, capture_output=True, text=True)
@@ -425,3 +434,54 @@ def test_a_malformed_seed_is_refused_not_forgiven(cvseal, bad):
 def test_a_missing_seed_file_or_variable_is_refused(cvseal, tmp_path):
     assert run(cvseal, "keyid", "@" + str(tmp_path / "nope"), check=False).returncode != 0
     assert run(cvseal, "keyid", "env:CVSEAL_DOES_NOT_EXIST", check=False).returncode != 0
+
+
+# --- final review N2 / N3: the C core enforces the same header and calendar rules as Python ----------------------------------------
+
+TIMESTAMPS = ["2026-09-19T02:00:00.000007Z", "2024-02-29T23:59:59.999999Z", "2000-02-29T00:00:00.000000Z", "0001-01-01T00:00:00.000000Z",
+              "2026-13-45T99:99:99.000000Z", "2026-13-01T00:00:00.000000Z", "2026-00-10T00:00:00.000000Z", "2026-02-29T00:00:00.000000Z",
+              "1900-02-29T00:00:00.000000Z", "2026-04-31T00:00:00.000000Z", "2026-09-19T24:00:00.000000Z", "2026-09-19T00:60:00.000000Z",
+              "2026-09-19T00:00:60.000000Z", "2026-09-00T00:00:00.000000Z", "0000-01-01T00:00:00.000000Z", "2026-09-19 02:00:00.000000Z",
+              "2026-09-19T02:00:00Z", "2026-09-19T02:00:00.00000Z", "2026-9-19T02:00:00.000000Z"]
+
+
+def _py_ts_ok(ts: str) -> bool:
+    from cva.provenance.seal.records import _ts
+    try:
+        _ts(ts, "$")
+        return True
+    except InvalidRecordError:
+        return False
+
+
+from cva.provenance.seal.errors import InvalidRecord as InvalidRecordError  # noqa: E402
+
+
+@pytest.mark.parametrize("ts", TIMESTAMPS)
+def test_c_and_python_agree_on_which_timestamps_are_real_calendar_times(cvseal, tmp_path, ts):
+    man = json.dumps({"device_id": "t", "unit": "u", "profile_hash": "0" * 64, "checkpoint_every": 1000})
+    r = run(cvseal, "init", tmp_path / f"{abs(hash(ts))}.db", seed_hex(SEED_A), man, ts, "00" * 16, check=False)
+    assert (r.returncode == 0) == _py_ts_ok(ts), (ts, r.stderr)
+
+
+def _mutate_header(field_edit):
+    """The frozen export with record 3 edited (its signature is now wrong too — the header rules must fire FIRST)."""
+    r = json.loads(VEC["records"][3])
+    field_edit(r)
+    line = json.dumps(r, sort_keys=True, separators=(",", ":"))
+    return "".join(x + "\n" for x in [*VEC["records"][:3], line, *VEC["records"][4:]]).encode()
+
+
+@pytest.mark.parametrize("name,edit,message", [
+    ("version", lambda r: r.__setitem__("v", "cva-seal/2"), b"v must be"),
+    ("short nonce", lambda r: r.__setitem__("nonce", r["nonce"][:-2]), b"lowercase hex"),
+    ("upper nonce", lambda r: r.__setitem__("nonce", r["nonce"].upper() if r["nonce"] != r["nonce"].upper() else "A" * 32), b"lowercase hex"),
+    ("bad calendar", lambda r: r.__setitem__("created_at_utc", "2026-13-45T99:99:99.000000Z"), b"real calendar time"),
+    ("extra member", lambda r: r.__setitem__("extra", 1), b"exactly the header fields"),
+    ("missing section", lambda r: r.pop("input"), b"exactly the header fields"),
+    ("negative seq", lambda r: r.__setitem__("seq", -1), b"is not its position"),
+])
+def test_the_c_verifier_enforces_the_header_rules_it_claims_and_names_the_rule(cvseal, tmp_path, name, edit, message):
+    (tmp_path / "h.jsonl").write_bytes(_mutate_header(edit))
+    r = run(cvseal, "verify", tmp_path / "h.jsonl", VEC["keys"]["ledger"]["public_key"], check=False)
+    assert r.returncode != 0 and message in r.stderr and b"record 3" in r.stderr, (name, r.stderr)
