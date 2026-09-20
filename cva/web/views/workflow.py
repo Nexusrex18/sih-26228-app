@@ -39,6 +39,8 @@ REFUSAL_TITLES = {
     "invalid_reason_code": "That reason does not apply to this finding",
     "not_quarantined": "That asset is not under quarantine",
     "read_only": "The workflow is read-only",
+    "role_not_permitted": "Your role does not allow this",
+    "export_failed": "The export did not complete",
 }
 
 

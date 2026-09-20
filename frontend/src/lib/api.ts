@@ -147,6 +147,12 @@ export const api = {
       `/audit${scanId ? `?scan_id=${scanId}` : ""}`,
     ),
 
+  exportLedger: () =>
+    request<{ ok: true; path: string; detail: string }>("/audit/export", {
+      method: "POST",
+      body: "{}",
+    }),
+
   act: (
     scanId: string,
     findingId: string,

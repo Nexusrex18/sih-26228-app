@@ -403,6 +403,37 @@ def reverify() -> Any:
     return ledger_health()
 
 
+@bp.post("/audit/export")
+@require_login
+def export_ledger() -> Any:
+    """Write the strict JSONL export, verifiable elsewhere with the trust root alone.
+
+    The role check is here rather than on `require_role` because that decorator renders the
+    HTML error page; an API caller gets the same refusal shape as every other refusal, with
+    `nothing_changed` said out loud. Exporting reads the ledger and signs nothing.
+    """
+    from ..audit.verify_bridge import export
+
+    account = current_account()
+    assert account is not None
+    if account.role not in ("approver", "admin"):
+        return _refusal(
+            "role_not_permitted",
+            f"Exporting the ledger needs the approver or admin role; your account holds "
+            f"'{account.role}'.",
+        ), 403
+
+    cfg = services.config()
+    if cfg.ledger_path is None:
+        return _refusal("ledger_unavailable",
+                        "No ledger_path is configured, so there is nothing to export."), 503
+    out = cfg.ledger_path.with_suffix(".export.jsonl")
+    ok, detail = export(cfg.ledger_path, out, timeout_s=cfg.subprocess_timeout_s)
+    if not ok:
+        return _refusal("export_failed", detail), 502
+    return jsonify({"ok": True, "path": str(out), "detail": detail})
+
+
 # --- shaping --------------------------------------------------------------------------
 
 def _refusal(code: str, detail: str) -> Any:
