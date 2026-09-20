@@ -98,7 +98,7 @@ class ModelCheck(_PlugIn, Protocol):
 class DriftTest(_PlugIn, Protocol):
     """Module D — distribution shift (PS §2.2.4)."""
 
-    def assess(self, reference: Dataset, incoming: Dataset,
+    def assess(self, reference: Dataset | None, incoming: Dataset,
                reference_dist: Any | None, incoming_dist: Any | None) -> list[Finding]: ...
 
 

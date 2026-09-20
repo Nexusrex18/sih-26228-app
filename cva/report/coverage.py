@@ -43,7 +43,7 @@ def render_markdown(result) -> str:
     from .report_json import coverage_of, verdict_line
     cov = coverage_of(result)
     out = [f"# Coverage statement — scan {result.scan_id}", "",
-           f"Model `{result.model_id}` ({result.model_fmt}). "
+           f"{getattr(result, 'asset_kind', 'model').title()} `{result.model_id}` ({result.model_fmt}). "
            f"Verdict: **{verdict_line(result)}**.",
            "", "## Attack classes assessed in this scan", ""]
     for ac, checks in cov["assessed"].items():
@@ -56,6 +56,10 @@ def render_markdown(result) -> str:
         out += [f"- `{ac}`" for ac in cov["never_covered"]]
     out += ["", "## Operational reports (not counted as coverage)", ""]
     out += [f"- `{ac}`" for ac in cov["operational_reports"]] or ["- none"]
+    if getattr(result, 'asset_kind', None) == 'dataset':
+        out += ["", "## Assessment limitations", ""]
+        for f in result.findings:
+            out += [f"- `{f.detector_id}`: {lim}" for lim in f.limitations]
     out += ["", "## Standing limitations", ""]
     # Same source as report.json's coverage.standing_limitations, so the two never disagree
     # (S3 sandbox and model-format limitations included). Lazy: report_json imports this module.

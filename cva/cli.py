@@ -8,6 +8,7 @@ import json
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -15,9 +16,6 @@ from urllib.parse import urlsplit
 
 import numpy as np
 
-import cva.detectors.data.registry  # noqa: F401 — Module A's detectors; without this, no data.* check is planned
-import cva.detectors.model.registry  # noqa: F401 — registration happens at the entrypoint, never in core
-from attacklab.arch import ARCH_REGISTRY
 from cva.core import determinism
 from cva.core.capability import Capability
 from cva.core.egress import egress_guard, run_canaries
@@ -31,14 +29,31 @@ from cva.core.orchestrator import (
     validate_profile_ids,
 )
 from cva.core.scanid import EvidenceStore, scan_out_dir
-from cva.loaders.models import load_model
-from cva.loaders.models.http_model import HTTPModel, require_loopback
-from cva.loaders.models.subprocess_model import SubprocessModel
 from cva.loaders.preprocess import attach_preprocess, preprocess_store_name
 from cva.report.coverage import write as write_coverage
 from cva.report.render_html import render
 from cva.report.report_json import verdict_line
 from cva.report.report_json import write as write_report_json
+
+
+def _register_analysis():
+    import cva.detectors.data.registry  # noqa: F401
+    import cva.detectors.model.registry  # noqa: F401
+
+
+def _arch_registry():
+    from attacklab.arch import ARCH_REGISTRY
+    return ARCH_REGISTRY
+
+
+def load_model(*args, **kwargs):
+    from cva.loaders.models import load_model as loader
+    return loader(*args, **kwargs)
+
+
+def require_loopback(url):
+    from cva.loaders.models.http_model import require_loopback as validate
+    return validate(url)
 
 
 def load_probes(corpus: Path, n: int = 400):
@@ -56,7 +71,7 @@ def build_battery(corpus: Path, exclude: str, k: int = 2) -> ModelBattery:
              if not m["backdoored"] and m["id"] != exclude
              and not m.get("modified") and not m.get("benign_variant")
              and not m.get("frozen") and "pt" in m][:k]
-    models = [load_model(corpus / p["pt"], ARCH_REGISTRY, p["id"]) for p in picks]
+    models = [load_model(corpus / p["pt"], _arch_registry(), p["id"]) for p in picks]
     return ModelBattery(models=models)
 
 
@@ -138,8 +153,9 @@ def manifest_from(path: Path) -> Manifest:
 def run_scan(model_path: Path, corpus: Path, out_dir: Path, profile: str = "deep",
              reference: Path | None = None, battery: bool = True, n_probes: int = 400,
              preprocess: Path | None = None):
+    _register_analysis()
     out_dir.mkdir(parents=True, exist_ok=True)
-    model = load_model(model_path, ARCH_REGISTRY, preprocess=preprocess)
+    model = load_model(model_path, _arch_registry(), preprocess=preprocess)
     x, y = load_probes(corpus, n_probes)
     bat = build_battery(corpus, model.model_id) if battery else ModelBattery()
     if reference and Path(reference).exists():
@@ -328,6 +344,8 @@ def model_arg_error(a) -> str | None:
 def build_model(a):
     """The model handle for `a`: a file loader, a Tier-2 adapter, or None (dataset-only).
     `model_arg_error` has already vetted the arguments."""
+    from cva.loaders.models.http_model import HTTPModel
+    from cva.loaders.models.subprocess_model import SubprocessModel
     cmd, url = _opt(a, "model_cmd"), _opt(a, "model_url")
     pre = _opt(a, "preprocess")
     if cmd:
@@ -341,7 +359,7 @@ def build_model(a):
                          parse_shape(a.input_shape), a.num_classes)
         attach_preprocess(http, None, pre)
         return http
-    return load_model(Path(a.model), ARCH_REGISTRY, preprocess=pre) if a.model else None
+    return load_model(Path(a.model), _arch_registry(), preprocess=pre) if a.model else None
 
 
 def execute_scan(a, command: str | None = None) -> tuple[ScanResult, Path | None]:
@@ -355,6 +373,7 @@ def execute_scan(a, command: str | None = None) -> tuple[ScanResult, Path | None
     err = model_arg_error(a)
     if err:
         raise ValueError(err)
+    _register_analysis()
     prof = resolve_profile(a.profile, a.budget_tier)     # unknown profile: a load error, now
     # Here and not in scan(): this is where every registry is imported. The zero-detector gate
     # calls scan() with empty registries and a real profile, and that must keep working.
@@ -476,8 +495,15 @@ def cmd_selftest(a) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if args and args[0] == 'drift':
+        from cva.detectors.drift.command import main as drift_main
+        drift_main(args[1:])
+        return 0
+    _register_analysis()
     ap = argparse.ArgumentParser(prog="cva")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("drift", help="compare declared reference and incoming imagery", add_help=False)
 
     s = sub.add_parser("scan")
     # Positional AND flag share a destination. A `nargs="?"` positional with a real default

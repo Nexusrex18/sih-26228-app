@@ -94,3 +94,101 @@ Three surfaces, deliberately separate:
   split). A battery of siblings makes every reference comparison unrealistically easy.
 - A backdoor present since original training, with no manifest and no reference battery,
   remains the largest blind spot. `model.intrinsic_probes` narrows it; it does not close it.
+
+## Module D — drift detection (first implementation increment)
+
+Compare a declared reference image directory with an incoming image directory, offline:
+
+```bash
+python -m cva.cli drift --reference data/reference --incoming data/incoming --out artifacts/drift
+```
+
+This entrypoint requires NumPy, SciPy and Pillow, but does not import Torch or ONNX.
+It writes `drift.report.json`, `drift.report.html` and `drift.coverage.md` under
+`<out>/<scan_id>/`, preserving previous runs. Evidence is shared under `<out>/evidence/`. Missing reference,
+small batches, absent embeddings and unimplemented checks are explicit coverage gaps.
+Material drift requests review; no attack intent or field-calibrated confidence is claimed.
+
+Reproducible smoke demo (use a new/empty output directory):
+
+```bash
+python -m attacklab.photometric_shift --out /tmp/cva-drift-demo
+python -m cva.cli drift --reference /tmp/cva-drift-demo/reference --incoming /tmp/cva-drift-demo/incoming
+python -m pytest tests/detectors/drift tests/boundaries
+```
+
+Optional `--reference-embeddings` and `--incoming-embeddings` accept NPZ files containing
+`embeddings` (N x D numeric), `sample_ids` (sorted relative image paths), `extractor_id`
+and `extractor_version` (scalar strings). Both caches must use the same independent
+extractor/version. Pickle loading is disabled. The scanner does not generate or download
+embeddings; photometric checks still run without them.
+
+Full sequencing, corrections to the notes, statistical assumptions and remaining MVP
+work: [Module D implementation plan](docs/MODULE_D_IMPLEMENTATION_PLAN.md).
+
+Module D uses the frozen `Dataset` / `DriftTest` interfaces. It accepts canonical datasets
+through the Python API; the CLI's image-folder adapter enforces S3/S6/S7 controls before
+full image decoding. Identical or overlapping image content is not a valid independent
+comparison and returns UNAVAILABLE. `--selftest` pins scan identity/time for repeatability
+(use different output roots); normal scans reserve a fresh ID within the output root.
+
+### Drift verdicts, profiles and coverage
+
+`ACCEPT` means no assessed finding requested review; it does not mean every check ran.
+The CLI prints assessed/total checks and coverage gaps beside the verdict. Unavailable
+checks remain in the report; a crashed check forces `REVIEW`. Without a reference,
+`drift.interpretable_axes` describes incoming image properties only, with no PSI/KS claim.
+Semantic/manipulation checks, MMD and energy distance are explicitly deferred.
+
+`profiles/drift.json` is the default schema-validated drift profile. Use
+`--profile path/to/profile.json` to supply a profile and CLI flags to override its settings.
+Its `psi` block holds `n_bins`, `alpha`, `min_samples`, `min_reference_n`, `min_incoming_n`,
+`min_ks_effect`, `permutations`, `seed`, and `axis_thresholds` (per-axis minimum KS effects).
+`--min-samples` overrides both batch-size floors. The default minimum of 20 images is not
+an assurance of detection power: subtle shifts need larger independent samples.
+The ordered disposition policy is also profile data; D6 routes uncalibrated drift on
+severity with a review ceiling. Confidence stays explicitly uncalibrated, not an invented score.
+
+Each scan saves `effective.profile.json` and hashes the entire effective profile, including
+policy. Run the report's reproduction command from its scan directory, with the package
+installed/importable; the relative profile path refers to this saved file.
+
+### Embedding cache contract
+
+Embedding extraction is **out of scope** for this increment. Generate caches with an
+independent trusted extractor outside the contributed model, then pass both NPZ paths.
+The scanner checks alignment, finite values, identity/version equality and dimensions;
+identity metadata is self-declared and does **not** prove extractor provenance.
+
+```python
+np.savez("incoming.npz",
+         embeddings=matrix,                 # finite numeric shape (N, D)
+         sample_ids=np.array(relative_ids),  # strings; exact Dataset order
+         extractor_id=np.array("dinov2-vits14"),
+         extractor_version=np.array("your-pinned-artifact-version"))
+```
+
+For image folders, sample IDs are sorted relative paths, including subdirectories.
+Both caches must contain all four keys; object/pickle arrays are prohibited.
+The private `EmbeddingRows` adapter retains raw observations with validated `n`; the shared
+`EmbeddingDistribution` stores moments and cannot support KS. Module A summaries are
+therefore not interchangeable with these caches. No model is downloaded by this command.
+
+### Controlled shifts on an existing clean corpus
+
+```bash
+python -m attacklab.photometric_shift --source data/clean --out /tmp/drift-injected \
+  --fraction 0.6 --brightness 0.12 --contrast 1.1 --noise 0.01 --jpeg-quality 40 --seed 7
+python -m cva.cli drift --reference /tmp/drift-injected/reference \
+  --incoming /tmp/drift-injected/incoming --out artifacts/drift
+```
+
+The injector splits the clean corpus into disjoint reference/incoming source images first,
+then transforms the requested fraction of incoming images. Unselected files are copied
+unchanged. `manifest.json` records transformations, source/output hashes and brightness
+before/after encoding; clipping and compression can change the realized magnitude.
+Use a genuinely representative clean corpus; the synthetic smoke demo is only a pipeline test.
+
+Module E must preserve `DriftScanResult.asset_kind`, `relevant_capabilities` and
+`drift_summary`, which the shared writers consume for dataset reports. Backend review is
+still required for shared CLI, protocol annotation, profile-schema and report changes.

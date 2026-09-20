@@ -105,6 +105,11 @@
       "description": "Backend does not implement PSI, but the profile must carry what the CORRECTED null needs: PSI ~ (1/N + 1/M)·chi2(B-1). The scale factor is the entire content of the published result (Post-Merge R1), and both sample sizes appear in the critical value.",
       "properties": {
         "n_bins": { "type": "integer", "minimum": 2 },
+        "min_samples": {"type": "integer", "minimum": 2},
+        "min_ks_effect": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "permutations": {"type": "integer", "minimum": 19},
+        "seed": {"type": "integer", "minimum": 0},
+        "axis_thresholds": {"type": "object", "additionalProperties": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}, "description": "Per-axis minimum KS effects; omitted axes use min_ks_effect. Not absolute quality or attack thresholds."},
         "min_reference_n": { "type": "integer", "minimum": 1 },
         "min_incoming_n": { "type": "integer", "minimum": 1 },
         "alpha": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 }
