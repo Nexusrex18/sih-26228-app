@@ -355,8 +355,18 @@ def test_item5_apply_preprocess_uses_the_float_spec_not_the_quantised_bytes(tmp_
     mean = np.asarray(spec["mean"], dtype=np.float32).reshape(3, 1, 1)
     std = np.asarray(spec["std"], dtype=np.float32).reshape(3, 1, 1)
     assert np.allclose(out, (a - mean) / std)
-    # The quantised form would put everything around -2.4e6; anything on that scale is the bug.
-    assert np.abs(out).max() < 100.0, out.max()
+    # A second, independent handle on the same bug — the channel whose mean IS the input
+    # value must centre exactly on zero. Under the quantised spec it lands at
+    # (0.5 - 500000) / 200000 = -2.5.
+    #
+    # NOT a magnitude check. The obvious one — "the quantised form would put everything
+    # around -2.4e6, so assert the output is small" — is WRONG and silently vacuous: `std`
+    # is quantised by the same 1e6 factor as `mean`, so the factor cancels in the ratio and
+    # the buggy output lands at 2.5, comfortably inside any sane bound. An earlier version
+    # of this test asserted `abs(out).max() < 100.0` and passed under the bug it was written
+    # to catch. Caught in review; kept as a comment because the cancellation is the whole
+    # reason this defect is hard to see.
+    assert out[0].max() == pytest.approx(0.0, abs=1e-5), out[0].max()
 
 
 def test_item5_no_declared_spec_keeps_the_0_1_scaling_and_says_so():
