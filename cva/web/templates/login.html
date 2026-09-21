@@ -1,46 +1,80 @@
 {% extends "base.html" %}
+{# The front door. Full-bleed, outside the app shell: someone signing in has no rail to use
+   yet. Everything here is server-rendered under `script-src 'self'; style-src 'self'`, so
+   the pulse and the entrance are CSS keyframes and there is no inline style anywhere. #}
 {% block title %}Sign in{% endblock %}
-{% block heading %}CV Integrity Assurance{% endblock %}
-{% block subheading %}Analyst governance{% endblock %}
-{% block content_class %} narrow{% endblock %}
+{% block body_class %}gate-body{% endblock %}
 
-{% block content %}
-<section class="block">
-  <div class="panel">
-    <h2>Sign in</h2>
-    <p class="note">Local accounts. There is no identity provider on an air gap, and that is
-      a declared limitation of this system rather than an omission.</p>
+{% block shell %}
+<div class="gate">
+  <div class="gate-aurora" aria-hidden="true"></div>
+
+  <header class="gate-mark">
+    <span class="gate-logo" aria-hidden="true">CVA</span>
+    <span class="gate-name">CV Integrity Assurance</span>
+    <span class="gate-status"><span class="gate-dot" aria-hidden="true"></span>offline &middot; local accounts</span>
+  </header>
+
+  <main class="gate-card" id="main" aria-labelledby="signin-title">
+    <h1 id="signin-title" class="gate-card-title">Sign in</h1>
+    <p class="gate-sub">Use the account your administrator issued you.</p>
 
     {% if error %}
-    <div class="banner banner-alarm" role="alert">
-      <span class="banner-glyph" aria-hidden="true">⛔</span>
-      <div class="banner-body"><strong>Not signed in</strong><span>{{ error }}</span></div>
+    <div class="gate-error" role="alert">
+      <svg class="gate-error-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 1.5 15 14H1L8 1.5Z"/><path d="M8 6v3.5M8 11.6v.4"/>
+      </svg>
+      <div><strong>Not signed in</strong><span>{{ error }}</span></div>
     </div>
     {% endif %}
 
-    <form method="post" action="{{ url_for('auth.login_view') }}" data-no-guard>
+    <form method="post" action="{{ url_for('auth.login_view') }}" class="gate-form" data-no-guard>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="next" value="{{ next }}">
-      <div class="field">
+      <div class="gate-field">
         <label for="actor_id">Account</label>
         <input type="text" id="actor_id" name="actor_id" autocomplete="username"
+               autocapitalize="none" autocorrect="off" spellcheck="false"
                required autofocus pattern="[A-Za-z0-9._:\-]{1,64}"
-               placeholder="a.sharma">
-        <p class="field-hint">Letters, digits and <code>. _ : -</code> only. The ledger
-          records this id verbatim, so it has to be one a record can hold.</p>
+               value="{{ actor or '' }}" placeholder="e.g. Tan.00"
+               aria-describedby="actor-hint">
+        <p class="gate-hint" id="actor-hint">Case-sensitive. The ledger records it exactly as typed.</p>
       </div>
-      <div class="field">
+      <div class="gate-field">
         <label for="password">Password</label>
         <input type="password" id="password" name="password"
                autocomplete="current-password" required>
       </div>
-      <button type="submit" class="btn btn-primary">Sign in</button>
+      <button type="submit" class="gate-submit">Sign in</button>
     </form>
-  </div>
-</section>
 
-<section class="block">
-  <p class="tiny">Repeated failures lock the account and the address it came from, for
-    increasing periods. Every lockout is written to this service's log.</p>
-</section>
+    <p class="gate-lockout">Repeated failures lock the account and the address it came from,
+      for longer each time.</p>
+  </main>
+
+  <section class="gate-brief" aria-labelledby="brief-title">
+    <p class="gate-thesis">Every decision here is signed.</p>
+    <p class="gate-lede">CVA checks datasets and models for deliberate poisoning before they are
+      accepted. What you decide is written to a tamper-evident ledger, ordered by sequence
+      number, never by the clock.</p>
+
+    <figure class="gate-pulse" aria-hidden="true">
+      <svg viewBox="0 0 320 44" preserveAspectRatio="none">
+        <path class="gate-pulse-base" d="M0 22H320"/>
+        <path class="gate-pulse-trace"
+              d="M0 22H96l8-2 6 2 8-15 9 30 7-19 6 4h84l7-3 6 3h89"/>
+      </svg>
+      <figcaption>ledger &middot; append-only</figcaption>
+    </figure>
+
+    <h2 id="brief-title" class="gate-roles-title">Who signs in here</h2>
+    <dl class="gate-roles">
+      <div><dt>Analyst</dt><dd>Proposes a decision, with a written justification.</dd></div>
+      <div><dt>Approver</dt><dd>Confirms any change that lowers risk, and never their own.</dd></div>
+    </dl>
+    <p class="gate-issued"><strong>No account?</strong> Accounts are issued by your
+      administrator. There is no self sign-up: with no identity provider on an air gap, an
+      account anyone could create would make every signature in the ledger meaningless.</p>
+  </section>
+</div>
 {% endblock %}

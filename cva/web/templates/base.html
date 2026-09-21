@@ -13,8 +13,9 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 <link rel="icon" href="{{ url_for('static', filename='mark.svg') }}" type="image/svg+xml">
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
 <a class="skiplink" href="#main">Skip to content</a>
+{% block shell %}
 <div class="shell">
 
   <nav class="rail" aria-label="Sections">
@@ -60,6 +61,7 @@
     </main>
   </div>
 </div>
+{% endblock %}
 
 {% with messages = get_flashed_messages(with_categories=true) %}
   {% if messages %}

@@ -24,7 +24,7 @@ def login_view() -> Any:
     if current_account() is not None:
         return redirect(nxt)
     if request.method == "GET":
-        return render_template("login.html", next=nxt, error=None)
+        return render_template("login.html", next=nxt, error=None, actor="")
 
     store: AccountStore = current_app.extensions["cva_accounts"]
     actor = (request.form.get("actor_id") or "").strip()
@@ -35,7 +35,8 @@ def login_view() -> Any:
         remaining = store.locked_for(actor, request.remote_addr or "")
         detail = (f"Too many failed attempts. Try again in {int(remaining)} seconds."
                   if remaining > 0 else str(e))
-        return render_template("login.html", next=nxt, error=detail), 401
+        # The account name survives a failure (autoescaped); the password never does.
+        return render_template("login.html", next=nxt, error=detail, actor=actor), 401
     login(account)
     return redirect(nxt)
 
