@@ -5,7 +5,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
+{# `same-origin`, matching the header — never `no-referrer`. A meta tag overrides the
+   header, and under `no-referrer` Firefox sends `Origin: null` on the login POST, so S7's
+   origin check refused every sign-in. Cross-origin requests still get no Referer. #}
+<meta name="referrer" content="same-origin">
 <title>{% block title %}CVA{% endblock %} &middot; CV Integrity Assurance</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 <link rel="icon" href="{{ url_for('static', filename='mark.svg') }}" type="image/svg+xml">

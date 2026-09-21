@@ -87,6 +87,20 @@ def test_a_login_post_succeeds_end_to_end(client):
     assert client.get("/").status_code == 200
 
 
+def test_no_page_overrides_the_referrer_policy_back_to_no_referrer(client):
+    """Regression, found in Firefox: `base.html` carried `<meta name="referrer"
+    content="no-referrer">`. A meta tag OVERRIDES the header, and under `no-referrer`
+    Firefox sends `Origin: null` on a same-origin form POST — so S7's origin check refused
+    every sign-in. The header was fixed; the meta tag was not, and the test above could not
+    see it because it sets `Origin` by hand. This checks what the BROWSER is told."""
+    import re
+
+    for url in ("/login", "/login?next=/app/"):
+        html = client.get(url).get_data(as_text=True)
+        metas = re.findall(r'<meta\s+name="referrer"\s+content="([^"]+)"', html, re.I)
+        assert all(m == "same-origin" for m in metas), f"{url}: meta referrer {metas}"
+
+
 # --- S7: the token ------------------------------------------------------------------------
 
 def test_a_post_without_a_csrf_token_is_refused(signed_in, scan_id, app):

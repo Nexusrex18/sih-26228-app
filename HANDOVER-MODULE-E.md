@@ -26,7 +26,15 @@ on this machine.
 ```bash
 .venv/bin/python -m pytest tests/ledgerd tests/boundaries tests/report tests/docs -q
 .venv/bin/python -m pytest tests/web tests/security -q
+.venv/bin/python -m pytest tests/e2e -q        # the whole flow, real processes (~30 s)
 ```
+
+`tests/e2e/` is the integration suite. It starts `cva-ledgerd` and `cva-web` as separate
+processes, set up the way SETUP.md says, and drives them over HTTP with a client that
+derives `Origin`/`Referer` from each page's real referrer policy, as a browser does. It
+covers sign-in, all 8 pages with their scripts, the two-person decision, the audit trail,
+verification, export plus an independent `cva-seal verify`, and a real scan sealed through
+the socket while the dashboard is running. It needs `frontend/out` built.
 
 ---
 

@@ -2,7 +2,11 @@
 __pycache__/
 *.pyc
 artifacts/
-reports/
+# Anchored. Unanchored, `reports/` also matched the source package cva/web/reports/ (the
+# report loader, the index and the seal check), which was then never committed: every
+# clone failed to import cva.web. tests/boundaries/test_no_source_is_gitignored.py fails
+# if any source file is ignored again.
+/reports/
 .cache/
 .scratch/
 .pytest_cache/

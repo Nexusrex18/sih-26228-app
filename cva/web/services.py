@@ -111,7 +111,10 @@ def config() -> WebConfig:
 
 
 def index() -> ReportIndex:
-    return current_app.extensions["cva_index"]
+    """The index, refreshed if a report changed on disk since the last look (throttled)."""
+    idx: ReportIndex = current_app.extensions["cva_index"]
+    idx.refresh_if_stale()
+    return idx
 
 
 def client() -> LedgerdClient:

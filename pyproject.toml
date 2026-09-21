@@ -73,6 +73,7 @@ pythonpath = ["."]
 markers = [
   "slow: exercises a real optimisation loop or corpus — excluded from the fast gate",
   "corpus: needs artifacts/corpus, which `python -m attacklab.build` generates (Mode A)",
+  "e2e: starts the real cva-ledgerd and cva-web processes and drives them over HTTP",
 ]
 
 [tool.ruff]
