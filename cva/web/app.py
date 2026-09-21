@@ -44,6 +44,12 @@ def create_app(config: WebConfig | None = None, **overrides: Any) -> Flask:
     app.extensions["cva_verify"] = VerifyCache()
     app.extensions["cva_rate"] = security.RateLimiter(cfg.rate_limit_per_minute)
 
+    # Browsers ask for /favicon.ico on every page that declares no icon. Without this
+    # route each load logged a 404 — noise that buries a real error in the console.
+    @app.get("/favicon.ico")
+    def _favicon() -> Any:
+        return app.send_static_file("mark.svg")
+
     _register_hooks(app)
     _register_blueprints(app)
     _register_errors(app)

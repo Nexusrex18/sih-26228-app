@@ -68,12 +68,24 @@ class ReportIndex:
         self.path = Path(path)
         self.reports_dir = Path(reports_dir)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = self._connect()
-        # waitress serves on several threads that share this one connection. Writes are
-        # serialised here; a refresh that races another would otherwise interleave two
-        # DELETE/INSERT sequences for the same scan.
+        # One connection PER THREAD (see AccountStore for the failure a shared one caused
+        # under waitress). The first is opened here, validates the schema version and
+        # rebuilds a corrupt file; each serving thread then opens its own.
+        self._local = threading.local()
+        self._local.conn = self._connect()
+        # Refreshes are serialised: two racing ones would interleave DELETE/INSERT
+        # sequences for the same scan, even on separate connections.
         self._lock = threading.Lock()
         self._refreshed_at = 0.0
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.path, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+            self._local.conn = conn
+        return conn
 
     def refresh_if_stale(self) -> int:
         """Pick up scans that finished after the dashboard started.

@@ -11,6 +11,7 @@ import hmac
 import os
 import secrets
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,10 @@ SCRYPT_P = 1
 SCRYPT_MAXMEM = 2 ** 28
 SCRYPT_DKLEN = 64
 SALT_BYTES = 16
+#: OWASP's minimum length for a password protected by a slow hash. scrypt at N = 2^17 is
+#: what makes a short password survive an offline attack on accounts.db; the lockout (S8)
+#: is what makes it survive an online one.
+MIN_PASSWORD_CHARS = 8
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -49,6 +54,11 @@ CREATE TABLE IF NOT EXISTS secrets (k TEXT PRIMARY KEY, v BLOB NOT NULL);
 
 class AccountError(Exception):
     pass
+
+
+def _check_password(password: str) -> None:
+    if len(password) < MIN_PASSWORD_CHARS:
+        raise AccountError(f"passwords must be at least {MIN_PASSWORD_CHARS} characters")
 
 
 @dataclass(frozen=True)
@@ -92,13 +102,36 @@ def validate_role(role: str) -> str:
 
 
 class AccountStore:
+    """One SQLite connection PER THREAD.
+
+    waitress serves on several threads, and every authenticated request — including each
+    of the dozen script chunks a page loads in parallel — reads the account row to check
+    the session epoch. These threads used to share a single connection with
+    `check_same_thread=False` and no lock, so concurrent queries interleaved on it and
+    returned each other's rows: `tuple index out of range`, a `None` session epoch,
+    `InterfaceError`. The browser saw random 500s on script chunks and, when a garbled row
+    read as "no such account", redirects to /login — blank pages and "Application error".
+    Found by the real-browser test; a sequential client can never produce it.
+    """
+
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path, timeout=5.0, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(SCHEMA)
-        self._conn.commit()
+        self._local = threading.local()
+        conn = self._open()
+        conn.executescript(SCHEMA)
+        conn.commit()
+
+    def _open(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        self._local.conn = conn
+        return conn
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        return conn if conn is not None else self._open()
 
     # -- the session-signing secret -------------------------------------------------------
     def secret_key(self) -> bytes:
@@ -116,8 +149,7 @@ class AccountStore:
     def create(self, actor_id: str, password: str, role: str) -> Account:
         actor_id = validate_actor_id(actor_id)
         role = validate_role(role)
-        if len(password) < 12:
-            raise AccountError("passwords must be at least 12 characters")
+        _check_password(password)
         salt = os.urandom(SALT_BYTES)
         try:
             self._conn.execute(
@@ -166,8 +198,7 @@ class AccountStore:
         self._conn.commit()
 
     def set_password(self, actor_id: str, password: str) -> None:
-        if len(password) < 12:
-            raise AccountError("passwords must be at least 12 characters")
+        _check_password(password)
         salt = os.urandom(SALT_BYTES)
         self._conn.execute(
             "UPDATE accounts SET salt=?, hash=?, session_epoch=session_epoch+1 "

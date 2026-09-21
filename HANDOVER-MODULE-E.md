@@ -15,7 +15,7 @@ npm --prefix frontend run build        # -> frontend/out/
 .venv/bin/python scripts/dev_dashboard.py --fresh
 ```
 
-Then open <http://127.0.0.1:8713/app/> and sign in as `a.sharma` / `demo-password-1234`.
+Then open <http://127.0.0.1:8713/app/> and sign in as `Tan.00` / `12345678`.
 `b.rao` is the **approver** (same password). You need both accounts to exercise four-eyes.
 The server-rendered fallback is at <http://127.0.0.1:8713/>. If port 8713 is taken (a stale
 dev server), pass `--port 8714 --out .scratch/dev8714`.

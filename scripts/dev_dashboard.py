@@ -6,7 +6,8 @@ in a scratch directory that can be deleted.
 
     python scripts/dev_dashboard.py --out .scratch/dev
 
-Then open http://127.0.0.1:8713/app/ and sign in as `a.sharma` / `demo-password-1234`.
+Then open http://127.0.0.1:8713/app/ and sign in as `Tan.00` / `12345678`.
+`b.rao` (same password) is the approver: lowering a disposition needs a second person.
 """
 from __future__ import annotations
 
@@ -19,9 +20,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-DEMO_PASSWORD = "demo-password-1234"
+DEMO_PASSWORD = "12345678"
 ACCOUNTS = [
-    ("a.sharma", "analyst"),
+    ("Tan.00", "analyst"),
     ("b.rao", "approver"),
     ("v.iyer", "viewer"),
     ("root.admin", "admin"),
@@ -138,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  dashboard  http://127.0.0.1:{a.port}/app/"
           + ("" if spa.is_dir() else "   [NOT BUILT — run `npm --prefix frontend run build`]"))
     print(f"  fallback   http://127.0.0.1:{a.port}/       (server-rendered)")
-    print(f"  sign in    a.sharma / {DEMO_PASSWORD}   (b.rao is the approver)")
+    print(f"  sign in    Tan.00 / {DEMO_PASSWORD}   (b.rao is the approver)")
     print()
 
     from waitress import serve as wserve

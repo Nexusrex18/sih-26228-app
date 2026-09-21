@@ -115,7 +115,7 @@ python -m cva.web.accounts list
 
 Each `create` asks for the password twice on the terminal. For scripted setup, pipe one
 line to `--password-stdin`. **There is no password argument**, because argv is visible to
-every user through `ps`. Passwords are at least 12 characters.
+every user through `ps`. Passwords are at least 8 characters.
 
 In the image, prefix the commands with
 `docker run --rm -it --user 10002:10000 -v cva-index:/var/lib/cva/index cva:latest accounts`.
