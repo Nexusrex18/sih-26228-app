@@ -12,6 +12,7 @@ this runs.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -81,6 +82,23 @@ def _executable() -> list[str]:
     return [sys.executable, "-m", "cva.provenance.seal.cli"]
 
 
+def _env() -> dict[str, str]:
+    """The child's environment, with THIS `cva` package importable whatever the cwd.
+
+    The `-m` fallback resolves `cva` from `sys.path`, which for a child process starts at its
+    working directory. Run from anywhere but the repo root (a systemd unit, a container
+    entrypoint, a test runner started one directory up) and the verifier failed with "No
+    module named 'cva'" — the dashboard then reported verification UNAVAILABLE for a reason
+    that had nothing to do with the ledger. The directory is derived from this file, never
+    from the request, so the argv stays fixed.
+    """
+    root = str(Path(__file__).resolve().parents[3])
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = root if not existing else os.pathsep.join((root, existing))
+    return env
+
+
 def _unavailable(detail: str) -> VerifyState:
     return VerifyState(state="UNAVAILABLE", detail=detail, checked_at=time.time())
 
@@ -108,7 +126,7 @@ def verify(ledger_path: Path | None, trust_root: Path | None, *,
             "--trust-root", str(trust_root), "--json"]
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s,
-                              shell=False, check=False)
+                              shell=False, check=False, env=_env())
     except subprocess.TimeoutExpired:
         return _unavailable(f"cva-seal verify did not finish within {timeout_s} s")
     except OSError as e:
@@ -152,7 +170,7 @@ def export(ledger_path: Path, out_path: Path, *, timeout_s: int = 300) -> tuple[
             "--out", str(Path(out_path))]
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s,
-                              shell=False, check=False)
+                              shell=False, check=False, env=_env())
     except (subprocess.TimeoutExpired, OSError) as e:
         return False, str(e)
     return proc.returncode == 0, (proc.stdout or proc.stderr).strip()[:1000]

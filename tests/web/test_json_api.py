@@ -126,6 +126,20 @@ def test_export_writes_a_file_an_approver_can_verify_elsewhere(client, config):
     assert out.is_file() and out.stat().st_size > 0
 
 
+def test_the_verifier_runs_whatever_the_working_directory(config, tmp_path, monkeypatch):
+    """Regression. The `python -m cva.provenance.seal.cli` fallback resolved `cva` from the
+    child's cwd, so a dashboard started anywhere but the repo root reported verification
+    UNAVAILABLE ("No module named 'cva'") for a reason unrelated to the ledger."""
+    from cva.web.audit import verify_bridge
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(verify_bridge.shutil, "which", lambda _name: None)  # force -m
+    ok, detail = verify_bridge.export(config.ledger_path, tmp_path / "out.jsonl")
+    assert ok, detail
+    state = verify_bridge.verify(config.ledger_path, config.trust_root)
+    assert state.state == "OK", state.detail
+
+
 def test_export_without_a_csrf_token_is_refused(client):
     sign_in(client, actor="b.rao")
     resp = client.post("/api/audit/export", json={},

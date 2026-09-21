@@ -101,10 +101,22 @@ def sniff(data: bytes) -> tuple[str, bool]:
 
 
 def apply_headers(headers: Any, *, authenticated: bool = True, spa: bool = False) -> None:
+    """The after-request hook's half of the header set.
+
+    It does NOT overwrite a `Content-Security-Policy` a view already set. `/evidence/`
+    serves a document it does not trust and sets `EVIDENCE_CSP` (`sandbox; default-src
+    'none'`) deliberately; the app-wide policy is strictly weaker for that case — it keeps
+    the response same-origin and allows `'self'` — so blanket-applying it here silently
+    un-sandboxed every SVG the route was written to contain. Everything else in the set is
+    a floor and is applied unconditionally.
+    """
+    view_csp = headers.get("Content-Security-Policy")
     for k, v in SECURITY_HEADERS.items():
         headers[k] = v
     if spa:
         headers["Content-Security-Policy"] = SPA_CSP
+    if view_csp:
+        headers["Content-Security-Policy"] = view_csp
     if authenticated:
         # An analyst's browser must not keep a page of findings in its disk cache after they
         # log out on a shared terminal.

@@ -198,7 +198,23 @@ def _ledgers(a) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if _opt(a, "inference_ledger"):
         out["inference_ledger"] = JsonlInferenceLedger(Path(a.inference_ledger))
-    if _opt(a, "audit_ledger"):
+
+    socket_path = _opt(a, "audit_ledger_socket")
+    if socket_path and _opt(a, "audit_ledger"):
+        # Two audit ledgers is not a richer configuration, it is an ambiguous one: the
+        # scan_record would go to whichever slot won, and the report would name the other.
+        raise SystemExit("--audit-ledger and --audit-ledger-socket are alternatives; pass "
+                         "one. The socket is the sealed path (cva-ledgerd holds the key); "
+                         "the file is the unsigned sha256 chain.")
+    if socket_path:
+        # The O2 handoff. The scanner appends through `cva-ledgerd` under its own uid, which
+        # the daemon's allowlist grants `scan_record` and nothing else, so the scanner never
+        # holds the signing key. `LedgerdAuditLedger.capabilities()` asks the daemon rather
+        # than assuming: a socket that connects is not a key that signs.
+        from cva.web.workflow.ledgerd_client import LedgerdAuditLedger
+
+        out["audit_ledger"] = LedgerdAuditLedger(Path(a.audit_ledger_socket))
+    elif _opt(a, "audit_ledger"):
         out["audit_ledger"] = JsonlAuditLedger(Path(a.audit_ledger))
     return out
 
@@ -247,8 +263,17 @@ def warn_unsealed(res) -> None:
 
 
 def code_commit() -> str:
+    """The FULL 40-hex commit, never the short form.
+
+    `records.py:_v_scan` requires `_hex(..., 40)`, so a 7-hex abbreviation is accepted by
+    `JsonlAuditLedger` (which validates nothing) and rejected the moment the same value is
+    appended as a `scan_record` through ledgerd. The `"unknown"` fallback stays: a build
+    outside a git checkout has no commit, `append_scan_record` catches the refusal and
+    reports it, and that is the honest outcome. Nothing here pads it to 40 characters —
+    a zero-padded digest is a lie in exactly the format a verifier trusts.
+    """
     try:
-        return subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+        return subprocess.run(["git", "rev-parse", "HEAD"],
                               capture_output=True, text=True, timeout=5,
                               cwd=Path(__file__).resolve().parents[1]).stdout.strip() or "unknown"
     except Exception:
@@ -555,6 +580,11 @@ def main(argv: list[str] | None = None) -> int:
                         "sealed; the built-in JSONL ledger is a sha256 chain with NO key, "
                         "so it still reports no SIGNING_KEY and the report still says "
                         "not sealed. Module C's signed store replaces it")
+    s.add_argument("--audit-ledger-socket", default=None,
+                   help="the cva-ledgerd socket to append this scan's scan_record through. "
+                        "The daemon holds the signing key and allowlists this uid for "
+                        "scan_record only, so the scanner seals without ever holding a key. "
+                        "An alternative to --audit-ledger, not an addition to it")
 
     t = sub.add_parser("selftest")
     t.add_argument("--out", default=None, help="default: a fresh temp dir")
