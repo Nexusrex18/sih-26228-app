@@ -5,6 +5,7 @@ import {
   Activity,
   FileSearch,
   Loader2,
+  LogOut,
   Moon,
   RefreshCw,
   ScrollText,
@@ -174,7 +175,8 @@ function Rail() {
           );
         })}
       </div>
-      <div className="ml-auto md:ml-0 md:mt-auto">
+      <div className="ml-auto flex gap-1 md:ml-0 md:mt-auto md:flex-col">
+        <SignOut />
         <button
           type="button"
           onClick={toggle}
@@ -210,6 +212,28 @@ function Rail() {
         </button>
       </div>
     </nav>
+  );
+}
+
+/** A real form POST, not a fetch: the server ends the session and redirects to its own
+ *  sign-in page, and the browser follows that as a navigation. The CSRF token travels as
+ *  the form field the server's before-request check reads. The action is absolute — it
+ *  lives outside the SPA's `/app` base path. */
+function SignOut() {
+  const { session } = useApp();
+  if (!session?.authenticated) return null;
+  return (
+    <form method="post" action="/logout">
+      <input type="hidden" name="csrf_token" value={session.csrf_token} />
+      <button
+        type="submit"
+        title="Sign out"
+        aria-label="Sign out"
+        className="grid h-11 w-11 place-items-center rounded-lg text-ink-faint transition-colors hover:bg-surface-panel hover:text-ink md:h-10 md:w-10"
+      >
+        <LogOut className="h-4 w-4" aria-hidden />
+      </button>
+    </form>
   );
 }
 

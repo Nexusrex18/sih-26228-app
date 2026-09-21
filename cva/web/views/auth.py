@@ -7,15 +7,9 @@ from flask import Blueprint, current_app, redirect, render_template, request, ur
 
 from ..accounts import AccountError, AccountStore
 from ..auth import authenticate, current_account, login, logout
+from ..spa_paths import safe_next as _safe_next
 
 bp = Blueprint("auth", __name__)
-
-
-def _safe_next(raw: str | None) -> str:
-    """Only a same-site path. An open redirect from a login form is a phishing primitive."""
-    if raw and raw.startswith("/") and not raw.startswith("//"):
-        return raw
-    return url_for("main.scans")
 
 
 @bp.route("/login", methods=["GET", "POST"])

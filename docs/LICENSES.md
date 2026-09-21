@@ -107,6 +107,9 @@ These are compiled into the static export under `frontend/out/`. Development dep
 | @floating-ui/dom | 1.8.0 | MIT |
 | @floating-ui/react-dom | 2.1.9 | MIT |
 | @floating-ui/utils | 0.2.12 | MIT |
+| @fontsource/ibm-plex-mono | 5.3.0 | OFL-1.1 |
+| @fontsource/ibm-plex-sans | 5.3.0 | OFL-1.1 |
+| @fontsource/ibm-plex-sans-condensed | 5.3.0 | OFL-1.1 |
 | @img/colour | 1.1.0 | MIT |
 | @img/sharp-libvips-linux-x64 | 1.2.4 | LGPL-3.0-or-later |
 | @img/sharp-linux-x64 | 0.34.5 | Apache-2.0 |
@@ -160,9 +163,11 @@ These are compiled into the static export under `frontend/out/`. Development dep
 | @types/d3-shape | 3.2.0 | MIT |
 | @types/d3-time | 3.0.4 | MIT |
 | @types/d3-timer | 3.0.2 | MIT |
+| @visx/pattern | 4.0.0 | MIT |
 | aria-hidden | 1.2.6 | MIT |
 | caniuse-lite | 1.0.30001810 | CC-BY-4.0 |
 | class-variance-authority | 0.7.1 | Apache-2.0 |
+| classnames | 2.5.1 | MIT |
 | client-only | 0.0.1 | MIT |
 | clsx | 2.1.1 | MIT |
 | cmdk | 1.1.1 | MIT |

@@ -59,6 +59,55 @@ def test_a_page_under_no_referrer_would_be_refused(stack):
     assert b.get("/api/session").json()["authenticated"] is False
 
 
+def _form_token(b: Browser, path: str) -> tuple[str, str]:
+    page = b.visit(path)
+    token = re.search(r'name="csrf_token"\s+value="([^"]+)"', page.text).group(1)
+    nxt = re.search(r'name="next"\s+value="([^"]*)"', page.text).group(1)
+    return token, nxt
+
+
+def test_signing_in_with_no_next_lands_on_the_dashboard(stack):
+    """Regression: the login page defaulted `next` to the OLD server-rendered dashboard at
+    `/`, so a person who opened /login directly signed in and landed on the wrong app."""
+    b = Browser(stack.base)
+    token, nxt = _form_token(b, "/login")
+    assert nxt == "/app/", nxt
+    r = b.submit_form("/login", {"actor_id": "a.sharma", "password": PASSWORD,
+                                 "csrf_token": token, "next": nxt})
+    assert r.status in (302, 303) and r.headers["location"].endswith("/app/"), r.headers
+
+
+@pytest.mark.parametrize("old,new", [
+    ("/", "/app/"),
+    (f"/scans/{RICH}", f"/app/scan/?id={RICH}"),
+    (f"/scans/{RICH}/findings", f"/app/findings/?id={RICH}"),
+    (f"/scans/{RICH}/coverage", f"/app/coverage/?id={RICH}"),
+    ("/audit/", "/app/audit/"),
+    ("/audit/verification", "/app/verification/"),
+    ("//evil.example/", "/app/"),
+    ("https://evil.example/", "/app/"),
+])
+def test_an_old_next_is_translated_and_an_offsite_one_refused(stack, old, new):
+    b = Browser(stack.base)
+    token, nxt = _form_token(b, f"/login?next={old}")
+    assert nxt == new, (old, nxt)
+
+
+def test_signing_out_ends_the_session_and_returns_to_sign_in(stack, browser_for):
+    """The SPA's Sign out button is a form POST to /logout with the session's CSRF token."""
+    b = browser_for("a.sharma")
+    csrf = b.open_app("/app/")
+    r = b.submit_form("/logout", {"csrf_token": csrf})
+    assert r.status in (302, 303) and r.headers["location"].endswith("/login"), r.headers
+    assert b.get("/api/session").json()["authenticated"] is False
+
+
+def test_a_signed_in_visit_to_login_goes_to_the_dashboard(stack, browser_for):
+    b = browser_for("a.sharma")
+    r = b.visit("/login")
+    assert r.status in (302, 303) and r.headers["location"].endswith("/app/")
+
+
 def test_a_wrong_password_is_refused_and_says_so(stack):
     b = Browser(stack.base)
     r = b.sign_in("v.iyer", "not-the-password-at-all")
