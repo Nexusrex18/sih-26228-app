@@ -108,8 +108,9 @@ def _check_page(w: Watched, url: str, ready: str, shot: Path, *, phone: bool) ->
     page.goto(url)
     try:
         page.get_by_text(ready, exact=False).first.wait_for(timeout=25_000)
-        page.wait_for_function(
-            "!document.body.innerText.includes('loading findings')", timeout=25_000)
+        # A locator wait, not `wait_for_function`: Playwright polls a string predicate with
+        # eval, which the dashboard's CSP (no 'unsafe-eval') correctly refuses.
+        page.get_by_text("loading findings").wait_for(state="detached", timeout=25_000)
     except playwright_api.TimeoutError:
         problems.append(f"{url}: never reached its loaded state ({ready!r}). Page text:\n"
                         + page.inner_text("body")[:600])
@@ -205,14 +206,19 @@ def test_a_decision_taken_entirely_through_the_ui_reaches_the_ledger(stack, brow
         playwright_api.expect(submit).to_be_enabled()
         submit.click()
 
-        # The ledger is the source of truth, not the page: ask the API the page uses.
-        page.wait_for_function(
-            f"""() => fetch('/api/scans/{scan}/findings/{finding_id}')
-                .then(r => r.json())
-                .then(j => j.finding.state && j.finding.state.effective === 'quarantine')""",
-            timeout=20_000)
-        detail = page.evaluate(
-            f"() => fetch('/api/scans/{scan}/findings/{finding_id}').then(r => r.json())")
+        # The ledger is the source of truth, not the page: ask the API the page uses. Polled
+        # from Python (`page.evaluate` runs over the protocol) rather than with
+        # `wait_for_function`, whose polling needs eval, which the CSP refuses.
+        import time
+        deadline = time.monotonic() + 20
+        detail: dict = {}
+        while time.monotonic() < deadline:
+            detail = page.evaluate(
+                f"() => fetch('/api/scans/{scan}/findings/{finding_id}').then(r => r.json())")
+            state = detail["finding"].get("state") or {}
+            if state.get("effective") == "quarantine":
+                break
+            page.wait_for_timeout(250)
         events = detail["events"]
         assert events and events[-1]["actor_id"] == "a.sharma", events
         assert events[-1]["new_disposition"] == "quarantine"

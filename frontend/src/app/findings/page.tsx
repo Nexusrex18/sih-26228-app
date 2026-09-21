@@ -352,8 +352,8 @@ function chipCls(active: boolean) {
     "sm:h-8 sm:px-3",
     "active:scale-[0.97]",
     active
-      ? "border-accent bg-accent/10 text-accent"
-      : "border-line bg-surface-panel text-ink-muted hover:border-line-strong hover:text-ink",
+      ? "sel-on"
+      : "sel-off",
   );
 }
 
@@ -390,7 +390,9 @@ function FindingCard({
       transition={{ type: "spring", bounce: 0, duration: 0.35, delay: Math.min(index * 0.02, 0.2) }}
       className={cn(
         "glass overflow-hidden rounded-xl border transition-colors",
-        focused ? "border-accent shadow-glow" : "border-line hover:border-line-strong",
+        // The keyboard cursor is a focus indicator, so it keeps the accent: as an edge,
+        // not a halo.
+        focused ? "border-accent" : "border-line hover:border-line-strong",
       )}
     >
       <button

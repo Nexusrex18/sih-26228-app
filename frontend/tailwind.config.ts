@@ -32,6 +32,7 @@ const config: Config = {
           strong: "hsl(var(--line-strong) / <alpha-value>)",
         },
         ink: {
+          strong: "hsl(var(--ink-strong) / <alpha-value>)",
           DEFAULT: "hsl(var(--ink) / <alpha-value>)",
           muted: "hsl(var(--ink-muted) / <alpha-value>)",
           faint: "hsl(var(--ink-faint) / <alpha-value>)",
@@ -61,10 +62,10 @@ const config: Config = {
         lg: "10px",
         xl: "14px",
       },
+      // Depth is a hairline (see `.glass`). The only soft shadow is `.float-shadow`, for
+      // layers that float over the page. `glow` is a focus ring, not a halo.
       boxShadow: {
-        panel: "0 1px 2px hsl(var(--shadow) / 0.4), 0 8px 24px -12px hsl(var(--shadow) / 0.6)",
         glow: "0 0 0 3px hsl(var(--accent) / 0.22)",
-        lift: "0 18px 48px -24px hsl(var(--shadow) / 0.9)",
       },
       // Motion tokens (Emil Kowalski's curves): strong ease-out for entry and press
       // feedback, strong ease-in-out for on-screen movement. Never ease-in on UI.

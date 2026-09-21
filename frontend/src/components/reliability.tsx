@@ -158,7 +158,7 @@ function BinTooltip({
   if (!active || !payload?.length) return null;
   const p = payload[0].payload;
   return (
-    <div className="rounded border border-line-strong bg-surface-panel px-3 py-2 shadow-lift">
+    <div className="rounded border border-line-strong bg-surface-panel px-3 py-2 float-shadow">
       <p className="font-mono text-2xs text-ink-faint">n {p.n}</p>
       <p className="font-mono text-xs tnum">predicted {fixed(p.x, 2)}</p>
       <p className="font-mono text-xs tnum">empirical {fixed(p.y, 2)}</p>

@@ -120,7 +120,7 @@ export function Sheet({
             className={cn(
               "fixed inset-x-0 bottom-0 z-50 flex max-h-[92vh] flex-col",
               "rounded-t-2xl border-t border-line-strong bg-surface-panel/95 backdrop-blur-xl",
-              "shadow-lift",
+              "float-shadow",
               // On a wide screen it is a right-hand panel instead, entering and leaving
               // along the same edge.
               "md:inset-y-0 md:left-auto md:right-0 md:max-h-none md:w-[32rem] md:rounded-none md:rounded-l-2xl md:border-l md:border-t-0",

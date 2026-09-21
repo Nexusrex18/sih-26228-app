@@ -122,9 +122,9 @@ export function ChartCard({
   actions?: React.ReactNode;
 }) {
   return (
-    <div className={cn("glass lift rounded-xl border border-line/80 p-4", className)}>
+    <div className={cn("glass rounded-xl border border-line/80 p-4", className)}>
       <div className="mb-3 flex flex-wrap items-baseline gap-2">
-        <h3 className="font-display text-sm font-semibold tracking-wide text-ink">{title}</h3>
+        <h3 className="font-display text-sm font-semibold tracking-wide text-ink-strong">{title}</h3>
         {note ? <span className="text-2xs text-ink-faint">{note}</span> : null}
         {actions ? <div className="ml-auto">{actions}</div> : null}
       </div>
@@ -329,7 +329,6 @@ export function Gauge({
             initial={{ strokeDashoffset: reduced ? c * arc * (1 - f) : c * arc }}
             animate={{ strokeDashoffset: c * arc * (1 - f) }}
             transition={{ duration: reduced ? 0 : 0.5, ease: [0.23, 1, 0.32, 1] }}
-            style={{ filter: "drop-shadow(0 0 6px hsl(var(--glow)))" }}
           />
           {/* Tick marks at every 10%, so the dial reads as an instrument, not a ring. */}
           {Array.from({ length: 11 }, (_, i) => {
@@ -544,7 +543,7 @@ export function HeatGrid({
             aria-pressed={activeCol === c}
             className={cn(
               "min-h-11 truncate rounded px-1 py-1 text-center font-mono text-2xs transition-colors sm:min-h-0",
-              activeCol === c ? "bg-accent/15 text-accent" : "text-ink-faint hover:text-ink",
+              activeCol === c ? "sel-on" : "text-ink-faint hover:text-ink",
             )}
             title={`Filter findings to ${c}`}
           >
@@ -936,21 +935,22 @@ export function Kpi({
       initial={{ opacity: 0, transform: "translateY(8px)" }}
       animate={{ opacity: 1, transform: "translateY(0px)" }}
       transition={{ duration: 0.25, delay: index * 0.05, ease: [0.23, 1, 0.32, 1] }}
-      className="glass lift relative overflow-hidden rounded-xl border border-line/80 p-4"
+      className="glass relative overflow-hidden rounded-xl border border-line/80 p-4"
     >
       <div className="relative flex items-start justify-between gap-3">
         <Eyebrow>{label}</Eyebrow>
-        <Icon className={cn("h-4 w-4", tone ? TONE_TEXT[tone] : "text-accent")} aria-hidden />
+        {/* A tile with no status keeps a neutral icon: hue here would claim a meaning. */}
+        <Icon className={cn("h-4 w-4", tone ? TONE_TEXT[tone] : "text-ink-faint")} aria-hidden />
       </div>
       <div
         className={cn(
-          "relative mt-2 font-mono text-3xl font-semibold leading-none tracking-tight tnum",
-          tone ? TONE_TEXT[tone] : "text-ink",
+          "relative mt-2 font-mono text-3xl font-medium leading-none tracking-tight tnum",
+          tone ? TONE_TEXT[tone] : "text-ink-strong",
         )}
       >
         <CountUp value={value} />
       </div>
-      {note ? <p className="relative mt-1.5 text-xs text-ink-muted">{note}</p> : null}
+      {note ? <p className="relative mt-1.5 text-xs text-ink-faint">{note}</p> : null}
     </motion.div>
   );
 }

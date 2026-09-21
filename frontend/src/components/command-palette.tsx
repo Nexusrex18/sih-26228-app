@@ -68,7 +68,7 @@ export function CommandPalette({
       onOpenChange={onOpenChange}
       label="Jump to a scan or page"
       overlayClassName="fixed inset-0 z-[60] bg-surface-deep/70 backdrop-blur-sm"
-      contentClassName="fixed left-1/2 top-[14vh] z-[61] w-[min(640px,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-xl border border-line-strong glass shadow-lift"
+      contentClassName="fixed left-1/2 top-[14vh] z-[61] w-[min(640px,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-xl border border-line-strong glass float-shadow"
     >
       <Command.Input
         placeholder="Jump to a scan, a page, or a scan's findings…"
@@ -126,9 +126,9 @@ function Item({
     <Command.Item
       value={value ?? label}
       onSelect={onSelect}
-      className="flex cursor-pointer items-center gap-3 rounded-md px-3 py-2.5 text-sm text-ink-muted data-[selected=true]:bg-accent/12 data-[selected=true]:text-ink"
+      className="flex cursor-pointer items-center gap-3 rounded-md px-3 py-2.5 text-sm text-ink-muted data-[selected=true]:bg-surface-raised data-[selected=true]:text-ink-strong"
     >
-      <Icon className="h-4 w-4 shrink-0 text-accent" />
+      <Icon className="h-4 w-4 shrink-0 text-ink-faint" />
       <span className="flex-1">{label}</span>
       {hint ? <span className="font-mono text-2xs text-ink-faint">{hint}</span> : null}
     </Command.Item>

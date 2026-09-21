@@ -271,8 +271,8 @@ export function DecideSheet({
                       "inline-flex h-11 items-center gap-2 rounded border px-4 font-mono text-xs transition-all",
                       "active:scale-[0.98] disabled:opacity-35",
                       newDisposition === d
-                        ? "border-accent bg-accent/10 text-accent"
-                        : "border-line bg-surface-panel text-ink-muted hover:border-line-strong",
+                        ? "sel-on"
+                        : "sel-off",
                     )}
                   >
                     {d}

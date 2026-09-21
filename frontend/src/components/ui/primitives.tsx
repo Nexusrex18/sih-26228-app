@@ -57,7 +57,7 @@ export function Eyebrow({
   return (
     <span
       className={cn(
-        "font-mono text-eyebrow font-semibold uppercase text-ink-faint",
+        "font-mono text-eyebrow font-medium uppercase text-ink-faint",
         className,
       )}
     >
@@ -89,14 +89,16 @@ export function Chip({
     accept: "border-accept/35 bg-accept/10 text-accept",
     pending: "border-pending/35 bg-pending/10 text-pending",
     absent: "border-absent/30 bg-absent/[0.08] text-absent",
-    accent: "border-accent/40 bg-accent/10 text-accent",
+    // "accent" marks a noun as salient ("you", "this scan"), which is not a status, so it
+    // is carried by a brighter surface and text rather than by hue.
+    accent: "border-line-strong bg-surface-raised text-ink-strong",
   };
   return (
     <span
       title={title}
       className={cn(
         "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5",
-        "font-mono text-2xs font-semibold",
+        "font-mono text-2xs font-medium",
         tones[tone],
         className,
       )}
@@ -111,9 +113,9 @@ export function Chip({
 
 const BUTTON_TONES: Record<string, string> = {
   default:
-    "border-line-strong bg-surface-raised text-ink hover:border-accent/50 hover:bg-surface-raised/70",
-  primary:
-    "border-accent bg-accent text-white hover:bg-accent/85 shadow-[0_6px_20px_-10px_hsl(var(--accent))]",
+    "border-line-strong bg-surface-raised text-ink hover:border-ink-faint/60 hover:text-ink-strong",
+  // The primary action keeps the accent — the one place chrome carries hue — and no glow.
+  primary: "border-accent bg-accent text-white hover:bg-accent/85",
   danger:
     "border-quarantine/40 bg-quarantine/10 text-quarantine hover:bg-quarantine/20",
   ghost: "border-transparent bg-transparent text-ink-muted hover:bg-surface-raised hover:text-ink",
@@ -136,8 +138,8 @@ export function Button({
       className={cn(
         "inline-flex items-center justify-center gap-2 rounded-lg border font-medium",
         // Press feedback: a 0.97 scale over 160ms with the strong ease-out — the interface
-        // confirming it heard the press. Colour changes on their own, un-eased.
-        "transition-[background-color,border-color,transform] duration-press ease-out-strong active:scale-[0.97]",
+        // confirming it heard the press. Hover is colour only, same 160ms.
+        "transition-[background-color,border-color,color,transform] duration-press ease-out-strong active:scale-[0.97]",
         "disabled:pointer-events-none disabled:opacity-45",
         size === "sm" ? "h-7 px-2.5 text-xs" : "h-9 px-3.5 text-sm",
         BUTTON_TONES[tone],
@@ -169,7 +171,7 @@ export function Stat({
   countUp?: boolean;
 }) {
   const tones: Record<string, string> = {
-    neutral: "text-ink",
+    neutral: "text-ink-strong",
     quarantine: "text-quarantine",
     review: "text-review",
     accept: "text-accept",
@@ -181,13 +183,13 @@ export function Stat({
       <Eyebrow>{label}</Eyebrow>
       <span
         className={cn(
-          "font-mono text-3xl font-semibold leading-none tracking-tight tnum",
+          "font-mono text-3xl font-medium leading-none tracking-tight tnum",
           tones[tone],
         )}
       >
         {countUp && typeof value === "number" ? <CountUp value={value} /> : value}
       </span>
-      {note ? <span className="text-xs text-ink-muted">{note}</span> : null}
+      {note ? <span className="text-xs text-ink-faint">{note}</span> : null}
     </div>
   );
 }
@@ -257,7 +259,7 @@ export function Banner({
     warn: "border-review/30 bg-review/[0.07] [&_.banner-icon]:text-review",
     alarm: "border-quarantine/40 bg-quarantine/[0.08] [&_.banner-icon]:text-quarantine",
     absent: "border-absent/30 bg-absent/[0.06] [&_.banner-icon]:text-absent",
-    info: "border-accent/30 bg-accent/[0.07] [&_.banner-icon]:text-accent",
+    info: "border-line-strong bg-surface-raised/40 [&_.banner-icon]:text-ink-muted",
   };
   return (
     <div
@@ -284,7 +286,7 @@ export function Banner({
         </span>
       ) : null}
       <div className="relative min-w-0 flex-1">
-        <strong className="block text-sm font-semibold">{title}</strong>
+        <strong className="block text-sm font-semibold text-ink-strong">{title}</strong>
         {children ? (
           <div className="text-sm text-ink-muted">{children}</div>
         ) : null}
@@ -313,7 +315,7 @@ export function Empty({
         hatched && "hatched",
       )}
     >
-      <h3 className="mb-2 text-base font-semibold">{title}</h3>
+      <h3 className="mb-2 text-base font-semibold text-ink-strong">{title}</h3>
       <div className="max-w-[70ch] space-y-2 text-sm text-ink-muted">{children}</div>
     </div>
   );
@@ -332,7 +334,7 @@ export function Hash({ value, label }: { value?: string | null; label?: string }
       </code>
       <button
         type="button"
-        className="text-xs text-ink-faint transition-colors hover:text-accent"
+        className="text-xs text-ink-faint transition-colors duration-150 hover:text-ink-strong"
         onClick={() => {
           navigator.clipboard?.writeText(value).then(
             () => {
@@ -390,9 +392,9 @@ export function SectionHead({
   return (
     <div className="mb-4 flex flex-wrap items-baseline gap-3 border-b border-line pb-2">
       {eyebrow ? <Eyebrow>{eyebrow}</Eyebrow> : null}
-      <h2 className="font-display text-xl font-semibold tracking-tight">{title}</h2>
+      <h2 className="font-display text-xl font-semibold tracking-tight text-ink-strong">{title}</h2>
       {note ? (
-        <span className="max-w-[60ch] text-sm text-ink-muted">{note}</span>
+        <span className="max-w-[60ch] text-sm text-ink-faint">{note}</span>
       ) : null}
       {actions ? <div className="ml-auto flex gap-2">{actions}</div> : null}
     </div>

@@ -506,7 +506,7 @@ function StatementSize({
 }) {
   const frac = Math.max(0, Math.min(1, coverage.assessed_fraction));
   return (
-    <Panel className={cn("p-4", here && "border-accent/40")}>
+    <Panel className={cn("p-4", here && "border-line-strong")}>
       <div className="flex flex-wrap items-baseline gap-2">
         <span className="font-mono text-sm">{scanId}</span>
         {here ? <Chip tone="accent">this scan</Chip> : null}

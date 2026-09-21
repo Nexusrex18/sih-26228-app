@@ -16,9 +16,12 @@
     --line: 217 24% 18%;
     --line-strong: 216 22% 24%;
 
-    --ink: 215 35% 93%;
-    --ink-muted: 215 20% 72%;
-    --ink-faint: 215 14% 52%;
+    /* Rank is carried by luminance, not by size: four cool-tinted steps, brightest for the
+     * few things that must be read first (titles, the numbers), dimmest for metadata. */
+    --ink-strong: 214 30% 97%;
+    --ink: 215 22% 89%;
+    --ink-muted: 216 16% 74%;
+    --ink-faint: 217 11% 56%;
 
     --accent: 219 93% 67%;
     --accent-dim: 220 38% 32%;
@@ -36,9 +39,12 @@
     --font-display: "IBM Plex Sans Condensed";
     --font-mono: "IBM Plex Mono";
 
-    /* Glass: a panel over the drifting field, not a flat card on a flat page. */
+    /* Glass: a panel over the drifting field, not a flat card on a flat page. Its edge is a
+     * hairline — a lit inner edge plus a dark outer ring — never a blurred drop shadow: on a
+     * dark surface a soft shadow reads as mud, a lit edge reads as a bevel. */
     --glass: 218 30% 12% / 0.62;
-    --glass-edge: 215 40% 70% / 0.08;
+    --edge-lit: 0 0% 100% / 0.07;
+    --edge-ring: 220 60% 2% / 0.55;
     --glow: 219 93% 67% / 0.18;
 
     --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
@@ -47,7 +53,9 @@
 
   :root.light {
     --glass: 0 0% 100% / 0.72;
-    --glass-edge: 215 30% 30% / 0.1;
+    /* On a light surface a white lit edge is invisible; the hairline is a darker ring. */
+    --edge-lit: 0 0% 100% / 0.9;
+    --edge-ring: 217 30% 20% / 0.1;
     --glow: 221 64% 51% / 0.14;
     --surface-deep: 215 30% 93%;
     --surface: 213 33% 97%;
@@ -56,9 +64,10 @@
     --line: 215 25% 89%;
     --line-strong: 215 20% 80%;
 
-    --ink: 217 33% 13%;
-    --ink-muted: 216 21% 33%;
-    --ink-faint: 215 16% 47%;
+    --ink-strong: 218 36% 8%;
+    --ink: 217 30% 15%;
+    --ink-muted: 216 18% 32%;
+    --ink-faint: 215 13% 45%;
 
     --accent: 221 64% 51%;
     --accent-dim: 221 55% 82%;
@@ -84,10 +93,11 @@
     @apply bg-surface text-ink font-sans antialiased;
     font-feature-settings: "kern" 1, "liga" 1;
     text-rendering: optimizeLegibility;
-    /* A deep vertical falloff so the surface has a light source, not a flat fill. */
+    /* A deep vertical falloff so the surface has a light source, not a flat fill. The light
+     * is neutral: hue on this page belongs to status, and a tinted room competes with it. */
     background-image: radial-gradient(
         120% 60% at 50% -10%,
-        hsl(var(--accent) / 0.1),
+        hsl(var(--ink) / 0.05),
         transparent 60%
       ),
       linear-gradient(hsl(var(--surface)), hsl(var(--surface-deep)));
@@ -279,7 +289,7 @@
     background-image: linear-gradient(
       90deg,
       transparent 0%,
-      hsl(var(--accent) / 0.16) 50%,
+      hsl(var(--ink) / 0.08) 50%,
       transparent 100%
     );
     background-size: 200% 100%;
@@ -294,33 +304,66 @@
     backdrop-filter: blur(14px) saturate(140%);
     -webkit-backdrop-filter: blur(14px) saturate(140%);
     box-shadow:
-      inset 0 1px 0 hsl(var(--glass-edge)),
-      0 1px 2px hsl(var(--shadow) / 0.35),
-      0 18px 40px -28px hsl(var(--shadow) / 0.9);
+      inset 0 0 0 0.5px hsl(var(--edge-lit)),
+      0 0 0 1px hsl(var(--edge-ring));
   }
 
-  /* A card that lifts on hover — pointer devices only; a tap is not a hover. */
+  /* The one soft shadow in the system, reserved for layers that float over the page — the
+   * decide sheet, ⌘K, tooltips, toasts. Everything that sits IN the page gets a hairline. */
+  .float-shadow {
+    box-shadow:
+      inset 0 0 0 0.5px hsl(var(--edge-lit)),
+      0 0 0 1px hsl(var(--edge-ring)),
+      0 2px 32px 0 hsl(var(--shadow) / 0.35);
+  }
+
+  /* Hover answers with colour, never movement: a surface used hundreds of times a day
+   * should respond instantly and never make the eye chase anything. Pointer devices only —
+   * a tap is not a hover. */
   @media (hover: hover) and (pointer: fine) {
     .lift {
       transition:
-        transform 200ms var(--ease-out),
-        box-shadow 200ms var(--ease-out),
-        border-color 200ms ease;
+        border-color 140ms var(--ease-out),
+        background-color 140ms var(--ease-out);
     }
     .lift:hover {
-      transform: translateY(-2px);
-      box-shadow:
-        0 0 0 1px hsl(var(--accent) / 0.25),
-        0 20px 44px -24px hsl(var(--glow));
+      border-color: hsl(var(--line-strong));
+      background-color: hsl(var(--surface-raised) / 0.55);
     }
   }
 
-  /* The ambient field: a slow aurora behind the grid. Constant motion, so linear. */
+  /* A selected chip, tab or row. Neutral on purpose: selection is not a status, and blue on
+   * every active filter would compete with the disposition hues that ARE status. Rank comes
+   * from the brighter surface and text plus a lit edge. */
+  .sel-on {
+    border-color: hsl(var(--line-strong));
+    background-color: hsl(var(--surface-raised));
+    color: hsl(var(--ink-strong));
+    box-shadow: inset 0 0 0 0.5px hsl(var(--edge-lit));
+  }
+  .sel-off {
+    border-color: hsl(var(--line));
+    background-color: transparent;
+    color: hsl(var(--ink-faint));
+    transition:
+      color 140ms var(--ease-out),
+      border-color 140ms var(--ease-out),
+      background-color 140ms var(--ease-out);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .sel-off:hover {
+      color: hsl(var(--ink));
+      border-color: hsl(var(--line-strong));
+    }
+  }
+
+  /* The ambient field: a slow drift behind the grid. Constant motion, so linear. Neutral
+   * light only — accept/pending hues in the room would read as a status nobody set. */
   .aurora {
     background:
-      radial-gradient(40% 35% at 20% 10%, hsl(var(--accent) / 0.12), transparent 70%),
-      radial-gradient(35% 30% at 85% 20%, hsl(var(--pending) / 0.08), transparent 70%),
-      radial-gradient(45% 40% at 60% 95%, hsl(var(--accept) / 0.06), transparent 70%);
+      radial-gradient(40% 35% at 20% 10%, hsl(var(--ink) / 0.05), transparent 70%),
+      radial-gradient(35% 30% at 85% 20%, hsl(var(--ink) / 0.03), transparent 70%),
+      radial-gradient(45% 40% at 60% 95%, hsl(var(--ink) / 0.025), transparent 70%);
     background-size: 160% 160%;
     animation: aurora-drift 36s linear infinite alternate;
   }
@@ -391,7 +434,7 @@
 
   /* Chart tooltip, shared by every chart so hover reads the same everywhere. */
   .chart-tip {
-    @apply rounded-md border border-line-strong px-3 py-2 text-xs shadow-lift;
+    @apply float-shadow rounded-md border border-line-strong px-3 py-2 text-xs;
     background: hsl(var(--surface-panel) / 0.96);
     backdrop-filter: blur(8px);
   }

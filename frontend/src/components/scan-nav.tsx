@@ -32,8 +32,8 @@ export function ScanNav({ scanId, n }: { scanId: string; n?: number }) {
             className={cn(
               "inline-flex h-11 items-center gap-2 rounded-full border px-4 font-mono text-xs transition-colors sm:h-8 sm:px-3.5",
               active
-                ? "border-accent bg-accent/10 text-accent"
-                : "border-line bg-surface-panel text-ink-muted hover:border-line-strong hover:text-ink",
+                ? "sel-on"
+                : "sel-off",
             )}
           >
             {t.label}

@@ -145,13 +145,9 @@ function Rail() {
       <Link
         href="/"
         aria-label="CVA home"
-        className="relative grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded border border-accent-dim font-mono text-[0.6rem] font-bold tracking-wide text-accent"
+        className="relative grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded border border-line-strong font-mono text-[0.6rem] font-semibold tracking-wide text-ink-strong"
       >
         CVA
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-0 animate-sweep bg-gradient-to-br from-transparent via-accent/25 to-transparent"
-        />
       </Link>
       <div className="flex gap-1 md:flex-col">
         {nav.map(({ href, label, icon: Icon }) => {
@@ -164,7 +160,7 @@ function Rail() {
               aria-current={active ? "page" : undefined}
               className={cn(
                 "relative grid h-11 w-11 place-items-center rounded-lg transition-colors md:h-10 md:w-10",
-                active ? "text-accent" : "text-ink-faint hover:text-ink",
+                active ? "text-ink-strong" : "text-ink-faint hover:text-ink",
               )}
             >
               {active ? (
@@ -173,7 +169,7 @@ function Rail() {
                 <motion.span
                   layoutId="rail-active"
                   aria-hidden
-                  className="absolute inset-0 rounded-lg border border-accent/40 bg-accent/10"
+                  className="sel-on absolute inset-0 rounded-lg border"
                   transition={{ duration: 0.25, ease: [0.77, 0, 0.175, 1] }}
                 />
               ) : null}
@@ -364,7 +360,7 @@ export function Shell({
       <div className="relative flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex flex-wrap items-center gap-4 border-b border-line bg-surface/70 px-5 py-3 backdrop-blur-md md:top-0">
           <div className="min-w-0">
-            <h1 className="truncate font-display text-base font-semibold tracking-tight">{title}</h1>
+            <h1 className="truncate font-display text-base font-semibold tracking-tight text-ink-strong">{title}</h1>
             {subtitle ? (
               <div className="truncate font-mono text-2xs text-ink-faint">{subtitle}</div>
             ) : null}
@@ -373,7 +369,7 @@ export function Shell({
             <button
               type="button"
               onClick={() => setPaletteOpen(true)}
-              className="inline-flex h-11 w-11 items-center justify-center gap-2 rounded-lg border border-line-strong bg-surface-raised/50 font-mono text-2xs text-ink-muted transition-colors hover:border-accent/40 hover:text-ink sm:h-8 sm:w-auto sm:px-3"
+              className="inline-flex h-11 w-11 items-center justify-center gap-2 rounded-lg border border-line-strong bg-surface-raised/50 font-mono text-2xs text-ink-muted transition-colors duration-150 ease-out-strong hover:border-line-strong hover:bg-surface-raised hover:text-ink sm:h-8 sm:w-auto sm:px-3"
               aria-label="Jump to a scan or page"
             >
               <Search className="h-3.5 w-3.5" aria-hidden />
@@ -385,7 +381,8 @@ export function Shell({
             {actions}
             {session?.authenticated ? (
               <span className="hidden items-center gap-2 rounded-full border border-line-strong bg-surface-raised/60 px-3 py-1 font-mono text-2xs text-ink-muted sm:inline-flex">
-                <span aria-hidden className="pulse-dot h-1.5 w-1.5 rounded-full bg-accept text-accept" />
+                {/* Neutral: green is `accept`, a disposition. A signed-in session is not one. */}
+                <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-ink-faint" />
                 {session.actor_id} · {session.role}
               </span>
             ) : null}

@@ -208,7 +208,7 @@ export default function ScansPage() {
                   <button
                     type="button"
                     onClick={() => setPick(null)}
-                    className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-2xs text-accent"
+                    className="sel-on min-h-11 rounded-full border px-3 py-1 font-mono text-2xs sm:min-h-0"
                   >
                     with {pick} · clear
                   </button>
@@ -277,11 +277,11 @@ function ScanRow({ row, index }: { row: ScanSummary; index: number }) {
       transition={{ delay: Math.min(index * 0.03, 0.3) }}
     >
       <Link href={`/scan?id=${row.scan_id}`} className="group block">
-        <Panel className="lift p-4 transition-colors group-hover:border-accent/40">
+        <Panel className="lift p-4">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
             <div className="min-w-[13rem]">
               <Eyebrow>scan</Eyebrow>
-              <div className="font-mono text-sm text-ink">{row.scan_id}</div>
+              <div className="font-mono text-sm text-ink-strong">{row.scan_id}</div>
               <HostTime value={row.created_at_utc} />
             </div>
 
@@ -295,19 +295,24 @@ function ScanRow({ row, index }: { row: ScanSummary; index: number }) {
             </Chip>
 
             <div className="min-w-[10rem] flex-1">
-              <div className="mb-1 flex h-1.5 overflow-hidden rounded bg-line">
+              {/* Draws in by scaling the whole bar from the left — a transform, never an
+                  animated width, which would re-lay-out the row every frame. */}
+              <motion.div
+                initial={{ transform: "scaleX(0)" }}
+                animate={{ transform: "scaleX(1)" }}
+                transition={{ duration: 0.4, delay: 0.1, ease: [0.23, 1, 0.32, 1] }}
+                className="mb-1 flex h-1.5 origin-left overflow-hidden rounded bg-line"
+              >
                 {bars.map((b) =>
                   b.n > 0 ? (
-                    <motion.i
+                    <i
                       key={b.key}
-                      initial={{ width: 0 }}
-                      animate={{ width: `${(100 * b.n) / total}%` }}
-                      transition={{ duration: 0.5, delay: 0.1 }}
+                      style={{ width: `${(100 * b.n) / total}%` }}
                       className={cn("block h-full", b.cls)}
                     />
                   ) : null,
                 )}
-              </div>
+              </motion.div>
               <span className="font-mono text-2xs text-ink-faint tnum">
                 {row.counts.quarantine} quarantine · {row.counts.review} review ·{" "}
                 {row.counts.accept} accept
@@ -317,7 +322,7 @@ function ScanRow({ row, index }: { row: ScanSummary; index: number }) {
             <SealBadge seal={row.seal} />
 
             <ArrowRight
-              className="h-4 w-4 shrink-0 text-ink-faint transition-transform group-hover:translate-x-0.5 group-hover:text-accent"
+              className="h-4 w-4 shrink-0 text-ink-faint transition-colors duration-150 group-hover:text-ink-strong"
               aria-hidden
             />
           </div>

@@ -89,8 +89,8 @@ function Body() {
               className={cn(
                 "inline-flex h-11 items-center rounded-full border px-4 font-mono text-xs transition-colors active:scale-[0.98] sm:h-9",
                 group === g
-                  ? "border-accent bg-accent/10 text-accent"
-                  : "border-line bg-surface-panel text-ink-muted hover:border-line-strong hover:text-ink",
+                  ? "sel-on"
+                  : "sel-off",
               )}
             >
               {g}
