@@ -4,6 +4,7 @@ import { Check, CircleDashed, Circle, Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import * as React from "react";
 import { toast } from "sonner";
+import { ChartCard, Gauge, ProportionBar } from "@/components/charts";
 import { SealBadge } from "@/components/domain";
 import { ReliabilityDiagram } from "@/components/reliability";
 import { ScanNav } from "@/components/scan-nav";
@@ -115,6 +116,31 @@ function Body() {
           regression — are true statements about the system&rsquo;s own state, not things an
           attacker does, and counting them would inflate the statement.
         </p>
+      </Section>
+
+      <Section delay={0.02}>
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,260px)_minmax(0,1fr)]">
+          <ChartCard title="Statement size" note="as this report states it">
+            <Gauge
+              fraction={c.assessed_fraction}
+              label="assessed"
+              sub={`${c.assessed.length} of ${c.total_attack_classes}`}
+            />
+          </ChartCard>
+          <ChartCard title="Every attack class in the taxonomy" note="hatched = not assessed">
+            <ProportionBar
+              segments={[
+                { key: "a", label: "assessed", value: c.assessed.length, tone: "accent" },
+                { key: "n", label: "check did not run", value: c.not_assessed.length, tone: "absent" },
+                { key: "x", label: "covered by nothing", value: c.never_covered.length, tone: "absent" },
+              ]}
+            />
+            <p className="mt-4 max-w-[60ch] text-xs text-ink-muted">
+              A smaller statement under a narrower profile is the capability model working.
+              It is less that anyone may conclude from this scan, not a result about the data.
+            </p>
+          </ChartCard>
+        </div>
       </Section>
 
       <Section delay={0.04}>

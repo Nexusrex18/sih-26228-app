@@ -12,6 +12,7 @@ import {
   SealBadge,
   SeverityText,
 } from "@/components/domain";
+import { ChartCard, ProportionBar } from "@/components/charts";
 import { ScanNav } from "@/components/scan-nav";
 import { Shell, useApp } from "@/components/shell";
 import {
@@ -92,6 +93,35 @@ function Body() {
 
       <Section delay={0.04}>
         <SectionHead title="Inference ledger — the artefact under audit" />
+        {d.provenance_summary ? (
+          <div className="mb-4">
+            <ChartCard
+              title="Witnessed by an anchor"
+              note="records after the last anchor still trust the key holder alone"
+            >
+              <ProportionBar
+                segments={[
+                  {
+                    key: "w",
+                    label: "before the last anchor",
+                    value: Math.max(
+                      0,
+                      d.provenance_summary.records_verified -
+                        d.provenance_summary.records_after_last_anchor,
+                    ),
+                    tone: "accent",
+                  },
+                  {
+                    key: "u",
+                    label: "unwitnessed",
+                    value: d.provenance_summary.records_after_last_anchor,
+                    tone: "absent",
+                  },
+                ]}
+              />
+            </ChartCard>
+          </div>
+        ) : null}
         <ProvenanceSummary summary={d.provenance_summary} />
       </Section>
 

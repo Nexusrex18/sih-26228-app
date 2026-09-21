@@ -30,9 +30,25 @@
     --absent: 213 17% 62%;
 
     --shadow: 220 60% 2%;
+
+    /* Type: IBM Plex, bundled. Condensed for display, Sans for prose, Mono for data. */
+    --font-sans: "IBM Plex Sans";
+    --font-display: "IBM Plex Sans Condensed";
+    --font-mono: "IBM Plex Mono";
+
+    /* Glass: a panel over the drifting field, not a flat card on a flat page. */
+    --glass: 218 30% 12% / 0.62;
+    --glass-edge: 215 40% 70% / 0.08;
+    --glow: 219 93% 67% / 0.18;
+
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   }
 
   :root.light {
+    --glass: 0 0% 100% / 0.72;
+    --glass-edge: 215 30% 30% / 0.1;
+    --glow: 221 64% 51% / 0.14;
     --surface-deep: 215 30% 93%;
     --surface: 213 33% 97%;
     --surface-panel: 0 0% 100%;
@@ -66,8 +82,24 @@
 
   body {
     @apply bg-surface text-ink font-sans antialiased;
-    font-feature-settings: "kern" 1, "liga" 1, "cv11" 1;
+    font-feature-settings: "kern" 1, "liga" 1;
     text-rendering: optimizeLegibility;
+    /* A deep vertical falloff so the surface has a light source, not a flat fill. */
+    background-image: radial-gradient(
+        120% 60% at 50% -10%,
+        hsl(var(--accent) / 0.1),
+        transparent 60%
+      ),
+      linear-gradient(hsl(var(--surface)), hsl(var(--surface-deep)));
+    background-attachment: fixed;
+  }
+
+  h1,
+  h2,
+  h3,
+  .font-display {
+    font-family: var(--font-display), var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: -0.01em;
   }
 
   /* Tabular figures everywhere a number can change, so a count that ticks up does not
@@ -86,14 +118,23 @@
 
   /* An analyst under stress is the user, and some of them have vestibular disorders.
    * Everything ambient stops; nothing that carries meaning was carried by motion alone. */
+  /* Reduced motion means FEWER and gentler, not zero. Every ambient and positional
+   * animation stops; short opacity and colour transitions stay, because they carry state
+   * (a chip changing, a row highlighting) and move nothing. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
     *::after {
       animation-duration: 0.001ms !important;
       animation-iteration-count: 1 !important;
-      transition-duration: 0.001ms !important;
       scroll-behavior: auto !important;
+    }
+    .lift:hover,
+    .lift {
+      transform: none !important;
+    }
+    [class*="active:scale"]:active {
+      transform: none !important;
     }
   }
 
@@ -117,9 +158,15 @@
     [data-sheet] {
       background-color: hsl(var(--surface-panel)) !important;
     }
-    /* The ambient grid is decoration and the only thing here that is. */
-    .grid-field {
+    /* The ambient field is decoration and the only thing here that is. */
+    .grid-field,
+    .aurora {
       display: none;
+    }
+    .glass {
+      background: hsl(var(--surface-panel));
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
     }
   }
 
@@ -141,7 +188,8 @@
       --ink-faint: 215 25% 32%;
     }
     header,
-    [data-sheet] {
+    [data-sheet],
+    .glass {
       backdrop-filter: none !important;
       -webkit-backdrop-filter: none !important;
       background-color: hsl(var(--surface-panel)) !important;
@@ -236,6 +284,116 @@
     );
     background-size: 200% 100%;
     @apply animate-shimmer;
+  }
+
+  /* ---------------------------------------------------------------- depth
+   * Glass is used where a panel floats over the ambient field: it tells the eye what is
+   * content and what is the room. Solid under reduced-transparency and more-contrast. */
+  .glass {
+    background: hsl(var(--glass));
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    box-shadow:
+      inset 0 1px 0 hsl(var(--glass-edge)),
+      0 1px 2px hsl(var(--shadow) / 0.35),
+      0 18px 40px -28px hsl(var(--shadow) / 0.9);
+  }
+
+  /* A card that lifts on hover — pointer devices only; a tap is not a hover. */
+  @media (hover: hover) and (pointer: fine) {
+    .lift {
+      transition:
+        transform 200ms var(--ease-out),
+        box-shadow 200ms var(--ease-out),
+        border-color 200ms ease;
+    }
+    .lift:hover {
+      transform: translateY(-2px);
+      box-shadow:
+        0 0 0 1px hsl(var(--accent) / 0.25),
+        0 20px 44px -24px hsl(var(--glow));
+    }
+  }
+
+  /* The ambient field: a slow aurora behind the grid. Constant motion, so linear. */
+  .aurora {
+    background:
+      radial-gradient(40% 35% at 20% 10%, hsl(var(--accent) / 0.12), transparent 70%),
+      radial-gradient(35% 30% at 85% 20%, hsl(var(--pending) / 0.08), transparent 70%),
+      radial-gradient(45% 40% at 60% 95%, hsl(var(--accept) / 0.06), transparent 70%);
+    background-size: 160% 160%;
+    animation: aurora-drift 36s linear infinite alternate;
+  }
+  @keyframes aurora-drift {
+    0% { background-position: 0% 0%, 100% 0%, 50% 100%; }
+    100% { background-position: 30% 20%, 70% 30%, 30% 70%; }
+  }
+  .grid-field {
+    animation: grid-drift 60s linear infinite;
+  }
+  @keyframes grid-drift {
+    to { background-position: 64px 64px, 64px 64px; }
+  }
+
+  /* A status dot that breathes: the state is live, not a stale label. */
+  .pulse-dot {
+    position: relative;
+  }
+  .pulse-dot::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.35;
+    animation: pulse-ring 2.4s var(--ease-out) infinite;
+  }
+  @keyframes pulse-ring {
+    0% { transform: scale(0.6); opacity: 0.45; }
+    100% { transform: scale(2.2); opacity: 0; }
+  }
+
+  /* THE LEDGER PULSE — the signature. A signal trace whose beat is the ledger's own seq:
+   * one blip per record, drawn left to right and scrolling, the way an instrument shows a
+   * live channel. It encodes the product's unusual fact — the ledger, not the clock, is
+   * what advances — and it is the one piece of motion the whole design spends boldly. */
+  .ledger-trace {
+    animation: trace-scroll 6s linear infinite;
+  }
+  @keyframes trace-scroll {
+    to { transform: translateX(-50%); }
+  }
+  .ledger-trace-glow {
+    filter: drop-shadow(0 0 4px currentColor);
+  }
+
+  /* A scanning sweep across the verified shield. */
+  .sweep-mask {
+    position: relative;
+    overflow: hidden;
+  }
+  .sweep-mask::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 30%, hsl(0 0% 100% / 0.18) 50%, transparent 70%);
+    transform: translateX(-120%);
+    animation: sweep-pass 4.5s var(--ease-in-out) infinite;
+  }
+  @keyframes sweep-pass {
+    0%, 55% { transform: translateX(-120%); }
+    100% { transform: translateX(120%); }
+  }
+
+  [cmdk-group-heading] {
+    @apply px-3 pb-1 pt-3 font-mono text-2xs uppercase tracking-wider text-ink-faint;
+  }
+
+  /* Chart tooltip, shared by every chart so hover reads the same everywhere. */
+  .chart-tip {
+    @apply rounded-md border border-line-strong px-3 py-2 text-xs shadow-lift;
+    background: hsl(var(--surface-panel) / 0.96);
+    backdrop-filter: blur(8px);
   }
 
   /* Scrollbars, because a dark instrument with a bright default scrollbar looks unfinished. */

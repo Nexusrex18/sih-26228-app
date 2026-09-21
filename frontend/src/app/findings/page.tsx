@@ -5,6 +5,7 @@ import { ChevronDown, Filter, Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import * as React from "react";
 import { toast } from "sonner";
+import { ChartCard, HeatGrid, Histogram } from "@/components/charts";
 import { DecideSheet } from "@/components/decide-sheet";
 import {
   AvailabilityChip,
@@ -26,7 +27,7 @@ import {
 } from "@/components/ui/primitives";
 import { api } from "@/lib/api";
 import type { Finding, PlanRow } from "@/lib/types";
-import { cn, fixed, isAbsent } from "@/lib/ui";
+import { cn, fixed, isAbsent, SEVERITY_ORDER } from "@/lib/ui";
 
 export default function FindingsPage() {
   return (
@@ -84,6 +85,14 @@ function Body() {
     api.scan(scanId).then((d) => setSeal(d.seal), () => undefined);
   }, [scanId, session?.authenticated]);
 
+  /* The overview charts read the WHOLE scan, not the filtered page: they are the map the
+   * filters are chosen from. Counted from the API's findings; nothing is derived. */
+  const [all, setAll] = React.useState<Finding[] | null>(null);
+  React.useEffect(() => {
+    if (!session?.authenticated || !scanId) return;
+    api.findings(scanId, { per_page: 500 }).then((r) => setAll(r.findings), () => undefined);
+  }, [scanId, session?.authenticated, data?.unfiltered_total]);
+
   const setFilter = (key: keyof Filters, value?: string) => {
     setPage(1);
     setFilters((f) => {
@@ -128,6 +137,37 @@ function Body() {
       wide
     >
       <ScanNav scanId={scanId} n={data?.unfiltered_total} />
+
+      <Section>
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+          <ChartCard
+            title="Severity × nature"
+            note="the whole scan · click a nature to filter"
+          >
+            {all ? (
+              <HeatGrid
+                rows={SEVERITY_ORDER}
+                cols={["adversarial", "quality", "indeterminate"]}
+                count={(r, c) => all.filter((f) => f.severity === r && f.nature === c).length}
+                activeCol={filters.nature ?? null}
+                onCol={(c) => setFilter("nature", c)}
+              />
+            ) : (
+              <div className="shimmer h-40 rounded-lg" aria-hidden />
+            )}
+          </ChartCard>
+          <ChartCard
+            title="Confidence"
+            note="how sure each detector is, as reported"
+          >
+            {all ? (
+              <Histogram values={all.map((f) => f.confidence)} label="confidence" />
+            ) : (
+              <div className="shimmer h-40 rounded-lg" aria-hidden />
+            )}
+          </ChartCard>
+        </div>
+      </Section>
 
       <Section>
         <SectionHead
@@ -256,7 +296,7 @@ function Body() {
 
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-block rounded-sm border border-line-strong border-b-2 bg-surface-raised px-1.5 font-mono text-2xs text-ink-muted">
+    <span className="inline-block rounded-sm border border-line-strong bg-surface-raised px-1.5 font-mono text-2xs text-ink-muted shadow-[inset_0_-1px_0_hsl(var(--line-strong))]">
       {children}
     </span>
   );
@@ -349,7 +389,7 @@ function FindingCard({
       exit={{ opacity: 0 }}
       transition={{ type: "spring", bounce: 0, duration: 0.35, delay: Math.min(index * 0.02, 0.2) }}
       className={cn(
-        "overflow-hidden rounded-lg border bg-surface-panel transition-colors",
+        "glass overflow-hidden rounded-xl border transition-colors",
         focused ? "border-accent shadow-glow" : "border-line hover:border-line-strong",
       )}
     >

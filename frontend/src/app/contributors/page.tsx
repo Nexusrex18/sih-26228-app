@@ -6,12 +6,12 @@ import * as React from "react";
 import { toast } from "sonner";
 import {
   Attribution,
-  CIBar,
   ContributorCard,
   DispositionChip,
   SealBadge,
   TargetStatus,
 } from "@/components/domain";
+import { ChartCard, ContributorScatter, ForestPlot } from "@/components/charts";
 import { ScanNav } from "@/components/scan-nav";
 import { Shell, useApp } from "@/components/shell";
 import {
@@ -63,7 +63,6 @@ function Body() {
   const all = d.contributor_risk ?? [];
   const groups = Array.from(new Set(all.map((r) => r.group_key)));
   const rows = all.filter((r) => r.group_key === group);
-  const scale = Math.max(...rows.map((r) => r.ci_high), 0.0001);
   const baseline = d.contributor_baseline as Record<string, number | boolean> | null;
 
   return (
@@ -98,11 +97,61 @@ function Body() {
             </button>
           ))}
         </div>
+        {rows.length ? (
+          <div className="mt-4">
+            <ChartCard
+              title="Sample size against posterior"
+              note="bubble area = flagged samples · red = interval excludes its cohort rate"
+            >
+              <ContributorScatter
+                rows={rows.map((r) => ({
+                  label: r.group_value,
+                  n: Math.max(1, r.n_samples),
+                  posterior: r.posterior_mean,
+                  flagged: r.n_flagged,
+                  excludes: Boolean(r.excludes_cohort_rate),
+                }))}
+                cohortRate={
+                  baseline && typeof baseline.cohort_rate === "number"
+                    ? baseline.cohort_rate
+                    : undefined
+                }
+              />
+              <p className="mt-2 text-2xs text-ink-faint">
+                A small contributor sits far up the axis on little evidence; a large one
+                close to the line is a lot of evidence of little. The interval, not the
+                height, is what decides.
+              </p>
+            </ChartCard>
+          </div>
+        ) : null}
       </Section>
 
       <Section delay={0.04}>
         {rows.length ? (
           <>
+            <ChartCard
+              title="95% intervals"
+              note="point = posterior · bar = 95% interval · red = excludes its cohort rate"
+              className="mb-4"
+            >
+              <ForestPlot
+                rows={rows.map((r) => ({
+                  label: r.group_value,
+                  mean: r.posterior_mean,
+                  lo: r.ci_low,
+                  hi: r.ci_high,
+                  cohort: r.cohort_rate_used,
+                  excludes: Boolean(r.excludes_cohort_rate),
+                  n: r.n_samples,
+                }))}
+                cohortRate={
+                  baseline && typeof baseline.cohort_rate === "number"
+                    ? baseline.cohort_rate
+                    : undefined
+                }
+              />
+            </ChartCard>
             {/* Cards on a phone, a table from `md` up. A seven-column table is unreadable
                 at 390px and horizontal scrolling hides the column that matters. */}
             <div className="space-y-2 md:hidden">
@@ -110,7 +159,6 @@ function Body() {
                 <ContributorCard
                   key={r.group_value}
                   row={r}
-                  scale={scale}
                   target={findTarget(targets, r)}
                   showStatus
                 />
@@ -162,7 +210,6 @@ function Body() {
                             {fixed(r.posterior_mean, 4)}
                           </td>
                           <td className="px-3 py-3">
-                            <CIBar row={r} scale={scale} />
                             <span className="font-mono text-2xs text-ink-faint tnum">
                               {fixed(r.ci_low, 4)}–{fixed(r.ci_high, 4)}
                               {r.cohort_rate_used !== undefined

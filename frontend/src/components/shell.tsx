@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import {
   Activity,
   FileSearch,
@@ -8,6 +8,7 @@ import {
   Moon,
   RefreshCw,
   ScrollText,
+  Search,
   ShieldAlert,
   ShieldCheck,
   ShieldQuestion,
@@ -20,6 +21,8 @@ import * as React from "react";
 import { api, setCsrfToken } from "@/lib/api";
 import type { Health, Session } from "@/lib/types";
 import { cn } from "@/lib/ui";
+import { CommandPalette } from "@/components/command-palette";
+import { LedgerPulse } from "@/components/ledger-pulse";
 import { Banner, Button } from "@/components/ui/primitives";
 
 /* --------------------------------------------------------------- context */
@@ -74,9 +77,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [refreshHealth]);
 
   return (
-    <Ctx.Provider value={{ session, health, loading, refreshHealth }}>
-      {children}
-    </Ctx.Provider>
+    // `reducedMotion="user"`: under prefers-reduced-motion, Framer drops every transform
+    // animation and keeps opacity — gentler, not zero.
+    <MotionConfig reducedMotion="user">
+      <Ctx.Provider value={{ session, health, loading, refreshHealth }}>
+        {children}
+      </Ctx.Provider>
+    </MotionConfig>
   );
 }
 
@@ -124,7 +131,7 @@ function Rail() {
   return (
     <nav
       aria-label="Sections"
-      className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b border-line bg-surface-deep px-3 md:h-screen md:w-16 md:flex-col md:border-b-0 md:border-r md:py-4"
+      className="glass sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b border-line px-3 md:h-screen md:w-16 md:flex-col md:border-b-0 md:border-r md:py-4"
     >
       <Link
         href="/"
@@ -147,13 +154,21 @@ function Rail() {
               title={label}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "grid h-9 w-9 place-items-center rounded border transition-colors",
-                active
-                  ? "border-accent/40 bg-surface-panel text-accent"
-                  : "border-transparent text-ink-faint hover:bg-surface-panel hover:text-ink",
+                "relative grid h-11 w-11 place-items-center rounded-lg transition-colors md:h-10 md:w-10",
+                active ? "text-accent" : "text-ink-faint hover:text-ink",
               )}
             >
-              <Icon className="h-4 w-4" aria-hidden />
+              {active ? (
+                // The indicator slides to the new section: on-screen movement, so the
+                // strong ease-in-out, well under 300ms. No spring — nothing is thrown.
+                <motion.span
+                  layoutId="rail-active"
+                  aria-hidden
+                  className="absolute inset-0 rounded-lg border border-accent/40 bg-accent/10"
+                  transition={{ duration: 0.25, ease: [0.77, 0, 0.175, 1] }}
+                />
+              ) : null}
+              <Icon className="relative h-4 w-4" aria-hidden />
               <span className="sr-only">{label}</span>
             </Link>
           );
@@ -164,13 +179,34 @@ function Rail() {
           type="button"
           onClick={toggle}
           aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-          className="grid h-9 w-9 place-items-center rounded border border-transparent text-ink-faint transition-colors hover:bg-surface-panel hover:text-ink"
+          className="relative grid h-11 w-11 place-items-center overflow-hidden rounded-lg text-ink-faint transition-colors hover:bg-surface-panel hover:text-ink md:h-10 md:w-10"
         >
-          {theme === "light" ? (
-            <Moon className="h-4 w-4" aria-hidden />
-          ) : (
-            <Sun className="h-4 w-4" aria-hidden />
-          )}
+          {/* The icon turns over like a dial: the old one rotates out as the new one
+              rotates in. Rare action, so a little motion is earned — ease-out, 200ms,
+              no bounce, and the exit is quicker than the entry. */}
+          <AnimatePresence mode="popLayout" initial={false}>
+            <motion.span
+              key={theme}
+              initial={{ opacity: 0, transform: "rotate(-90deg) scale(0.9)" }}
+              animate={{
+                opacity: 1,
+                transform: "rotate(0deg) scale(1)",
+                transition: { duration: 0.2, ease: [0.23, 1, 0.32, 1] },
+              }}
+              exit={{
+                opacity: 0,
+                transform: "rotate(90deg) scale(0.9)",
+                transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] },
+              }}
+              className="grid place-items-center"
+            >
+              {theme === "light" ? (
+                <Moon className="h-4 w-4" aria-hidden />
+              ) : (
+                <Sun className="h-4 w-4" aria-hidden />
+              )}
+            </motion.span>
+          </AnimatePresence>
         </button>
       </div>
     </nav>
@@ -216,20 +252,26 @@ export function TrustBanner() {
         icon={icon}
         title={title}
         alarm={health.kind === "failed"}
+        sweep={health.kind === "verified"}
         actions={
-          <Button
-            size="sm"
-            icon={busy ? Loader2 : RefreshCw}
-            disabled={busy}
-            className={busy ? "[&_svg]:animate-spin" : undefined}
-            onClick={async () => {
-              setBusy(true);
-              await refreshHealth();
-              setBusy(false);
-            }}
-          >
-            Verify now
-          </Button>
+          <div className="flex items-center gap-3">
+            <div className="hidden md:block">
+              <LedgerPulse health={health} />
+            </div>
+            <Button
+              size="sm"
+              icon={busy ? Loader2 : RefreshCw}
+              disabled={busy}
+              className={busy ? "[&_svg]:animate-spin" : undefined}
+              onClick={async () => {
+                setBusy(true);
+                await refreshHealth();
+                setBusy(false);
+              }}
+            >
+              Verify now
+            </Button>
+          </div>
         }
       >
         <p>{health.text}</p>
@@ -262,6 +304,7 @@ export function Shell({
 }) {
   const { session, loading } = useApp();
   const pathname = usePathname();
+  const [paletteOpen, setPaletteOpen] = React.useState(false);
 
   if (loading) {
     return (
@@ -280,21 +323,37 @@ export function Shell({
 
   return (
     <div className="relative flex min-h-screen flex-col md:flex-row">
+      {/* The room: a slow aurora and a drifting instrument grid. Decoration only — it
+          is removed under reduced transparency and stopped under reduced motion. */}
+      <div aria-hidden className="aurora pointer-events-none fixed inset-0" />
       <div aria-hidden className="grid-field pointer-events-none fixed inset-0 opacity-30" />
       <Rail />
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <div className="relative flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex flex-wrap items-center gap-4 border-b border-line bg-surface/80 px-5 py-3 backdrop-blur-md md:top-0">
+        <header className="sticky top-0 z-20 flex flex-wrap items-center gap-4 border-b border-line bg-surface/70 px-5 py-3 backdrop-blur-md md:top-0">
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold tracking-tight">{title}</div>
+            <h1 className="truncate font-display text-base font-semibold tracking-tight">{title}</h1>
             {subtitle ? (
-              <div className="truncate text-xs text-ink-faint">{subtitle}</div>
+              <div className="truncate font-mono text-2xs text-ink-faint">{subtitle}</div>
             ) : null}
           </div>
           <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              className="inline-flex h-11 w-11 items-center justify-center gap-2 rounded-lg border border-line-strong bg-surface-raised/50 font-mono text-2xs text-ink-muted transition-colors hover:border-accent/40 hover:text-ink sm:h-8 sm:w-auto sm:px-3"
+              aria-label="Jump to a scan or page"
+            >
+              <Search className="h-3.5 w-3.5" aria-hidden />
+              <span className="hidden sm:inline">Jump to</span>
+              <kbd className="hidden rounded border border-line-strong px-1 text-ink-faint sm:inline">
+                ⌘K
+              </kbd>
+            </button>
             {actions}
             {session?.authenticated ? (
               <span className="hidden items-center gap-2 rounded-full border border-line-strong bg-surface-raised/60 px-3 py-1 font-mono text-2xs text-ink-muted sm:inline-flex">
-                <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-accept" />
+                <span aria-hidden className="pulse-dot h-1.5 w-1.5 rounded-full bg-accept text-accept" />
                 {session.actor_id} · {session.role}
               </span>
             ) : null}
@@ -310,10 +369,17 @@ export function Shell({
           <AnimatePresence mode="wait">
             <motion.div
               key={pathname}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.25, ease: [0.2, 0.9, 0.3, 1] }}
+              initial={{ opacity: 0, transform: "translateY(8px)" }}
+              animate={{
+                opacity: 1,
+                transform: "translateY(0px)",
+                transition: { duration: 0.24, ease: [0.23, 1, 0.32, 1] },
+              }}
+              exit={{
+                opacity: 0,
+                transform: "translateY(-4px)",
+                transition: { duration: 0.14, ease: [0.23, 1, 0.32, 1] },
+              }}
             >
               <TrustBanner />
               {children}

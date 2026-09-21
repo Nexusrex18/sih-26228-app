@@ -180,9 +180,13 @@ export function SeqItem({
 }) {
   return (
     <motion.div
-      initial={{ opacity: 0, x: -8 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.3, delay: Math.min(index * 0.035, 0.4) }}
+      initial={{ opacity: 0, transform: "translateX(-8px)" }}
+      animate={{ opacity: 1, transform: "translateX(0px)" }}
+      transition={{
+        duration: 0.24,
+        delay: Math.min(index * 0.035, 0.3),
+        ease: [0.23, 1, 0.32, 1],
+      }}
       className="relative mb-4 last:mb-0"
     >
       <span
@@ -206,58 +210,6 @@ export function SeqItem({
       </span>
       {children}
     </motion.div>
-  );
-}
-
-/* ------------------------------------------------------- confidence bar
- * The bar is the 95% interval, the notch is the posterior mean, and the amber tick is the
- * leave-one-out cohort rate THIS row was decided against. Every caller also prints the
- * numbers: the picture is an aid, never the only carrier. */
-
-export function CIBar({ row, scale }: { row: ContributorRow; scale: number }) {
-  const s = scale > 0 ? scale : 1;
-  const clamp = (v: number) => Math.max(0, Math.min(100, (v / s) * 100));
-  const lo = clamp(row.ci_low);
-  const hi = clamp(row.ci_high);
-  const mean = clamp(row.posterior_mean);
-  const base =
-    row.cohort_rate_used !== undefined ? clamp(row.cohort_rate_used) : null;
-
-  return (
-    <div
-      className="relative h-[18px] min-w-[140px]"
-      role="img"
-      aria-label={`posterior ${fixed(row.posterior_mean)}, 95% interval ${fixed(
-        row.ci_low,
-      )} to ${fixed(row.ci_high)}${
-        base !== null
-          ? `, decided against a cohort rate of ${fixed(row.cohort_rate_used)}`
-          : ""
-      }`}
-    >
-      <span className="absolute inset-x-0 top-2 h-0.5 rounded bg-line-strong" />
-      <motion.span
-        initial={{ scaleX: 0 }}
-        animate={{ scaleX: 1 }}
-        transition={{ duration: 0.5, ease: [0.2, 0.9, 0.3, 1] }}
-        style={{ left: `${lo}%`, width: `${Math.max(1, hi - lo)}%`, transformOrigin: "left" }}
-        className={cn(
-          "absolute top-1.5 h-1.5 rounded",
-          row.excludes_cohort_rate ? "bg-quarantine/55" : "bg-accent-dim",
-        )}
-      />
-      <span
-        style={{ left: `${mean}%` }}
-        className="absolute top-[3px] h-3 w-0.5 rounded-sm bg-ink"
-      />
-      {base !== null ? (
-        <span
-          style={{ left: `${base}%` }}
-          className="absolute top-[1px] h-4 w-px bg-review"
-          title={`cohort rate used: ${fixed(row.cohort_rate_used)}`}
-        />
-      ) : null}
-    </div>
   );
 }
 
@@ -454,13 +406,11 @@ export function TargetStatus({
 
 export function ContributorCard({
   row,
-  scale,
   target,
   showGroupKey,
   showStatus,
 }: {
   row: ContributorRow;
-  scale: number;
   target?: import("@/lib/types").TargetState;
   showGroupKey?: boolean;
   /** The quarantine state is only known where `/targets` was fetched; where it was not,
@@ -486,7 +436,6 @@ export function ContributorCard({
           <span className="font-mono text-ink-muted">{fixed(row.posterior_mean, 4)}</span>
         </span>
       </div>
-      <CIBar row={row} scale={scale} />
       <p className="mt-1 font-mono text-2xs text-ink-faint tnum">
         {fixed(row.ci_low, 4)}–{fixed(row.ci_high, 4)}
         {row.cohort_rate_used !== undefined

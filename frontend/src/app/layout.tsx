@@ -1,18 +1,21 @@
 import type { Metadata, Viewport } from "next";
 import { Toaster } from "sonner";
 import { AppProvider } from "@/components/shell";
+/* IBM Plex, bundled from npm (@fontsource) so the woff2 files ship inside the static
+ * export: no Google Fonts request at build time or at runtime, which the air-gapped demo
+ * needs. Plex is an engineering-instrument family — Condensed for display headings, Sans
+ * for prose, Mono for digests, ledger seqs and every number that can change. Latin subset
+ * and only the weights in use, to keep the bundle small. */
+import "@fontsource/ibm-plex-sans/latin-400.css";
+import "@fontsource/ibm-plex-sans/latin-500.css";
+import "@fontsource/ibm-plex-sans/latin-600.css";
+import "@fontsource/ibm-plex-sans-condensed/latin-500.css";
+import "@fontsource/ibm-plex-sans-condensed/latin-600.css";
+import "@fontsource/ibm-plex-sans-condensed/latin-700.css";
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-500.css";
+import "@fontsource/ibm-plex-mono/latin-600.css";
 import "./globals.css";
-
-/**
- * Fonts are declared in `globals.css` as `@font-face` over files in `public/fonts/`,
- * fetched once by `scripts/vendor_web_assets.py`.
- *
- * Not `next/font/google`: that reaches out to Google's servers during `next build`, which
- * makes the build itself network-dependent and silently falls back when it cannot. Files on
- * disk make the dependency visible, hashed in a manifest, and reproducible — and the
- * `@font-face` declaration degrades to the system stack if a file is missing, which is a
- * legible failure rather than a mysterious one.
- */
 
 export const metadata: Metadata = {
   title: "CV Integrity Assurance",

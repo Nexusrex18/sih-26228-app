@@ -30,7 +30,7 @@ export function ScanNav({ scanId, n }: { scanId: string; n?: number }) {
             href={`${t.href}?id=${scanId}`}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "inline-flex h-8 items-center gap-2 rounded-full border px-3.5 font-mono text-xs transition-colors",
+              "inline-flex h-11 items-center gap-2 rounded-full border px-4 font-mono text-xs transition-colors sm:h-8 sm:px-3.5",
               active
                 ? "border-accent bg-accent/10 text-accent"
                 : "border-line bg-surface-panel text-ink-muted hover:border-line-strong hover:text-ink",
@@ -46,7 +46,7 @@ export function ScanNav({ scanId, n }: { scanId: string; n?: number }) {
       <span className="flex-1" />
       <Link
         href={`/audit?id=${scanId}`}
-        className="inline-flex h-8 items-center rounded-full border border-line bg-surface-panel px-3.5 font-mono text-xs text-ink-muted transition-colors hover:border-line-strong hover:text-ink"
+        className="inline-flex h-11 items-center rounded-full border border-line bg-surface-panel px-4 font-mono text-xs text-ink-muted transition-colors hover:border-line-strong hover:text-ink sm:h-8 sm:px-3.5"
       >
         Audit trail
       </Link>

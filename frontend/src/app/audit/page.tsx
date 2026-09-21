@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import * as React from "react";
 import { toast } from "sonner";
+import { ActorBars, ChartCard, SeqActivity } from "@/components/charts";
 import { DispositionChip, SeqItem, SeqRail } from "@/components/domain";
 import { Shell, useApp } from "@/components/shell";
 import {
@@ -109,6 +110,34 @@ function Body() {
           </Link>
         </div>
       </Section>
+
+      {data && data.readable && rows.length ? (
+        <Section delay={0.02}>
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+            <ChartCard title="Decisions per person" note="analyst events, by recording account">
+              {(() => {
+                const byActor = new Map<string, number>();
+                for (const r of rows) {
+                  if (r.kind === "analyst_event") byActor.set(r.actor, (byActor.get(r.actor) ?? 0) + 1);
+                }
+                const actors = [...byActor.entries()]
+                  .map(([actor, n]) => ({ actor, n }))
+                  .sort((a, b) => b.n - a.n);
+                return actors.length ? (
+                  <ActorBars data={actors} />
+                ) : (
+                  <p className="py-8 text-center text-sm text-ink-muted">
+                    No analyst has recorded a decision yet.
+                  </p>
+                );
+              })()}
+            </ChartCard>
+            <ChartCard title="Activity along the ledger" note="x is ledger seq, never time">
+              <SeqActivity rows={rows} />
+            </ChartCard>
+          </div>
+        </Section>
+      ) : null}
 
       <Section delay={0.04}>
         {loading && !data ? (

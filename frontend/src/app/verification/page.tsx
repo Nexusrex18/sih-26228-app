@@ -3,6 +3,7 @@
 import { Check, Download, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
+import { ProportionBar } from "@/components/charts";
 import { Shell, useApp } from "@/components/shell";
 import {
   Banner,
@@ -104,6 +105,25 @@ export default function VerificationPage() {
                 countUp
                 tone={state.declared_gaps > 0 ? "absent" : "neutral"}
                 note="intervals the field unit admitted it could not seal"
+              />
+            </div>
+
+            <div className="mt-6">
+              <ProportionBar
+                segments={[
+                  {
+                    key: "w",
+                    label: "witnessed by an anchor",
+                    value: Math.max(0, state.records_checked - state.unwitnessed_records),
+                    tone: "accent",
+                  },
+                  {
+                    key: "u",
+                    label: "unwitnessed",
+                    value: state.unwitnessed_records,
+                    tone: "absent",
+                  },
+                ]}
               />
             </div>
 

@@ -16,7 +16,7 @@ export function Panel({
   return (
     <div
       className={cn(
-        "rounded-lg border border-line bg-surface-panel",
+        "glass rounded-xl border border-line/80",
         hatched && "hatched border-absent/30 bg-absent/[0.06]",
         className,
       )}
@@ -134,8 +134,10 @@ export function Button({
   return (
     <button
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded border font-medium",
-        "transition-[background,border-color,transform] duration-150 active:translate-y-px",
+        "inline-flex items-center justify-center gap-2 rounded-lg border font-medium",
+        // Press feedback: a 0.97 scale over 160ms with the strong ease-out — the interface
+        // confirming it heard the press. Colour changes on their own, un-eased.
+        "transition-[background-color,border-color,transform] duration-press ease-out-strong active:scale-[0.97]",
         "disabled:pointer-events-none disabled:opacity-45",
         size === "sm" ? "h-7 px-2.5 text-xs" : "h-9 px-3.5 text-sm",
         BUTTON_TONES[tone],
@@ -237,6 +239,7 @@ export function Banner({
   children,
   actions,
   alarm,
+  sweep,
 }: {
   tone: "ok" | "warn" | "alarm" | "absent" | "info";
   icon?: LucideIcon;
@@ -244,19 +247,23 @@ export function Banner({
   children?: React.ReactNode;
   actions?: React.ReactNode;
   alarm?: boolean;
+  /** A scanning light across the icon — the "verified" shield being re-read. */
+  sweep?: boolean;
 }) {
+  // Tone is the tinted surface, a tinted 1px edge and the icon tile — never a thick side
+  // stripe, which on a rounded box reads as a pasted-on decoration.
   const tones: Record<string, string> = {
-    ok: "border-l-accept bg-accept/[0.07]",
-    warn: "border-l-review bg-review/[0.07]",
-    alarm: "border-l-quarantine bg-quarantine/[0.08]",
-    absent: "border-l-absent bg-absent/[0.06]",
-    info: "border-l-accent bg-accent/[0.07]",
+    ok: "border-accept/30 bg-accept/[0.07] [&_.banner-icon]:text-accept",
+    warn: "border-review/30 bg-review/[0.07] [&_.banner-icon]:text-review",
+    alarm: "border-quarantine/40 bg-quarantine/[0.08] [&_.banner-icon]:text-quarantine",
+    absent: "border-absent/30 bg-absent/[0.06] [&_.banner-icon]:text-absent",
+    info: "border-accent/30 bg-accent/[0.07] [&_.banner-icon]:text-accent",
   };
   return (
     <div
       role={tone === "alarm" || tone === "absent" ? "alert" : "status"}
       className={cn(
-        "relative flex items-start gap-3 overflow-hidden rounded border border-line border-l-[3px] px-4 py-3",
+        "glass relative flex flex-wrap items-start gap-3 overflow-hidden rounded-xl border px-4 py-3",
         tones[tone],
       )}
     >
@@ -266,7 +273,16 @@ export function Banner({
           className="pointer-events-none absolute inset-0 animate-sweep bg-gradient-to-r from-transparent via-quarantine/15 to-transparent"
         />
       ) : null}
-      {Icon ? <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> : null}
+      {Icon ? (
+        <span
+          className={cn(
+            "banner-icon relative mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line-strong bg-surface-raised/50",
+            sweep && "sweep-mask",
+          )}
+        >
+          <Icon className="h-4 w-4" aria-hidden />
+        </span>
+      ) : null}
       <div className="relative min-w-0 flex-1">
         <strong className="block text-sm font-semibold">{title}</strong>
         {children ? (
@@ -336,9 +352,9 @@ export function Hash({ value, label }: { value?: string | null; label?: string }
 /* ------------------------------------------------------------------ motion */
 
 export const fadeUp = {
-  initial: { opacity: 0, y: 10 },
-  animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.35, ease: [0.2, 0.9, 0.3, 1] as const },
+  initial: { opacity: 0, transform: "translateY(8px)" },
+  animate: { opacity: 1, transform: "translateY(0px)" },
+  transition: { duration: 0.28, ease: [0.23, 1, 0.32, 1] as const },
 };
 
 export function Section({
@@ -349,9 +365,9 @@ export function Section({
 }: HTMLMotionProps<"section"> & { delay?: number }) {
   return (
     <motion.section
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, delay, ease: [0.2, 0.9, 0.3, 1] }}
+      initial={{ opacity: 0, transform: "translateY(8px)" }}
+      animate={{ opacity: 1, transform: "translateY(0px)" }}
+      transition={{ duration: 0.28, delay, ease: [0.23, 1, 0.32, 1] }}
       className={cn("mb-12 scroll-mt-24", className)}
       {...rest}
     >
@@ -374,7 +390,7 @@ export function SectionHead({
   return (
     <div className="mb-4 flex flex-wrap items-baseline gap-3 border-b border-line pb-2">
       {eyebrow ? <Eyebrow>{eyebrow}</Eyebrow> : null}
-      <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+      <h2 className="font-display text-xl font-semibold tracking-tight">{title}</h2>
       {note ? (
         <span className="max-w-[60ch] text-sm text-ink-muted">{note}</span>
       ) : null}

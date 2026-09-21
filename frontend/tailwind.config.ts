@@ -48,6 +48,7 @@ const config: Config = {
       },
       fontFamily: {
         sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
+        display: ["var(--font-display)", "var(--font-sans)", "ui-sans-serif", "sans-serif"],
         mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "monospace"],
       },
       fontSize: {
@@ -64,6 +65,15 @@ const config: Config = {
         panel: "0 1px 2px hsl(var(--shadow) / 0.4), 0 8px 24px -12px hsl(var(--shadow) / 0.6)",
         glow: "0 0 0 3px hsl(var(--accent) / 0.22)",
         lift: "0 18px 48px -24px hsl(var(--shadow) / 0.9)",
+      },
+      // Motion tokens (Emil Kowalski's curves): strong ease-out for entry and press
+      // feedback, strong ease-in-out for on-screen movement. Never ease-in on UI.
+      transitionTimingFunction: {
+        "out-strong": "cubic-bezier(0.23, 1, 0.32, 1)",
+        "in-out-strong": "cubic-bezier(0.77, 0, 0.175, 1)",
+      },
+      transitionDuration: {
+        press: "160ms",
       },
       keyframes: {
         // Ambient motion, each tied to something true rather than to decoration.

@@ -89,6 +89,9 @@ def _check_page(c: Chrome, url: str, ready: str, shot: Path, *, phone: bool) -> 
         })()""")
         if overflow:
             problems.append(f"{url}: wider than the {390}px screen: {overflow}")
+    # Let entrance animations (count-up, charts drawing in) finish, so the screenshot shows
+    # the settled page a person reviews — not a frame mid-animation.
+    c.evaluate("new Promise(r => setTimeout(r, 1500))")
     c.screenshot(shot)
     return problems
 

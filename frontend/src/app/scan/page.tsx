@@ -7,7 +7,6 @@ import * as React from "react";
 import {
   Attribution,
   AvailabilityChip,
-  CIBar,
   ContributorCard,
   DispositionChip,
   PlanRows,
@@ -28,9 +27,17 @@ import {
   SectionHead,
   Stat,
 } from "@/components/ui/primitives";
+import {
+  BarList,
+  ChartCard,
+  Donut,
+  ForestPlot,
+  Gauge,
+  ProportionBar,
+} from "@/components/charts";
 import { api } from "@/lib/api";
-import type { ScanDetail } from "@/lib/types";
-import { fixed } from "@/lib/ui";
+import type { ScanDetail, Severity } from "@/lib/types";
+import { fixed, SEVERITY_ORDER } from "@/lib/ui";
 
 export default function ScanPage() {
   return (
@@ -55,12 +62,27 @@ function ScanBody() {
   const { session } = useApp();
   const [d, setD] = React.useState<ScanDetail | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [sev, setSev] = React.useState<{
+    counts: Partial<Record<Severity, number>>;
+    seen: number;
+    partial: boolean;
+  } | null>(null);
 
   React.useEffect(() => {
     if (!session?.authenticated || !scanId) return;
     setD(null);
     setError(null);
+    setSev(null);
     api.scan(scanId).then(setD, (e: Error) => setError(e.message));
+    // Severity is COUNTED from the findings the API returns; nothing is derived.
+    api.findings(scanId, { per_page: 500 }).then(
+      (r) => {
+        const counts: Partial<Record<Severity, number>> = {};
+        for (const f of r.findings) counts[f.severity] = (counts[f.severity] ?? 0) + 1;
+        setSev({ counts, seen: r.findings.length, partial: r.findings.length < r.unfiltered_total });
+      },
+      () => undefined,
+    );
   }, [scanId, session?.authenticated]);
 
   if (!scanId) {
@@ -102,10 +124,6 @@ function ScanBody() {
 
   const verdict = d.verdict.toLowerCase() as "accept" | "review" | "quarantine";
   const contributors = (d.contributor_risk ?? []).slice(0, 8);
-  const ciScale = Math.max(
-    ...((d.contributor_risk ?? []).map((r) => r.ci_high) || [1]),
-    0.0001,
-  );
 
   return (
     <Shell
@@ -184,6 +202,60 @@ function ScanBody() {
             </div>
           </div>
         </Panel>
+      </Section>
+
+      {/* AT A GLANCE — every figure below is counted from what the report states. */}
+      <Section delay={0.02}>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <ChartCard title="Effective disposition" note="after human decisions">
+            <Donut
+              stack
+              centerValue={d.n_findings}
+              centerLabel="findings"
+              data={[
+                { key: "quarantine", label: "quarantine", value: d.effective.quarantine ?? 0, tone: "quarantine" },
+                { key: "review", label: "review", value: d.effective.review ?? 0, tone: "review" },
+                { key: "accept", label: "accept", value: d.effective.accept ?? 0, tone: "accept" },
+                ...(d.effective.pending
+                  ? [{ key: "pending", label: "pending approval", value: d.effective.pending, tone: "pending" as const }]
+                  : []),
+              ]}
+            />
+          </ChartCard>
+          <ChartCard
+            title="By severity"
+            note={sev && sev.partial ? `first ${sev.seen} of ${d.n_findings}` : "impact if true"}
+          >
+            {sev ? (
+              <BarList
+                data={SEVERITY_ORDER.map((s) => ({ key: s, label: s, value: sev.counts[s] ?? 0 }))}
+              />
+            ) : (
+              <div className="shimmer h-32 rounded-lg" aria-hidden />
+            )}
+          </ChartCard>
+          <ChartCard title="Check plan" note="what ran, and what did not">
+            <ProportionBar
+              segments={[
+                { key: "ok", label: "ran", value: d.plan.filter((p) => p.state === "OK").length, tone: "accent" },
+                { key: "deg", label: "degraded", value: d.plan.filter((p) => p.state === "DEGRADED").length, tone: "absent" },
+                { key: "un", label: "unavailable", value: d.plan.filter((p) => p.state === "UNAVAILABLE").length, tone: "absent" },
+                { key: "err", label: "error", value: d.plan.filter((p) => p.state === "ERROR").length, tone: "quarantine" },
+              ]}
+            />
+            <p className="mt-3 text-xs text-ink-muted">
+              Hatched is a check that did not run. It is never drawn faded: absence of
+              evidence is not evidence of absence.
+            </p>
+          </ChartCard>
+          <ChartCard title="Coverage" note="attack classes assessed">
+            <Gauge
+              fraction={d.coverage.assessed_fraction}
+              label="assessed"
+              sub={`${d.coverage.assessed.length} of ${d.coverage.total_attack_classes}`}
+            />
+          </ChartCard>
+        </div>
       </Section>
 
       {/* 2 — ACCESS ASSUMPTIONS */}
@@ -267,6 +339,23 @@ function ScanBody() {
         />
         {contributors.length ? (
           <>
+            <ChartCard
+              title="95% intervals"
+              note="point = posterior · bar = 95% interval · red = excludes its cohort rate"
+              className="mb-4"
+            >
+              <ForestPlot
+                rows={contributors.map((r) => ({
+                  label: `${r.group_value}`,
+                  mean: r.posterior_mean,
+                  lo: r.ci_low,
+                  hi: r.ci_high,
+                  cohort: r.cohort_rate_used,
+                  excludes: Boolean(r.excludes_cohort_rate),
+                  n: r.n_samples,
+                }))}
+              />
+            </ChartCard>
             {/* Cards on a phone, a table from `md` up — the same split the contributor
                 view uses, through the same component. */}
             <div className="space-y-2 md:hidden">
@@ -274,7 +363,6 @@ function ScanBody() {
                 <ContributorCard
                   key={`${r.group_key}:${r.group_value}`}
                   row={r}
-                  scale={ciScale}
                   showGroupKey
                 />
               ))}
@@ -321,7 +409,6 @@ function ScanBody() {
                         {fixed(r.posterior_mean)}
                       </td>
                       <td className="px-3 py-3">
-                        <CIBar row={r} scale={ciScale} />
                         <span className="font-mono text-2xs text-ink-faint tnum">
                           {fixed(r.ci_low)}–{fixed(r.ci_high)}
                           {r.cohort_rate_used !== undefined

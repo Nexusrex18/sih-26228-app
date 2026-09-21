@@ -1,9 +1,27 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { AlertTriangle, ArrowRight, FileWarning, Loader2 } from "lucide-react";
+import {
+  AlertOctagon,
+  AlertTriangle,
+  ArrowRight,
+  FileWarning,
+  Flag,
+  Loader2,
+  Microscope,
+  Radar,
+  ShieldCheck,
+} from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import * as React from "react";
+import {
+  ChartCard,
+  Donut,
+  Kpi,
+  ProportionBar,
+  StackedDispositionBars,
+} from "@/components/charts";
 import { DispositionChip, HostTime, SealBadge } from "@/components/domain";
 import { Shell, useApp } from "@/components/shell";
 import {
@@ -13,7 +31,6 @@ import {
   Panel,
   Section,
   SectionHead,
-  Stat,
 } from "@/components/ui/primitives";
 import { api } from "@/lib/api";
 import type { ScanSummary } from "@/lib/types";
@@ -36,7 +53,19 @@ export default function ScansPage() {
       .catch((e: Error) => setError(e.message));
   }, [session?.authenticated]);
 
+  const router = useRouter();
+  const [pick, setPick] = React.useState<string | null>(null);
   const readable = (rows ?? []).filter((r) => r.readable);
+  const seal = readable.reduce(
+    (acc, r) => {
+      const s = r.seal?.state;
+      if (s === "sealed") acc.sealed += 1;
+      else if (s === "differs") acc.differs += 1;
+      else acc.not_sealed += 1;
+      return acc;
+    },
+    { sealed: 0, differs: 0, not_sealed: 0 },
+  );
   const totals = readable.reduce(
     (acc, r) => ({
       quarantine: acc.quarantine + r.counts.quarantine,
@@ -87,44 +116,104 @@ export default function ScansPage() {
       {rows && rows.length > 0 ? (
         <>
           <Section>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Panel className="p-4">
-                <Stat label="Scans" value={rows.length} countUp note="indexed on disk" />
-              </Panel>
-              <Panel className="p-4">
-                <Stat
-                  label="Quarantine"
-                  value={totals.quarantine}
-                  tone="quarantine"
-                  countUp
-                  note="findings held across all scans"
-                />
-              </Panel>
-              <Panel className="p-4">
-                <Stat
-                  label="Review"
-                  value={totals.review}
-                  tone="review"
-                  countUp
-                  note="awaiting an analyst"
-                />
-              </Panel>
-              <Panel className="p-4">
-                <Stat
-                  label="Accept"
-                  value={totals.accept}
-                  tone="accept"
-                  countUp
-                  note="routed by rule D7"
-                />
-              </Panel>
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
+              <Kpi index={0} label="Scans" value={rows.length} icon={Radar} note="indexed on disk" />
+              <Kpi
+                index={1}
+                label="Findings"
+                value={totals.quarantine + totals.review + totals.accept}
+                icon={Microscope}
+                note="across every readable report"
+              />
+              <Kpi
+                index={2}
+                label="Quarantine"
+                value={totals.quarantine}
+                icon={AlertOctagon}
+                tone="quarantine"
+                note="held by the tool"
+              />
+              <Kpi
+                index={3}
+                label="Review"
+                value={totals.review}
+                icon={Flag}
+                tone="review"
+                note="awaiting an analyst"
+              />
+              <Kpi
+                index={4}
+                label="Sealed"
+                value={seal.sealed}
+                icon={ShieldCheck}
+                tone="accept"
+                note={`of ${readable.length} reports match their ledger digest`}
+              />
             </div>
           </Section>
 
-          <Section delay={0.05}>
+          <Section delay={0.04}>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.4fr)_minmax(0,1fr)]">
+              <ChartCard
+                title="Findings by disposition"
+                note="as the tool routed them · click to filter the queue"
+              >
+                <Donut
+                  centerValue={totals.quarantine + totals.review + totals.accept}
+                  centerLabel="findings"
+                  active={pick}
+                  onPick={(k) => setPick((p) => (p === k ? null : k))}
+                  data={[
+                    { key: "quarantine", label: "quarantine", value: totals.quarantine, tone: "quarantine" },
+                    { key: "review", label: "review", value: totals.review, tone: "review" },
+                    { key: "accept", label: "accept", value: totals.accept, tone: "accept" },
+                  ]}
+                />
+              </ChartCard>
+              <ChartCard title="Per scan" note="click a bar to open that scan">
+                <StackedDispositionBars
+                  rows={readable.map((r) => ({
+                    key: r.scan_id,
+                    label: r.scan_id.slice(-4),
+                    quarantine: r.counts.quarantine,
+                    review: r.counts.review,
+                    accept: r.counts.accept,
+                  }))}
+                  onPick={(id) => router.push(`/scan?id=${id}`)}
+                />
+              </ChartCard>
+              <ChartCard title="Seal state" note="report on disk vs the ledger's digest">
+                <ProportionBar
+                  segments={[
+                    { key: "sealed", label: "sealed", value: seal.sealed, tone: "accept" },
+                    { key: "differs", label: "differs", value: seal.differs, tone: "quarantine" },
+                    { key: "not_sealed", label: "not sealed", value: seal.not_sealed, tone: "absent" },
+                  ]}
+                />
+                <p className="mt-4 text-xs text-ink-muted">
+                  <strong className="text-ink">Differs</strong> and{" "}
+                  <strong className="text-ink">not sealed</strong> are different facts: one
+                  is a report that changed after sealing, the other a report nobody sealed.
+                </p>
+              </ChartCard>
+            </div>
+          </Section>
+
+          <Section delay={0.08}>
             <SectionHead
               title="Triage queue"
               note="Newest first. The seal badge compares the file on disk with the digest the ledger holds for it."
+              actions={
+                pick ? (
+                  <button
+                    type="button"
+                    onClick={() => setPick(null)}
+                    className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-2xs text-accent"
+                  >
+                    with {pick} · clear
+                  </button>
+                ) : undefined
+              }
             />
 
             {!ledgerReadable ? (
@@ -136,9 +225,15 @@ export default function ScansPage() {
             ) : null}
 
             <div className="space-y-2">
-              {rows.map((r, i) => (
-                <ScanRow key={r.scan_id} row={r} index={i} />
-              ))}
+              {rows
+                .filter(
+                  (r) =>
+                    !pick ||
+                    (r.readable && r.counts[pick as "quarantine" | "review" | "accept"] > 0),
+                )
+                .map((r, i) => (
+                  <ScanRow key={r.scan_id} row={r} index={i} />
+                ))}
             </div>
           </Section>
         </>
@@ -182,7 +277,7 @@ function ScanRow({ row, index }: { row: ScanSummary; index: number }) {
       transition={{ delay: Math.min(index * 0.03, 0.3) }}
     >
       <Link href={`/scan?id=${row.scan_id}`} className="group block">
-        <Panel className="p-4 transition-colors group-hover:border-accent/40">
+        <Panel className="lift p-4 transition-colors group-hover:border-accent/40">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
             <div className="min-w-[13rem]">
               <Eyebrow>scan</Eyebrow>
