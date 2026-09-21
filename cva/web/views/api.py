@@ -267,8 +267,11 @@ def audit() -> Any:
 @bp.post("/scans/<scan_id>/findings/<finding_id>/act")
 @require_login
 def act(scan_id: str, finding_id: str) -> Any:
-    """Same six steps as the form path (plan §5.3). Fails closed; nothing local changes."""
-    from .workflow import REFUSAL_TITLES
+    """The write path (plan §5.3), six steps, and nothing local changes before step 6:
+    authn/role/CSRF (the before-request hook) → validate and build the request, with no
+    local mutation → ask cva-ledgerd → ledgerd checks peercred, schema, role/state and
+    optimistic concurrency → SealedLedger.append, failing closed → refold on ack only.
+    No optimistic UI and no local queue (D-E4)."""
     from ..workflow.fold import FoldRejection, check_admissible
     from ..workflow.ledgerd_client import LedgerRefused, LedgerUnreachable
     from ..workflow.states import LedgerEvent
@@ -434,10 +437,129 @@ def export_ledger() -> Any:
     return jsonify({"ok": True, "path": str(out), "detail": detail})
 
 
+# --- account management (D-E9) ---------------------------------------------------------
+# `admin` manages accounts and holds no workflow rights: one person controlling both
+# identity and decisions is exactly what the separation exists to prevent. Every route
+# checks the role itself so a refusal is JSON, not the HTML error page.
+
+def _admin_only() -> Any | None:
+    account = current_account()
+    if account is None or account.role != "admin":
+        return _refusal("role_not_permitted",
+                        "Managing accounts needs the admin role; your account holds "
+                        f"'{account.role if account else 'none'}'."), 403
+    return None
+
+
+def _accounts_store():
+    from flask import current_app
+    return current_app.extensions["cva_accounts"]
+
+
+def _account_row(a: Any) -> dict[str, Any]:
+    return {"actor_id": a.actor_id, "role": a.role, "disabled": a.disabled}
+
+
+def _accounts_payload(message: str | None = None) -> Any:
+    from ..accounts import MIN_PASSWORD_CHARS, ROLES
+    body: dict[str, Any] = {
+        "accounts": [_account_row(a) for a in _accounts_store().list_accounts()],
+        "roles": list(ROLES),
+        "min_password_chars": MIN_PASSWORD_CHARS,
+    }
+    if message:
+        body["ok"] = True
+        body["message"] = message
+    return jsonify(body)
+
+
+@bp.get("/admin/accounts")
+@require_login
+def admin_accounts() -> Any:
+    refused = _admin_only()
+    return refused if refused is not None else _accounts_payload()
+
+
+@bp.post("/admin/accounts")
+@require_login
+def admin_create_account() -> Any:
+    from ..accounts import AccountError
+
+    refused = _admin_only()
+    if refused is not None:
+        return refused
+    body = request.get_json(silent=True) or {}
+    try:
+        acct = _accounts_store().create(str(body.get("actor_id") or "").strip(),
+                                        str(body.get("password") or ""),
+                                        str(body.get("role") or "viewer").strip())
+    except AccountError as e:
+        return _refusal("account_refused", str(e)), 400
+    return _accounts_payload(f"Created {acct.actor_id} as {acct.role}.")
+
+
+@bp.post("/admin/accounts/<actor_id>")
+@require_login
+def admin_update_account(actor_id: str) -> Any:
+    """One route, one change per request: `role`, `disabled` or `password`.
+
+    A role change, a disable and a password reset each end the user's live sessions
+    (AccountStore bumps the session epoch), so the change binds on their next request.
+    """
+    from ..accounts import AccountError
+
+    refused = _admin_only()
+    if refused is not None:
+        return refused
+    store = _accounts_store()
+    if store.get(actor_id) is None:
+        return _refusal("no_such_account", f"No account {actor_id!r}."), 404
+    body = request.get_json(silent=True) or {}
+    try:
+        if "role" in body:
+            acct = store.set_role(actor_id, str(body["role"]))
+            msg = (f"{acct.actor_id} is now {acct.role}. Their sessions were ended, so the "
+                   "change takes effect on their next request.")
+        elif "disabled" in body:
+            disabled = bool(body["disabled"])
+            store.set_disabled(actor_id, disabled)
+            msg = (f"{actor_id} is {'disabled' if disabled else 'enabled'}. Their past "
+                   "decisions stay in the ledger, which is the point of an append-only "
+                   "record.")
+        elif "password" in body:
+            store.set_password(actor_id, str(body["password"]))
+            msg = f"Password set for {actor_id}; their sessions were ended."
+        else:
+            return _refusal("account_refused",
+                            "Send one of: role, disabled, password."), 400
+    except AccountError as e:
+        return _refusal("account_refused", str(e)), 400
+    return _accounts_payload(msg)
+
+
 # --- shaping --------------------------------------------------------------------------
 
+#: Why a refusal happened, in the analyst's terms. The daemon's `detail` is always shown
+#: as well; this is the heading above it.
+REFUSAL_TITLES = {
+    "ledger_unavailable": "Nothing was recorded — the ledger is not writable",
+    "stale_state": "Someone else acted on this first",
+    "not_permitted": "Your role does not allow this",
+    "four_eyes": "This needs a second person",
+    "no_such_pending": "There is no such change to approve",
+    "unknown_finding": "That finding is not in this report",
+    "justification_required": "A justification is required",
+    "invalid_reason_code": "That reason does not apply to this finding",
+    "not_quarantined": "That asset is not under quarantine",
+    "read_only": "The workflow is read-only",
+    "role_not_permitted": "Your role does not allow this",
+    "export_failed": "The export did not complete",
+    "account_refused": "The account change was refused",
+    "no_such_account": "There is no such account",
+}
+
+
 def _refusal(code: str, detail: str) -> Any:
-    from .workflow import REFUSAL_TITLES
     return jsonify({"ok": False, "error": code,
                     "title": REFUSAL_TITLES.get(code, "That action was refused"),
                     "detail": detail,

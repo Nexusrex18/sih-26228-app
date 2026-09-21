@@ -1,5 +1,6 @@
-{# The shell. Autoescape is ON (Flask default) and there is not one `|safe` on
-   report-derived data anywhere in this template set — S1's whole point. #}
+{# The shell for the only server-rendered pages left: sign-in, errors, and the evidence
+   route's "not served" page. The dashboard itself is the Next.js app at /app/.
+   Autoescape is ON (Flask default) and there is no `|safe` anywhere — S1's whole point. #}
 <!doctype html>
 <html lang="en">
 <head>
@@ -16,68 +17,16 @@
 <body class="{% block body_class %}{% endblock %}">
 <a class="skiplink" href="#main">Skip to content</a>
 {% block shell %}
-<div class="shell">
-
-  <nav class="rail" aria-label="Sections">
-    <span class="rail-mark" aria-hidden="true">CVA</span>
-    {% if account %}
-    <div class="rail-nav">
-      {% set here = request.endpoint or '' %}
-      <a class="rail-link" href="{{ url_for('main.scans') }}" title="Scans"
-         {% if here == 'main.scans' %}aria-current="page"{% endif %}><span aria-hidden="true">&#9776;</span><span class="visually-hidden"></span></a>
-      <a class="rail-link" href="{{ url_for('audit.index') }}" title="Audit trail"
-         {% if here.startswith('audit.') %}aria-current="page"{% endif %}><span aria-hidden="true">&#8623;</span></a>
-      {% if account.role == 'admin' %}
-      <a class="rail-link" href="{{ url_for('admin.accounts') }}" title="Accounts"
-         {% if here.startswith('admin.') %}aria-current="page"{% endif %}><span aria-hidden="true">&#9787;</span></a>
-      {% endif %}
+<main class="content narrow" id="main">
+  <header class="topbar">
+    <div class="topbar-title">
+      <strong>{% block heading %}CV Integrity Assurance{% endblock %}</strong>
+      <span class="tiny">{% block subheading %}Analyst governance &middot; offline{% endblock %}</span>
     </div>
-    {% endif %}
-    <span class="rail-spacer"></span>
-    <button type="button" class="rail-link" data-theme-toggle aria-label="Switch theme">&#9682;</button>
-  </nav>
-
-  <div class="main">
-    <header class="topbar">
-      <div class="topbar-title">
-        <strong>{% block heading %}CV Integrity Assurance{% endblock %}</strong>
-        <span class="tiny">{% block subheading %}Analyst governance &middot; offline{% endblock %}</span>
-      </div>
-      <div class="topbar-actions">
-        {% block topbar_actions %}{% endblock %}
-        {% if account %}
-          <span class="chip chip-sm" data-glyph="&#9679;" title="Signed in as">{{ account.actor_id }} &middot; {{ account.role }}</span>
-          <form method="post" action="{{ url_for('auth.logout_view') }}" data-no-guard>
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="btn btn-ghost btn-sm">Sign out</button>
-          </form>
-        {% endif %}
-      </div>
-    </header>
-
-    <main class="content{% block content_class %}{% endblock %}" id="main">
-      {% if account and health %}{% include "_trustbanner.html" %}{% endif %}
-      {% block content %}{% endblock %}
-    </main>
-  </div>
-</div>
+  </header>
+  {% block content %}{% endblock %}
+</main>
 {% endblock %}
-
-{% with messages = get_flashed_messages(with_categories=true) %}
-  {% if messages %}
-  <div class="toasts" role="status" aria-live="polite">
-    {% for category, payload in messages %}
-      {% set kind = payload[0] if payload is not string else 'ok' %}
-      {% set text = payload[1] if payload is not string else payload %}
-      <div class="toast toast-{{ kind }}">
-        <span aria-hidden="true">{{ {'ok':'✓','recorded':'✓','failed':'✕','unavailable':'◍','deduped':'⟲'}.get(kind, '•') }}</span>
-        <span>{{ text }}</span>
-      </div>
-    {% endfor %}
-  </div>
-  {% endif %}
-{% endwith %}
-
 <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

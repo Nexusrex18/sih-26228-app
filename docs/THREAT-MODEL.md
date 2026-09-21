@@ -55,7 +55,7 @@ compromising it gains as little as possible.
 
 | # | Control | How it holds | Test |
 |---|---|---|---|
-| S1 | Report content is inert | Jinja autoescape everywhere, no `|safe` on report data; React escapes by default and nothing uses `dangerouslySetInnerHTML` | `test_hostile_report_content.py` parses every page for event-handler attributes and inline script |
+| S1 | Report content is inert | Report content is rendered only by React, which escapes by default, and nothing uses `dangerouslySetInnerHTML`. The one server-rendered page (sign-in, plus error pages) is autoescaped with no `|safe` | `tests/e2e/test_spa_content.py` loads the hostile fixture in a real browser and asserts it appears as text, injects no element and runs no handler; `test_hostile_report_content.py` parses the server pages for handlers and inline script, including a failed sign-in that reflects a hostile account name |
 | S2 | Strict CSP, `nosniff`, `no-store` on authenticated pages | set by one after-request hook; the SPA's CSP adds `'unsafe-inline'` only because a static export inlines its bootstrap | `test_headers_and_csrf.py` |
 | S3 | Evidence served defensively | `/evidence/<sha256>` only; the hash is recomputed; the type comes from magic bytes; SVG goes out under `sandbox` and is rendered through `<img>`; anything unknown is an attachment | `test_hostile_report_content.py` |
 | S4 | No user path reaches the filesystem | only a validated `scan_id` and a 64-hex digest ever become a path | traversal and malformed-digest tests |

@@ -5,11 +5,11 @@ import pytest
 
 from cva.web.security import CSP, SPA_CSP, origin_ok
 
-from tests.web.conftest import post, sign_in
+from tests.web.conftest import sign_in
 
 
 def test_every_security_header_is_present(signed_in):
-    h = signed_in.get("/").headers
+    h = signed_in.get("/api/session").headers
     assert h["Content-Security-Policy"] == CSP
     assert h["X-Content-Type-Options"] == "nosniff"
     assert h["Referrer-Policy"] == "same-origin"
@@ -19,7 +19,7 @@ def test_every_security_header_is_present(signed_in):
 
 def test_the_csp_admits_no_external_origin(signed_in):
     """The property the air-gap claim rests on: nothing may be fetched from anywhere else."""
-    csp = signed_in.get("/").headers["Content-Security-Policy"]
+    csp = signed_in.get("/api/session").headers["Content-Security-Policy"]
     for directive in csp.split(";"):
         for token in directive.split()[1:]:
             assert token in ("'self'", "'none'", "data:", "blob:"), \
@@ -38,9 +38,11 @@ def test_the_spa_csp_also_admits_no_external_origin():
                 f"{token!r} in {directive.strip()!r} reaches outside this origin"
 
 
-def test_the_strict_csp_never_allows_inline_script(signed_in):
-    assert "'unsafe-inline'" not in signed_in.get("/").headers["Content-Security-Policy"]
-    assert "'unsafe-eval'" not in signed_in.get("/").headers["Content-Security-Policy"]
+def test_the_strict_csp_never_allows_inline_script(client):
+    """The sign-in page is the one server-rendered page left, and it gets the strict CSP."""
+    csp = client.get("/login").headers["Content-Security-Policy"]
+    assert "'unsafe-inline'" not in csp
+    assert "'unsafe-eval'" not in csp
 
 
 # --- S7: Origin / Referer ----------------------------------------------------------------
@@ -84,7 +86,7 @@ def test_a_login_post_succeeds_end_to_end(client):
     """The case the defect broke: sign in through the real form path."""
     resp = sign_in(client)
     assert resp.status_code in (302, 303)
-    assert client.get("/").status_code == 200
+    assert client.get("/api/session").get_json()["authenticated"] is True
 
 
 def test_no_page_overrides_the_referrer_policy_back_to_no_referrer(client):
@@ -102,36 +104,37 @@ def test_no_page_overrides_the_referrer_policy_back_to_no_referrer(client):
 
 
 # --- S7: the token ------------------------------------------------------------------------
+# The write surface is /api, whose client sends the token in `X-CSRF-Token`. The same
+# before-request check covers it and the sign-in form alike.
 
-def test_a_post_without_a_csrf_token_is_refused(signed_in, scan_id, app):
+def _act_url(app, scan_id) -> str:
     from cva.web.reports.loader import load
     fid = load(app.config["CVA"].reports_dir, scan_id).findings[0]["finding_id"]
-    resp = signed_in.post(
-        f"/scans/{scan_id}/findings/{fid}/act",
-        data={"action": "acknowledge"},
-        headers={"Origin": "http://localhost", "Host": "localhost"})
+    return f"/api/scans/{scan_id}/findings/{fid}/act"
+
+
+def _token(client) -> str:
+    return client.get("/api/session").get_json()["csrf_token"]
+
+
+def test_a_post_without_a_csrf_token_is_refused(signed_in, scan_id, app):
+    resp = signed_in.post(_act_url(app, scan_id), json={"action": "acknowledge"},
+                          headers={"Origin": "http://localhost", "Host": "localhost"})
     assert resp.status_code == 403
     assert b"CSRF" in resp.data
 
 
 def test_a_post_with_a_wrong_csrf_token_is_refused(signed_in, scan_id, app):
-    from cva.web.reports.loader import load
-    fid = load(app.config["CVA"].reports_dir, scan_id).findings[0]["finding_id"]
-    resp = signed_in.post(
-        f"/scans/{scan_id}/findings/{fid}/act",
-        data={"action": "acknowledge", "csrf_token": "not-the-token"},
-        headers={"Origin": "http://localhost", "Host": "localhost"})
+    resp = signed_in.post(_act_url(app, scan_id), json={"action": "acknowledge"},
+                          headers={"Origin": "http://localhost", "Host": "localhost",
+                                   "X-CSRF-Token": "not-the-token"})
     assert resp.status_code == 403
 
 
 def test_a_post_from_another_origin_is_refused(signed_in, scan_id, app):
-    from cva.web.reports.loader import load
-    from tests.web.conftest import _csrf
-    fid = load(app.config["CVA"].reports_dir, scan_id).findings[0]["finding_id"]
-    resp = signed_in.post(
-        f"/scans/{scan_id}/findings/{fid}/act",
-        data={"action": "acknowledge", "csrf_token": _csrf(signed_in)},
-        headers={"Origin": "http://evil.example", "Host": "localhost"})
+    resp = signed_in.post(_act_url(app, scan_id), json={"action": "acknowledge"},
+                          headers={"Origin": "http://evil.example", "Host": "localhost",
+                                   "X-CSRF-Token": _token(signed_in)})
     assert resp.status_code == 403
     assert b"did not come from this dashboard" in resp.data
 
@@ -149,9 +152,9 @@ def test_the_session_cookie_carries_the_right_flags(client):
 def test_a_role_change_ends_the_users_live_sessions(app, client):
     """S6: a demoted approver must not keep approving on a cookie issued a minute ago."""
     sign_in(client, "b.rao")
-    assert client.get("/").status_code == 200
+    assert client.get("/api/scans").status_code == 200
     app.extensions["cva_accounts"].set_role("b.rao", "viewer")
-    resp = client.get("/")
+    resp = client.get("/api/scans")
     assert resp.status_code in (302, 303)
     assert "/login" in resp.headers["Location"]
 
@@ -159,21 +162,17 @@ def test_a_role_change_ends_the_users_live_sessions(app, client):
 def test_a_disabled_account_is_logged_out_at_once(app, client):
     sign_in(client, "v.iyer")
     app.extensions["cva_accounts"].set_disabled("v.iyer", True)
-    resp = client.get("/")
+    resp = client.get("/api/scans")
     assert resp.status_code in (302, 303)
 
 
 # --- S12 ------------------------------------------------------------------------------------
 
 def test_an_oversize_body_is_refused(signed_in, scan_id, app):
-    from cva.web.reports.loader import load
-    from tests.web.conftest import _csrf
-    fid = load(app.config["CVA"].reports_dir, scan_id).findings[0]["finding_id"]
-    resp = signed_in.post(
-        f"/scans/{scan_id}/findings/{fid}/act",
-        data={"action": "override", "csrf_token": _csrf(signed_in),
-              "justification": "x" * 200_000},
-        headers={"Origin": "http://localhost", "Host": "localhost"})
+    resp = signed_in.post(_act_url(app, scan_id),
+                          json={"action": "override", "justification": "x" * 200_000},
+                          headers={"Origin": "http://localhost", "Host": "localhost",
+                                   "X-CSRF-Token": _token(signed_in)})
     assert resp.status_code == 413
 
 

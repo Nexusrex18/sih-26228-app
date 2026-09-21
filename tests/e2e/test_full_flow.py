@@ -140,13 +140,21 @@ def test_the_spa_refuses_an_anonymous_visitor(stack):
     assert r.status in (302, 303)
 
 
-def test_the_server_rendered_fallback_pages_load(stack, browser_for):
+def test_the_old_server_rendered_paths_redirect_into_the_dashboard(stack, browser_for):
+    """The server-rendered dashboard is gone; its bookmarks land on the SPA page that
+    replaced each one, against the real server."""
     b = browser_for("a.sharma")
-    for path in ("/", f"/scans/{RICH}", f"/scans/{RICH}/findings",
-                 f"/scans/{RICH}/contributors", f"/scans/{RICH}/provenance",
-                 f"/scans/{RICH}/coverage", "/audit/", "/audit/verification"):
-        r = b.visit(path)
-        assert r.status == 200, (path, r.status)
+    for old, new in (("/", "/app/"), (f"/scans/{RICH}", f"/app/scan/?id={RICH}"),
+                     (f"/scans/{RICH}/findings", f"/app/findings/?id={RICH}"),
+                     (f"/scans/{RICH}/contributors", f"/app/contributors/?id={RICH}"),
+                     (f"/scans/{RICH}/provenance", f"/app/provenance/?id={RICH}"),
+                     (f"/scans/{RICH}/coverage", f"/app/coverage/?id={RICH}"),
+                     ("/audit/", "/app/audit/"),
+                     ("/audit/verification", "/app/verification/"),
+                     ("/admin/accounts", "/app/accounts/")):
+        r = b.visit(old)
+        assert r.status == 302 and r.headers["location"].endswith(new), (old, r.status,
+                                                                        r.headers)
 
 
 # --- 3. the data every page reads ----------------------------------------------------------

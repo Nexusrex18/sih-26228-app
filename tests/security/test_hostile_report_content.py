@@ -3,12 +3,14 @@
 The dataset supplier is an adversary by premise, and everything derived from their data —
 a contributor name, a file name, a category, an evidence file — reaches this dashboard as a
 string someone else chose. `cva/web/fixtures.py:HOSTILE_STRINGS` puts that premise in the
-fixtures; this file is the assertion half that was missing.
+fixtures.
 
-What is being tested is not "the strings appear somewhere". It is that they appear INERT:
-the markup they contain is text, the template language they mimic is not evaluated, the
-evidence route never takes a path from them, and an SVG they control is never inlined into
-the dashboard's DOM.
+Report content is rendered by the Next.js dashboard now, so the S1 assertions that it
+appears INERT — as text, never as an element or an evaluated template — run in a real
+browser: tests/e2e/test_spa_content.py. This file keeps what is testable at the HTTP layer:
+the server-rendered pages that remain (sign-in, error, evidence-not-served) carry no inline
+script or handler and reflect nothing unescaped; the API hands out data, never markup; no
+React source uses `dangerouslySetInnerHTML`; and the evidence route (S3, S4).
 """
 from __future__ import annotations
 
@@ -21,11 +23,6 @@ from cva.web.fixtures import HOSTILE_STRINGS
 from cva.web.security import EVIDENCE_CSP, SVG_TYPE
 
 from tests.web.conftest import sign_in  # noqa: F401  (fixtures come from conftest)
-
-#: Every server-rendered page that can carry report-derived content.
-PAGES = ("/scans/{scan}", "/scans/{scan}/contributors", "/scans/{scan}/findings",
-         "/scans/{scan}/provenance", "/scans/{scan}/coverage",
-         "/scans/{scan}/reproduction", "/audit/")
 
 
 def _dangerous_markup(html: str) -> tuple[list[str], bool]:
@@ -58,74 +55,52 @@ def _dangerous_markup(html: str) -> tuple[list[str], bool]:
     return p.handlers, p.inline_script
 
 
-def _pages(client, scan_id):
-    for url in PAGES:
-        resp = client.get(url.format(scan=scan_id))
-        assert resp.status_code == 200, f"{url}: {resp.status_code}"
-        yield url, resp.get_data(as_text=True)
+def _server_pages(client) -> list[tuple[str, str]]:
+    """Every server-rendered page left, including a sign-in that fails with a hostile
+    account name — the one place a user-chosen string is reflected into server HTML."""
+    out = [("/login", client.get("/login").get_data(as_text=True))]
+    hostile = HOSTILE_STRINGS["contributor"] + HOSTILE_STRINGS["file"]
+    failed = client.post("/login", data={"actor_id": hostile, "password": "x",
+                                         "csrf_token": _form_token(client)},
+                         headers={"Origin": "http://localhost", "Host": "localhost"})
+    out.append(("/login (failed, hostile name)", failed.get_data(as_text=True)))
+    out.append(("/no-such-page", client.get("/no-such-page").get_data(as_text=True)))
+    return out
 
 
-# --- S1: autoescaping ---------------------------------------------------------------------
-
-def test_the_hostile_contributor_name_is_rendered_as_text_not_as_an_element(signed_in,
-                                                                           scan_id):
-    """`<img src=x onerror=alert(1)>` must arrive escaped. If the raw tag appears anywhere,
-    a contributor has injected an element into an analyst's browser."""
-    raw = HOSTILE_STRINGS["contributor"]
-    seen_escaped = False
-    for url, html in _pages(signed_in, scan_id):
-        assert raw not in html, f"{url}: the raw tag reached the document"
-        if "&lt;img src=x onerror=alert(1)&gt;" in html:
-            seen_escaped = True
-    assert seen_escaped, "the hostile contributor must be SHOWN, escaped — not dropped"
+def _form_token(client) -> str:
+    html = client.get("/login").get_data(as_text=True)
+    return re.search(r'name="csrf_token"\s+value="([^"]+)"', html).group(1)
 
 
-def test_no_page_carries_an_inline_script_or_an_event_handler_attribute(signed_in, scan_id):
+# --- S1 on the server-rendered pages that remain -------------------------------------------
+
+def test_no_server_page_carries_an_inline_script_or_an_event_handler_attribute(client):
     """S1's structural half. The strict CSP forbids both; this fails at the template rather
-    than relying on the browser to enforce it.
-
-    Parsed, not grepped. `value="&lt;img src=x onerror=alert(1)&gt;"` contains the
-    characters of an event handler and is the CORRECT rendering of a hostile contributor
-    name — a regex cannot tell that from an attribute, and the parser can.
-    """
-    for url, html in _pages(signed_in, scan_id):
+    than relying on the browser to enforce it. Parsed, not grepped: an escaped hostile
+    string contains the characters of a handler and is the CORRECT rendering."""
+    for url, html in _server_pages(client):
         handlers, inline_scripts = _dangerous_markup(html)
         assert not handlers, f"{url}: event-handler attributes {handlers}"
         assert not inline_scripts, f"{url}: inline script"
 
 
-def test_the_hostile_file_name_cannot_close_an_attribute(signed_in, scan_id):
-    raw = HOSTILE_STRINGS["file"]
-    for url, html in _pages(signed_in, scan_id):
-        assert raw not in html, f"{url}: `\"><script>` reached the document unescaped"
+def test_a_hostile_account_name_is_reflected_escaped_on_a_failed_sign_in(client):
+    """A failed sign-in keeps the typed account name. If it were reflected raw, the sign-in
+    page would be a reflected-XSS vector for anyone who can send a link."""
+    for url, html in _server_pages(client):
+        assert HOSTILE_STRINGS["contributor"] not in html, url
         assert "<script>alert(2)" not in html, url
-
-
-def test_the_template_expression_in_a_category_is_never_evaluated(signed_in, scan_id):
-    """`{{7*7}}` is server-side template injection's canary. It must render as five
-    characters and never as 49."""
-    found = False
-    for url, html in _pages(signed_in, scan_id):
-        # The verbatim five characters on the page ARE the proof: an evaluated template
-        # would have replaced them. (A bare "49" check was flaky — the trust banner's
-        # host-clock timestamp contains 49 one minute in sixty.)
-        if HOSTILE_STRINGS["category"] in html:
-            found = True
-    assert found, "the hostile category must be shown verbatim somewhere"
-
-
-def test_a_javascript_url_never_becomes_an_href(signed_in, scan_id):
-    for url, html in _pages(signed_in, scan_id):
         assert not re.search(r'href\s*=\s*["\']?\s*javascript:', html, re.I), url
 
 
 def test_the_sql_shaped_batch_name_is_a_string_not_a_statement(signed_in, scan_id):
     """The index is SQLite and the batch name contains `';DROP TABLE findings;--`. If it
-    were interpolated rather than bound, the findings page would fail to load at all."""
-    resp = signed_in.get(f"/scans/{scan_id}/findings")
-    assert resp.status_code == 200
+    were interpolated rather than bound, the findings query would fail outright."""
+    resp = signed_in.get(f"/api/scans/{scan_id}/findings")
+    assert resp.status_code == 200 and resp.get_json()["total"] > 0
     # And the table is still there afterwards.
-    assert signed_in.get(f"/scans/{scan_id}/contributors").status_code == 200
+    assert signed_in.get(f"/api/scans/{scan_id}/findings").get_json()["total"] > 0
 
 
 def test_the_json_api_escapes_nothing_and_the_client_must_do_it(signed_in, scan_id):
@@ -211,10 +186,13 @@ def test_an_svg_is_served_sandboxed_and_never_inlined(signed_in, config):
     assert resp.headers["Content-Security-Policy"].startswith("sandbox")
     assert resp.headers["X-Content-Type-Options"] == "nosniff"
 
-    # The dashboard must reference it, never embed it.
-    page = signed_in.get(f"/evidence/{digest}/about").get_data(as_text=True)
-    assert "<svg" not in page.lower()
-    assert "alert(1)" not in page
+    # Its description is data about the file, never the file: nothing of the SVG is echoed.
+    about = signed_in.get(f"/evidence/{digest}/about")
+    assert about.mimetype == "application/json"
+    assert about.get_json()["content_type"] == SVG_TYPE
+    assert about.get_json()["hash_verified"] is True
+    assert "<svg" not in about.get_data(as_text=True).lower()
+    assert "alert(1)" not in about.get_data(as_text=True)
 
 
 def test_a_polyglot_is_typed_by_its_magic_bytes_not_its_content(signed_in, config):

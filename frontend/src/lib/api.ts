@@ -6,6 +6,7 @@ import type {
   Health,
   PlanRow,
   Refusal,
+  Role,
   ScanDetail,
   ScanSummary,
   Session,
@@ -182,4 +183,37 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  /* Account management — admin role only; the server refuses anyone else. */
+  accounts: () => request<AccountsPayload>("/admin/accounts"),
+
+  createAccount: (body: { actor_id: string; role: Role; password: string }) =>
+    request<AccountsPayload>("/admin/accounts", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** Exactly one change per call: a role, enable/disable, or a new password. */
+  updateAccount: (
+    actorId: string,
+    change: { role: Role } | { disabled: boolean } | { password: string },
+  ) =>
+    request<AccountsPayload>(`/admin/accounts/${encodeURIComponent(actorId)}`, {
+      method: "POST",
+      body: JSON.stringify(change),
+    }),
 };
+
+export interface AccountRow {
+  actor_id: string;
+  role: Role;
+  disabled: boolean;
+}
+
+export interface AccountsPayload {
+  accounts: AccountRow[];
+  roles: Role[];
+  min_password_chars: number;
+  ok?: true;
+  message?: string;
+}

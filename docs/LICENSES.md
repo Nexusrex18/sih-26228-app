@@ -257,6 +257,18 @@ These are compiled into the static export under `frontend/out/`. Development dep
 | use-sidecar | 1.1.3 | MIT |
 | victory-vendor | 36.9.2 | MIT AND ISC |
 
-## Server-rendered view assets (fonts, icons)
+## Sign-in page assets (fonts)
 
-*`scripts/vendor_web_assets.py` has not been run for this build, so no fonts or icon files are vendored. The server-rendered views fall back to system fonts. No asset is fetched from a CDN at runtime either way.*
+The sign-in page is the one server-rendered page. Its fonts are IBM Plex files copied from the `@fontsource` packages listed above (OFL-1.1) and served from this origin; nothing is fetched from a CDN.
+
+| File | Licence | sha256 (first 16) |
+|---|---|---|
+| `cva/web/static/fonts/ibm-plex-mono-latin-400-normal.woff2` | OFL-1.1 (IBM Plex) | `08949f728dc52d52` |
+| `cva/web/static/fonts/ibm-plex-mono-latin-500-normal.woff2` | OFL-1.1 (IBM Plex) | `01d285447409c8a5` |
+| `cva/web/static/fonts/ibm-plex-sans-condensed-latin-500-normal.woff2` | OFL-1.1 (IBM Plex) | `e3b4fd97fd20bc70` |
+| `cva/web/static/fonts/ibm-plex-sans-condensed-latin-600-normal.woff2` | OFL-1.1 (IBM Plex) | `3d72a0923c583035` |
+| `cva/web/static/fonts/ibm-plex-sans-latin-400-normal.woff2` | OFL-1.1 (IBM Plex) | `3b646991d30055a9` |
+| `cva/web/static/fonts/ibm-plex-sans-latin-500-normal.woff2` | OFL-1.1 (IBM Plex) | `0717336fb31fcdcd` |
+| `cva/web/static/fonts/ibm-plex-sans-latin-600-normal.woff2` | OFL-1.1 (IBM Plex) | `8960851d691c054e` |
+
+*`scripts/vendor_web_assets.py` has not been run for this build; no other font or icon files are vendored.*

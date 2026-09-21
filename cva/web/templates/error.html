@@ -2,7 +2,6 @@
 {% block title %}{{ title }}{% endblock %}
 {% block heading %}{{ title }}{% endblock %}
 {% block subheading %}{{ code }}{% endblock %}
-{% block content_class %} narrow{% endblock %}
 
 {% block content %}
 <section class="block">
@@ -11,8 +10,7 @@
       <span class="stat-value">{{ code }}</span></div>
     <p class="lede">{{ detail }}</p>
     <div class="row">
-      <a class="btn" href="{{ url_for('main.scans') }}">Back to scans</a>
-      {% if request.referrer %}<a class="btn btn-ghost" href="{{ request.referrer }}">Back</a>{% endif %}
+      <a class="btn" href="/app/">Go to the dashboard</a>
     </div>
   </div>
 </section>

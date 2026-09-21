@@ -141,7 +141,9 @@ reflects what could be checked.
 
 ## 9. Open the dashboard
 
-<http://127.0.0.1:8713/app/>. The server-rendered fallback is at <http://127.0.0.1:8713/>.
+<http://127.0.0.1:8713/app/>. Opening <http://127.0.0.1:8713/> or /login signs you in and
+lands you there. Sign out is at the bottom of the side rail. The admin role manages
+accounts at /app/accounts/.
 
 **Healthy** means:
 

@@ -18,7 +18,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, render_template
+from flask import Blueprint, Response, jsonify, render_template
 
 from .. import services
 from ..auth import require_login
@@ -88,9 +88,11 @@ def serve(digest: str) -> Any:
 @bp.get("/evidence/<digest>/about")
 @require_login
 def about(digest: str) -> Any:
-    """What this file is, before an analyst decides to open it."""
+    """What this file is, before an analyst decides to open it — as data. The content is
+    described, never embedded: an SVG is reported as `image/svg+xml`, not inlined."""
     if not EVIDENCE_HASH_RE.fullmatch(digest or ""):
-        return _placeholder(digest, "not a 64-character lowercase hex digest"), 400
+        return jsonify({"error": "bad_digest",
+                        "detail": "not a 64-character lowercase hex digest"}), 400
     path = evidence_path(digest)
     exists = path.is_file()
     size = path.stat().st_size if exists else 0
@@ -100,8 +102,8 @@ def about(digest: str) -> Any:
         data = path.read_bytes()
         ctype = sniff(data)[0]
         verified = hashlib.sha256(data).hexdigest() == digest
-    return render_template("evidence_about.html", digest=digest, exists=exists, size=size,
-                           ctype=ctype, verified=verified)
+    return jsonify({"digest": digest, "exists": exists, "size": size,
+                    "content_type": ctype, "hash_verified": verified})
 
 
 def _placeholder(digest: str, reason: str) -> Response:

@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertOctagon, ArrowLeft, Loader2 } from "lucide-react";
+import { AlertOctagon, ArrowLeft, CircleDashed, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import * as React from "react";
@@ -143,6 +143,23 @@ function ScanBody() {
             title="This report differs from the digest the ledger sealed"
           >
             {d.seal.detail}
+          </Banner>
+        </div>
+      ) : null}
+
+      {/* Plan §7.2: a scan whose checks ALL failed to run leads with that fact, before
+          anything that could read as a result. Counting what the plan says, not judging. */}
+      {d.plan.length > 0 && d.plan.every((p) => p.state !== "OK") ? (
+        <div className="mb-6">
+          <Banner
+            tone="absent"
+            icon={CircleDashed}
+            title="No check ran for this scan"
+          >
+            <p>
+              Every check in the plan was UNAVAILABLE, DEGRADED or ERROR. A short report here
+              is a small statement, not a clean one.
+            </p>
           </Banner>
         </div>
       ) : null}
@@ -525,6 +542,21 @@ function ScanBody() {
               <Hash value={d.report_sha256} />
             </dd>
           </dl>
+        </Panel>
+      </Section>
+
+      {/* Remediation is reported as content, not offered as a button that would fail
+          (plan §0, N5). What a re-scan of a remediated dataset would establish is what it
+          checked — never that the data is fixed. */}
+      <Section delay={0.22}>
+        <SectionHead title="Remediation" />
+        <Panel hatched className="p-4">
+          <p className="max-w-[75ch] text-sm text-ink-muted">
+            <code className="font-mono text-xs">cva remediate</code> is absent from this
+            build, so no remediation can be requested here. When it exists, its output is a
+            new artefact with its own digest that is re-scanned, and the result is a
+            statement about what that re-scan checked, not about the data.
+          </p>
         </Panel>
       </Section>
     </Shell>

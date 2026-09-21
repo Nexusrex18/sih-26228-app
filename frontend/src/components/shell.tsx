@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   ShieldQuestion,
   Sun,
+  Users,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
@@ -129,6 +130,13 @@ const NAV = [
 function Rail() {
   const pathname = usePathname();
   const { theme, toggle } = useTheme();
+  const { session } = useApp();
+  // Accounts is the admin's page and only the admin's: the admin role manages identities
+  // and holds no workflow rights, and nobody else may manage identities (D-E9).
+  const nav =
+    session?.role === "admin"
+      ? [...NAV, { href: "/accounts", label: "Accounts", icon: Users }]
+      : NAV;
   return (
     <nav
       aria-label="Sections"
@@ -146,7 +154,7 @@ function Rail() {
         />
       </Link>
       <div className="flex gap-1 md:flex-col">
-        {NAV.map(({ href, label, icon: Icon }) => {
+        {nav.map(({ href, label, icon: Icon }) => {
           const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
           return (
             <Link

@@ -219,3 +219,52 @@ def test_a_decision_taken_entirely_through_the_ui_reaches_the_ledger(stack, brow
         assert not w.errors, w.errors
     finally:
         page.context.close()
+
+
+@pytest.mark.parametrize("viewport", ["desktop", "phone"])
+def test_the_accounts_page_renders_for_the_admin(stack, browser, viewport):
+    """The page ported from the old server-rendered admin screen: it renders, lists the
+    issued accounts, and the admin issues one through the form."""
+    phone = viewport == "phone"
+    w = _open(browser, phone=phone)
+    page = w.page
+    try:
+        _sign_in(w, stack.base, "root.admin")
+        problems = _check_page(w, f"{stack.base}/app/accounts/", "Issued accounts",
+                               SCREENS / viewport / "accounts.png", phone=phone)
+        assert not problems, "\n".join(problems)
+        body = page.inner_text("body")
+        assert "a.sharma" in body and "b.rao" in body
+        if not phone:
+            name = "ui.issued.00"
+            page.get_by_placeholder("e.g. Tan.00").fill(name)
+            page.locator("form input[type=password]").last.fill("issued-pass-1")
+            page.get_by_role("button", name="Issue account").click()
+            page.get_by_text(name).first.wait_for()
+            assert not w.errors, w.errors
+    finally:
+        page.context.close()
+
+
+def test_the_accounts_page_is_refused_to_everyone_but_the_admin(stack, browser):
+    w = _open(browser)
+    try:
+        _sign_in(w, stack.base, "a.sharma")
+        assert w.page.locator('a[href="/app/accounts/"], a[href="/app/accounts"]').count() == 0
+        w.page.goto(f"{stack.base}/app/accounts/")
+        w.page.get_by_text("This page is for the admin role").wait_for()
+    finally:
+        w.page.context.close()
+
+
+def test_sign_out_from_the_dashboard_ends_the_session(stack, browser):
+    w = _open(browser)
+    page = w.page
+    try:
+        _sign_in(w, stack.base, "v.iyer")
+        page.get_by_role("button", name="Sign out").click()
+        page.wait_for_url("**/login**")
+        page.goto(f"{stack.base}/app/")
+        page.wait_for_url("**/login**")
+    finally:
+        page.context.close()

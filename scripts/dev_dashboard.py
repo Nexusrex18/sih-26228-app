@@ -138,7 +138,6 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print(f"  dashboard  http://127.0.0.1:{a.port}/app/"
           + ("" if spa.is_dir() else "   [NOT BUILT — run `npm --prefix frontend run build`]"))
-    print(f"  fallback   http://127.0.0.1:{a.port}/       (server-rendered)")
     print(f"  sign in    Tan.00 / {DEMO_PASSWORD}   (b.rao is the approver)")
     print()
 

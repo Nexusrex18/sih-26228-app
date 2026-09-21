@@ -21,6 +21,7 @@ the ones §7.10 says must be stated in words, and they are marked as such in the
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -195,12 +196,19 @@ def render() -> str:
     out.append("")
 
     web = web_asset_rows()
-    out += ["## Server-rendered view assets (fonts, icons)", ""]
+    out += ["## Sign-in page assets (fonts)", ""]
+    fonts = sorted((ROOT / "cva" / "web" / "static" / "fonts").glob("*.woff2"))
+    if fonts:
+        out += ["The sign-in page is the one server-rendered page. Its fonts are IBM Plex "
+                "files copied from the `@fontsource` packages listed above (OFL-1.1) and "
+                "served from this origin; nothing is fetched from a CDN.", "",
+                "| File | Licence | sha256 (first 16) |", "|---|---|---|"]
+        out += [f"| `cva/web/static/fonts/{f.name}` | OFL-1.1 (IBM Plex) | "
+                f"`{hashlib.sha256(f.read_bytes()).hexdigest()[:16]}` |" for f in fonts]
+        out.append("")
     if web is None:
-        out.append("*`scripts/vendor_web_assets.py` has not been run for this build, so no "
-                   "fonts or icon files are vendored. The server-rendered views fall back "
-                   "to system fonts. No asset is fetched from a CDN at runtime either "
-                   "way.*")
+        out.append("*`scripts/vendor_web_assets.py` has not been run for this build; no "
+                   "other font or icon files are vendored.*")
     else:
         out += ["| Asset | Path | Licence | sha256 (first 16) |", "|---|---|---|---|"]
         out += [f"| {r['name']} | `{r['path']}` | {r['licence']} | `{r['sha256'][:16]}` |"

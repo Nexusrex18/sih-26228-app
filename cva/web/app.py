@@ -58,20 +58,16 @@ def create_app(config: WebConfig | None = None, **overrides: Any) -> Flask:
 
 
 def _register_blueprints(app: Flask) -> None:
-    from .views import admin, api, audit, evidence, main, remediation, spa, workflow
+    from .views import api, evidence, legacy, spa
     from .views import auth as auth_views
 
+    # Sign-in is the one server-rendered page. The dashboard is the Next.js export at
+    # /app/, reading the JSON API; the old server-rendered paths redirect into it.
     app.register_blueprint(auth_views.bp)
-    app.register_blueprint(main.bp)
     app.register_blueprint(evidence.bp)
-    app.register_blueprint(workflow.bp)
-    app.register_blueprint(audit.bp)
-    app.register_blueprint(remediation.bp)
-    app.register_blueprint(admin.bp)
-    # The Next.js dashboard and the JSON API it reads. Both go through the same
-    # `services.load_scan` as the Jinja views, so the two front ends cannot drift.
     app.register_blueprint(api.bp)
     app.register_blueprint(spa.bp)
+    app.register_blueprint(legacy.bp)
 
 
 def _register_hooks(app: Flask) -> None:
@@ -119,16 +115,11 @@ def _register_hooks(app: Flask) -> None:
 
     @app.context_processor
     def _globals() -> dict[str, Any]:
-        from . import services
         from .auth import current_account as ca
-        from .auth import may
-        account = ca()
         return {
-            "account": account,
-            "may": may,
+            "account": ca(),
             "csrf_token": session.get(SESSION_CSRF, ""),
             "cfg": app.config["CVA"],
-            "health": services.ledger_health() if account else None,
         }
 
 

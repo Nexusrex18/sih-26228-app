@@ -17,8 +17,9 @@ npm --prefix frontend run build        # -> frontend/out/
 
 Then open <http://127.0.0.1:8713/app/> and sign in as `Tan.00` / `12345678`.
 `b.rao` is the **approver** (same password). You need both accounts to exercise four-eyes.
-The server-rendered fallback is at <http://127.0.0.1:8713/>. If port 8713 is taken (a stale
-dev server), pass `--port 8714 --out .scratch/dev8714`.
+Sign-in (`/login`) is the only server-rendered page; every old server-rendered path
+redirects into `/app/` (`cva/web/spa_paths.py`). If port 8713 is taken (a stale dev
+server), pass `--port 8714 --out .scratch/dev8714`.
 
 Tests. Run them in batches: the whole set in one process was killed for memory (exit 137)
 on this machine.
@@ -43,7 +44,7 @@ the socket while the dashboard is running. It needs `frontend/out` built.
 | Gate | State | What exists |
 |---|---|---|
 | **N0** | done | `config.py` (an unknown key is a load error), `fixtures.py` covering every state, with hostile strings |
-| **N1** | done | all **8** Next.js pages: `/`, `/scan`, `/contributors`, `/findings` (+ decide sheet), `/provenance`, `/coverage` (reliability diagram in Recharts; two-scan compare with bars to scale), `/audit` (SeqRail), `/verification` (+ ledger export). The Jinja views remain as the no-script fallback |
+| **N1** | done | 9 Next.js pages: `/`, `/scan`, `/contributors`, `/findings` (+ decide sheet), `/provenance`, `/coverage` (reliability diagram in Recharts; two-scan compare with bars to scale), `/audit` (SeqRail), `/verification` (+ ledger export), `/accounts` (admin only, ported from the old Jinja admin page). The server-rendered dashboard is removed; its paths redirect to the SPA. What each page must show is asserted in a real browser (`tests/e2e/test_spa_content.py`) |
 | **N2** | done | security baseline. The S1/S3/S4 assertions are written now (`tests/security/test_hostile_report_content.py`) |
 | **N3** | done | `cva/ledgerd/` with the per-uid × per-record-type allowlist, four-eyes, `expected_prev_seq` and idempotency |
 | **N4** | done | `cva-seal verify --json` / `export`, the verify bridge, the trust banner. `POST /api/audit/export` for the SPA |
@@ -93,8 +94,8 @@ session that did it. Do that first.
 - **A browser pass at 390px** on all 8 pages.
 - **Rehearse the demo** and fill in `rehearsal-log.md`.
 - **Second reader** for `docs/coverage-standing.yaml`.
-- `scripts/vendor_web_assets.py` has never run (it needs a network). The Jinja views fall
-  back to system fonts until it does, and `LICENSES.md` says so.
+- `scripts/vendor_web_assets.py` has never run (it needs a network) and is now mostly
+  moot: the sign-in page bundles IBM Plex from `@fontsource` in `cva/web/static/fonts/`.
 - The **VERIFICATION-PROCEDURE** covers only what this build's `cva-seal` has. Module C's
   anchors, `explain`, `proof` and independent verifier are not in this repo.
 
