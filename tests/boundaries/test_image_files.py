@@ -85,6 +85,21 @@ def test_the_web_role_publishes_to_host_loopback_in_every_documented_command():
     assert checked, "no port mapping found; the check is not looking at anything"
 
 
+def test_the_dockerignore_admits_exactly_what_the_dockerfile_copies():
+    """The context is the repo root. Without the ignore file the daemon tars .venv and
+    node_modules first; with a stale one, a COPY fails on a file it cannot see."""
+    admitted = {line[1:].strip() for line in (ROOT / ".dockerignore").read_text().splitlines()
+                if line.startswith("!")}
+    sources = set()
+    for line in (DOCKER / "Dockerfile").read_text().splitlines():
+        m = re.match(r"\s*COPY\s+(?!--from)(\S+)\s+\S+", line)
+        if m:
+            sources.add(m.group(1).rstrip("/"))
+    assert sources, "no COPY found; the check is not looking at anything"
+    assert sources == admitted, {"copied, not admitted": sources - admitted,
+                                 "admitted, never copied": admitted - sources}
+
+
 def test_the_image_bakes_no_key():
     dockerfile = (DOCKER / "Dockerfile").read_text()
     for line in dockerfile.splitlines():

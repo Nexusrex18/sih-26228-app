@@ -1,0 +1,9 @@
+# The build context is the repo root, and without this the daemon would tar up .venv
+# (CPU torch, several GB), node_modules, wheelhouse, artifacts and reports before the
+# first COPY ran. Admit exactly what docker/Dockerfile copies and nothing else;
+# tests/boundaries/test_image_files.py keeps the two in step.
+*
+!cva-bundle.tar
+!frontend/out
+!docker/entrypoint.sh
+!docker/ledgerd-policy.json
