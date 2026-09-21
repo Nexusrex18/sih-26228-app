@@ -1,194 +1,217 @@
-# CVA — Module B: Model Integrity
+# CVA: Computer-Vision Integrity Assurance
 
-Implementation of PS 26228 §2.2.2 (model integrity) plus the model-side half of §2.3's
-attack generation, built on the frozen contracts in `sih26228-notes/Architecture/`.
+**Smart India Hackathon 2026, PS 26228 · Team Zlatan_FC**
 
-## Why the capability model exists
-
-A binary `white-box | black-box` flag is factually wrong. A bare ONNX inference session
-exposes weights and activations but has **no backward pass**, so Neural Cleanse cannot run
-on it. Declaring ONNX "white-box, gradients available" declares a check applicable to a
-model it cannot execute on.
-
-Every check declares `requires` / `optional` capability sets. The orchestrator resolves all
-of them **before running anything**, so coverage is known at minute zero rather than at the
-end of a long scan. Three states, plus a separate error channel:
+CVA audits the three things a computer-vision system is built from: its **training data**, its
+**models**, and its **inference records**. It works fully offline, with no cloud and no network
+calls, and it produces one report per scan that says what was found and what was checked.
 
 ```
-requires ⊆ caps?  no  -> UNAVAILABLE + reason + missing[]
-                  yes -> optional ⊆ caps?  no  -> DEGRADED + reason + mode
-                                           yes -> OK
-a check that RAISES   -> ERROR   (a bug in our code, never folded into DEGRADED)
+   datasets ─┐                                   ┌─ accept
+   models   ─┼─► loaders ─► capability ─► checks ─► risk engine ─► report ─┼─ review
+   inference ┘   (safe)     negotiation   A·B·D    + dispositions   + coverage └─ quarantine
+       │
+       └────────► C · provenance seal (signed, hash-chained ledger) ──► verify ──► dashboard (E)
 ```
 
-`UNAVAILABLE` is not a skip — it is a `Finding` naming exactly what was missing and why.
-A shorter report must never look like a cleaner result.
+## What it does
 
-## Checks
+| Module | Purpose | What it checks |
+|---|---|---|
+| **A · Data integrity** | Is the training data trustworthy? | Near-duplicates, label errors, duplicate-label conflicts, trigger artifacts, out-of-distribution samples, systematic mislabelling, annotation geometry, negative-space poisoning, metadata anomalies. Findings roll up to the **contributor** that supplied them. |
+| **B · Model integrity** | Is this the model you were told it was? | Weight digest, behavioural fingerprint, graph structure, Neural Cleanse trigger reconstruction, STRIP, intrinsic probes, weight and activation statistics, anomalous behaviour. |
+| **C · Provenance seal** | Was this inference record altered? | Ed25519-signed, hash-chained records in a Merkle-tree ledger over canonical JSON (RFC 8785, RFC 6962). Offline verification, external anchors, inclusion proofs, an independent verifier, and a native C core. |
+| **D · Drift** | Has the incoming data shifted from the reference? | PSI and KS tests over interpretable image axes and embedding projections, with multiplicity control. |
+| **E · Governance** | Who decided what, and can it be proven? | Analyst dashboard, two-person approval for lowering a disposition, a signed audit trail, verification, and a generated coverage statement. |
 
-| id | needs | catches | runs on ONNX |
-|---|---|---|---|
-| `model.weight_digest` | file | any byte change — deterministic | yes |
-| `model.graph_structure` | architecture | architectural backdoors, custom ops, dead subgraphs | yes |
-| `model.behavioural_fingerprint` | predict | substitution, with a **tolerance band** so a benign re-export is not called hostile | yes |
-| `model.strip` | predict + clean set | trigger-conditioned backdoors, **black-box** | yes |
-| `model.intrinsic_probes` | predict + clean set | reference-free per-class suspicion **ranking** | yes |
-| `model.activation_statistics` | activations + clean set | structural damage, dead/saturated units | yes (graph surgery) |
-| `model.weight_statistics` | weights + battery | crude weight-level modification | yes |
-| `model.anomalous` | predict + clean set | the third PS verdict: strange without a known signature | yes |
-| `model.trigger_reconstruction` | predict + clean set; gradients *optional* | patch backdoors, and **reconstructs the trigger image** | DEGRADED (NES) |
+## Key ideas
 
-Two things worth stating explicitly:
+- **Capability negotiation.** Every check declares what access it needs. Before anything runs, each
+  check is resolved to **OK**, **DEGRADED** (runs with a stated reduction) or **UNAVAILABLE** (with
+  the reason). The plan is printed before the scan starts.
+- **A generated coverage statement.** Each report lists the attack classes that were assessed and
+  those that were not, produced from what the checks declare and never typed by hand. A scan with
+  less access gives a smaller statement.
+- **Dispositions per finding.** Every finding ends as *accept*, *review* or *quarantine*, with the
+  rule that decided it.
+- **Safe by construction.** Untrusted datasets and models are parsed in a sandbox with size, path and
+  pixel limits, and checkpoints are loaded without executing code.
+- **Air-gapped.** No module makes a network call, and a built-in egress guard enforces it.
+- **Tamper-evident audit trail.** Scan records and analyst decisions are sealed into the ledger by a
+  separate process that alone holds the signing key.
 
-**Neural Cleanse is intrinsically self-referential.** It flags the class whose minimal
-trigger is anomalously small *relative to this model's own other classes* — a MAD outlier
-test inside the model. It needs gradients; it does not need a reference model. Since
-organisers supply no reference battery, it is the strongest reference-free check available.
+## Requirements
 
-**STRIP is not a fallback.** ONNX is one of the two formats the PS names and exposes no
-gradients, so on a plausible majority of real deliveries STRIP is the *only* backdoor check
-that runs at all.
+- Python 3.11 or newer
+- Node.js 20 or newer (only to build the dashboard)
+- Linux (the demo's network-isolation step uses `unshare`)
 
-## Running it
+## Install
 
 ```bash
-uv venv --python 3.11 .venv
-uv pip install --python .venv/bin/python -e .
+python3 -m venv .venv && source .venv/bin/activate
+pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+pip install -e ".[data,seal,network]"
 
-# build the corpus: clean + backdoored models, with a fitness gate that REFUSES to emit
-# a model that did not learn or a "backdoor" that did not take
-.venv/bin/python -m cva.attacklab.build
+npm --prefix frontend ci && npm --prefix frontend run build     # the dashboard
 
-# scan one model -> single-file HTML report
-.venv/bin/python -m cva.cli scan artifacts/corpus/models/bd_patch_08.onnx
-
-# score every detector over the whole corpus against ground truth
-.venv/bin/python -m cva.cli bench
+make vendor        # optional: fetch the DINOv2 embedding weights (needs a network, once)
 ```
 
-Outputs: `artifacts/reports/<model>.report.html` (per model),
-`artifacts/bench/bench.html` (detection matrix + scoreboard),
-`artifacts/bench/all_models.report.html` (every scan).
+This installs the console scripts `cva`, `cva-seal`, `cva-ledgerd` and `cva-web`. Every command
+below can also be run as `python -m ...`.
 
-## Evaluating the result
+## Quick start: the sample demo
 
-Three surfaces, deliberately separate:
+Everything below is generated locally. No dataset is downloaded.
 
-1. **Per-model report** — verdict, access assumptions, the resolved plan, findings with
-   evidence images (reconstructed triggers, STRIP entropy histograms, per-class signal
-   plots), and a coverage table generated from what the detectors declare.
-2. **Benchmark matrix** — every model against every detector, with ground truth from the
-   attack lab manifest. Detection rate **and false-alarm rate reported separately**: a
-   detector tuned only against attacks has no measured false-alarm rate, and the
-   false-alarm column is what decides whether an analyst keeps reading.
-3. **Tests** — `pytest` covers the contract invariants, including that ONNX never reports
-   gradients, that a raising check surfaces as `ERROR` not `DEGRADED`, that no registered
-   check can vanish from a scan, and that a benign re-export is not called a substitution.
-
-## Deliberate limitations
-
-- The corpus is synthetic and offline by design. It exercises the pipeline; it is not
-  evidence of field performance. External validation against TrojAI/BackdoorBench is the
-  separate, required step.
-- Reference models are decorrelated on purpose (different architecture, seed, width, data
-  split). A battery of siblings makes every reference comparison unrealistically easy.
-- A backdoor present since original training, with no manifest and no reference battery,
-  remains the largest blind spot. `model.intrinsic_probes` narrows it; it does not close it.
-
-## Module D — drift detection (first implementation increment)
-
-Compare a declared reference image directory with an incoming image directory, offline:
+### 1. Set up (one time)
 
 ```bash
-python -m cva.cli drift --reference data/reference --incoming data/incoming --out artifacts/drift
+export DEMO=$HOME/cva-demo
+mkdir -p $DEMO/{keys,ledger,run,reports,var}
+
+# demo datasets and a small model
+python -m cva.fixtures --out $DEMO/fx
+python -m cva.fixtures --out $DEMO/fx --kind mixed_contributors
+
+# the signing key and the audit ledger
+cva-seal keygen --out $DEMO/keys/signing.key
+cva-seal init --ledger $DEMO/ledger/audit.db --key $DEMO/keys/signing.key \
+  --device-id demo-host --unit demo --trust-out $DEMO/ledger/trust_root.json
+
+# two accounts: an analyst and a different person who approves
+export CVA_WEB_ACCOUNTS_DB=$DEMO/var/accounts.db
+echo 'DemoPass-2026' | python -m cva.web.accounts create a.sharma --role analyst  --password-stdin
+echo 'DemoPass-2026' | python -m cva.web.accounts create b.rao   --role approver --password-stdin
 ```
 
-This entrypoint requires NumPy, SciPy and Pillow, but does not import Torch or ONNX.
-It writes `drift.report.json`, `drift.report.html` and `drift.coverage.md` under
-`<out>/<scan_id>/`, preserving previous runs. Evidence is shared under `<out>/evidence/`. Missing reference,
-small batches, absent embeddings and unimplemented checks are explicit coverage gaps.
-Material drift requests review; no attack intent or field-calibrated confidence is claimed.
-
-Reproducible smoke demo (use a new/empty output directory):
+### 2. Start the services (two terminals)
 
 ```bash
-python -m attacklab.photometric_shift --out /tmp/cva-drift-demo
-python -m cva.cli drift --reference /tmp/cva-drift-demo/reference --incoming /tmp/cva-drift-demo/incoming
-python -m pytest tests/detectors/drift tests/boundaries
+# terminal 1: the ledger daemon, the only process that holds the signing key
+export DEMO=$HOME/cva-demo
+cva-ledgerd --socket $DEMO/run/ledgerd.sock --ledger $DEMO/ledger/audit.db --key $DEMO/keys/signing.key
+
+# terminal 2: the dashboard
+export DEMO=$HOME/cva-demo
+export CVA_WEB_LEDGERD_SOCKET=$DEMO/run/ledgerd.sock CVA_WEB_LEDGER_PATH=$DEMO/ledger/audit.db \
+       CVA_WEB_TRUST_ROOT=$DEMO/ledger/trust_root.json CVA_WEB_REPORTS_DIR=$DEMO/reports \
+       CVA_WEB_ACCOUNTS_DB=$DEMO/var/accounts.db CVA_WEB_INDEX_DB=$DEMO/var/index.db
+cva-web
 ```
 
-Optional `--reference-embeddings` and `--incoming-embeddings` accept NPZ files containing
-`embeddings` (N x D numeric), `sample_ids` (sorted relative image paths), `extractor_id`
-and `extractor_version` (scalar strings). Both caches must use the same independent
-extractor/version. Pickle loading is disabled. The scanner does not generate or download
-embeddings; photometric checks still run without them.
+Open <http://127.0.0.1:8713/> and sign in as `a.sharma` (analyst) or `b.rao` (approver), password
+`DemoPass-2026`. Use a second browser window for the second account.
 
-Full sequencing, corrections to the notes, statistical assumptions and remaining MVP
-work: [Module D implementation plan](docs/MODULE_D_IMPLEMENTATION_PLAN.md).
+### 3. Run scans (a third terminal)
 
-Module D uses the frozen `Dataset` / `DriftTest` interfaces. It accepts canonical datasets
-through the Python API; the CLI's image-folder adapter enforces S3/S6/S7 controls before
-full image decoding. Identical or overlapping image content is not a valid independent
-comparison and returns UNAVAILABLE. `--selftest` pins scan identity/time for repeatability
-(use different output roots); normal scans reserve a fresh ID within the output root.
-
-### Drift verdicts, profiles and coverage
-
-`ACCEPT` means no assessed finding requested review; it does not mean every check ran.
-The CLI prints assessed/total checks and coverage gaps beside the verdict. Unavailable
-checks remain in the report; a crashed check forces `REVIEW`. Without a reference,
-`drift.interpretable_axes` describes incoming image properties only, with no PSI/KS claim.
-Semantic/manipulation checks, MMD and energy distance are explicitly deferred.
-
-`profiles/drift.json` is the default schema-validated drift profile. Use
-`--profile path/to/profile.json` to supply a profile and CLI flags to override its settings.
-Its `psi` block holds `n_bins`, `alpha`, `min_samples`, `min_reference_n`, `min_incoming_n`,
-`min_ks_effect`, `permutations`, `seed`, and `axis_thresholds` (per-axis minimum KS effects).
-`--min-samples` overrides both batch-size floors. The default minimum of 20 images is not
-an assurance of detection power: subtle shifts need larger independent samples.
-The ordered disposition policy is also profile data; D6 routes uncalibrated drift on
-severity with a review ceiling. Confidence stays explicitly uncalibrated, not an invented score.
-
-Each scan saves `effective.profile.json` and hashes the entire effective profile, including
-policy. Run the report's reproduction command from its scan directory, with the package
-installed/importable; the relative profile path refers to this saved file.
-
-### Embedding cache contract
-
-Embedding extraction is **out of scope** for this increment. Generate caches with an
-independent trusted extractor outside the contributed model, then pass both NPZ paths.
-The scanner checks alignment, finite values, identity/version equality and dimensions;
-identity metadata is self-declared and does **not** prove extractor provenance.
-
-```python
-np.savez("incoming.npz",
-         embeddings=matrix,                 # finite numeric shape (N, D)
-         sample_ids=np.array(relative_ids),  # strings; exact Dataset order
-         extractor_id=np.array("dinov2-vits14"),
-         extractor_version=np.array("your-pinned-artifact-version"))
-```
-
-For image folders, sample IDs are sorted relative paths, including subdirectories.
-Both caches must contain all four keys; object/pickle arrays are prohibited.
-The private `EmbeddingRows` adapter retains raw observations with validated `n`; the shared
-`EmbeddingDistribution` stores moments and cannot support KS. Module A summaries are
-therefore not interchangeable with these caches. No model is downloaded by this command.
-
-### Controlled shifts on an existing clean corpus
+Scans are named by the minute they start, so leave a minute between them.
 
 ```bash
-python -m attacklab.photometric_shift --source data/clean --out /tmp/drift-injected \
-  --fraction 0.6 --brightness 0.12 --contrast 1.1 --noise 0.01 --jpeg-quality 40 --seed 7
-python -m cva.cli drift --reference /tmp/drift-injected/reference \
-  --incoming /tmp/drift-injected/incoming --out artifacts/drift
+export DEMO=$HOME/cva-demo
+
+# a dataset and a model, sealed into the ledger
+cva scan --dataset $DEMO/fx/demo_coco --model $DEMO/fx/demo_model.onnx \
+  --profile baseline --out $DEMO/reports --audit-ledger-socket $DEMO/run/ledgerd.sock
+
+# a dataset with several contributors
+cva scan --dataset $DEMO/fx/mixed_contributors --profile baseline \
+  --out $DEMO/reports --audit-ledger-socket $DEMO/run/ledgerd.sock
+
+# the same dataset with no model: a smaller coverage statement
+cva scan --dataset $DEMO/fx/demo_coco --profile baseline \
+  --out $DEMO/reports --audit-ledger-socket $DEMO/run/ledgerd.sock
+
+# run a scan with the network removed entirely
+unshare -rn cva scan --dataset $DEMO/fx/demo_coco --model $DEMO/fx/demo_model.onnx \
+  --profile baseline --out $DEMO/reports_airgap
 ```
 
-The injector splits the clean corpus into disjoint reference/incoming source images first,
-then transforms the requested fraction of incoming images. Unselected files are copied
-unchanged. `manifest.json` records transformations, source/output hashes and brightness
-before/after encoding; clipping and compression can change the realized magnitude.
-Use a genuinely representative clean corpus; the synthetic smoke demo is only a pipeline test.
+Each scan writes `report.json`, `report.html` and `coverage.md` under `<out>/<scan_id>/`, with
+evidence stored once by content hash under `<out>/evidence/`. The scans made with
+`--audit-ledger-socket` appear in the dashboard.
 
-Module E must preserve `DriftScanResult.asset_kind`, `relevant_capabilities` and
-`drift_summary`, which the shared writers consume for dataset reports. Backend review is
-still required for shared CLI, protocol annotation, profile-schema and report changes.
+### 4. Try drift detection
+
+```bash
+python -m attacklab.photometric_shift --out $DEMO/drift --brightness 0.2
+cva drift --incoming $DEMO/drift/incoming --reference $DEMO/drift/reference --out $DEMO/reports_drift
+```
+
+### 5. Try the tamper-evident ledger
+
+This works on a copy of the ledger.
+
+```bash
+cp -r $DEMO/ledger $DEMO/ledger_copy
+cva-seal anchor export --ledger $DEMO/ledger_copy/audit.db --key $DEMO/keys/signing.key --out $DEMO/anchor.json
+cva-seal export --ledger $DEMO/ledger_copy/audit.db --out $DEMO/demo.export.jsonl
+cva-seal verify --records $DEMO/demo.export.jsonl --trust $DEMO/ledger/trust_root.json --anchor $DEMO/anchor.json
+```
+
+The ledger verifies clean. Now change one character in one line of `$DEMO/demo.export.jsonl` and run
+`verify` again: it reports the exact record that was edited. Restore the file, delete its last few
+lines and verify with `--anchor`: it reports the truncation.
+
+### 6. Make a two-person decision (in the dashboard)
+
+1. As `a.sharma`, open **Findings**, pick a finding, and lower its disposition with a reason and a
+   written justification. It shows as *pending*.
+2. Approving your own change is refused.
+3. As `b.rao`, approve it.
+4. Open **Audit trail** to see both events in ledger order, then **Verify now**.
+
+## Scanning your own data
+
+```bash
+# a dataset (COCO, YOLO, VOC or a folder of images) and a model (ONNX, TorchScript or PyTorch)
+cva scan --dataset path/to/dataset --model path/to/model.onnx --profile baseline --out reports
+
+# add a clean probe set and reference material for the model checks
+cva scan --model path/to/model.pt --corpus path/to/probes --profile deep --out reports
+
+# a black-box model behind a command or a loopback endpoint
+cva scan --model-cmd "python serve.py" --input-shape 3,64,64 --num-classes 10 --dataset path/to/dataset
+```
+
+Profiles choose which checks run and how much compute they may spend. Run `cva scan --help` for
+every option.
+
+## Repository layout
+
+```
+cva/
+  cli.py                 the `cva` command: scan, drift, selftest, bench
+  loaders/               dataset and model loaders with the untrusted-input controls
+  core/                  capability model, orchestrator, registries, shared types
+  detectors/data/        Module A
+  detectors/model/       Module B
+  detectors/drift/       Module D
+  provenance/            Module C: seal SDK, ledger, verifier, anchors, checks
+  risk/                  dispositions, contributor rollup, calibration
+  report/                report.json, HTML and the generated coverage statement
+  web/  ledgerd/         Module E: dashboard backend and the ledger daemon
+frontend/                the dashboard (Next.js, built to a static export)
+attacklab/               generators for poisoned data, backdoored models and tampered ledgers
+native/                  the C seal core, with C++ and Rust bindings
+spec/                    the cva-seal wire-format spec, test vectors, an independent verifier
+schemas/  profiles/      the report schema and scan profiles
+docs/                    setup, operator manual, threat model, verification procedure
+tests/
+```
+
+## Tests
+
+```bash
+pytest tests -q
+```
+
+## Documentation
+
+- [`docs/SETUP.md`](docs/SETUP.md): installation from a delivered image, first scan, first read in the dashboard
+- [`docs/operator-manual.md`](docs/operator-manual.md): running the system day to day
+- [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md): what the system defends against
+- [`docs/VERIFICATION-PROCEDURE.md`](docs/VERIFICATION-PROCEDURE.md): how a third party verifies a ledger without our code
+- [`spec/cva-seal-spec-v1.md`](spec/cva-seal-spec-v1.md): the published wire format for the provenance seal
+- [`docs/LICENSES.md`](docs/LICENSES.md): third-party licences
