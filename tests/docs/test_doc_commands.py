@@ -26,7 +26,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 DOCS = [ROOT / "docs" / n for n in ("SETUP.md", "VERIFICATION-PROCEDURE.md",
                                     "operator-manual.md", "THREAT-MODEL.md")]
-DOCS += [ROOT / "docker" / "hardening.md"]
+DOCS += [ROOT / "docker" / "hardening.md", ROOT / "demo" / "script.md"]
 
 #: program -> the source file whose argparse defines it.
 SOURCES = {

@@ -72,12 +72,17 @@ def test_the_base_image_is_never_a_bare_tag():
 
 def test_the_web_role_publishes_to_host_loopback_in_every_documented_command():
     """S9 rests on the publish spec once the entrypoint binds 0.0.0.0 in a container."""
-    for doc in (DOCKER / "hardening.md", ROOT / "docs" / "SETUP.md"):
+    checked = 0
+    for doc in (DOCKER / "hardening.md", ROOT / "docs" / "SETUP.md",
+                ROOT / "demo" / "script.md"):
         if not doc.exists():
             continue
-        for line in doc.read_text().splitlines():
-            if re.search(r"(^|\s)-p\s", line):
-                assert re.search(r"-p 127\.0\.0\.1:", line), f"{doc.name}: {line.strip()}"
+        for block in re.findall(r"```sh\n(.*?)```", doc.read_text(), re.S):
+            # A port mapping, not `mkdir -p`: `-p` followed by something ending in port:port.
+            for mapping in re.findall(r"(?:^|\s)-p\s+(\S*\d+:\d+)", block):
+                checked += 1
+                assert mapping.startswith("127.0.0.1:"), f"{doc.name}: -p {mapping}"
+    assert checked, "no port mapping found; the check is not looking at anything"
 
 
 def test_the_image_bakes_no_key():
