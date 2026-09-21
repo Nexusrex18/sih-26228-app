@@ -4,9 +4,10 @@ You have been handed an audit ledger and want to know whether it is intact. You 
 have to trust our software, our word or our network. This procedure needs the artefacts
 below and a computer. Section 4 can be done without any of our code.
 
-It is adapted from Module C's procedure and covers **only what this build ships**. Where
-the Module C plan describes more (anchors, inclusion proofs, `explain`), this document says
-those are not in this build rather than documenting commands that do not exist here.
+This page covers the audit ledger the **dashboard** writes. The full procedure for any
+`cva-seal` ledger — anchors, inclusion proofs, `explain`, and the independent verifier in
+`spec/independent_verifier.py` — is Module C's:
+[`docs/provenance/VERIFICATION-PROCEDURE.md`](provenance/VERIFICATION-PROCEDURE.md).
 
 ## 1. What you must be given
 
@@ -32,15 +33,15 @@ replay and records signed by a key the trust root does not vouch for. You **cann
 - records that were never written (selective logging), unless you have an independent
   count, which you can pass as `--expected-count`.
 
-**Anchors are not in this build's CLI.** The dashboard shows the **unwitnessed window**:
-how many records came after the last anchor and therefore still trust the key holder
-alone. In this build that is every record. Say so in your report.
+The dashboard verifies without an anchor and shows the **unwitnessed window**: how many
+records still trust the key holder alone. To bound it, pass an anchor with `--anchor`
+(`cva-seal anchor export` makes one); Module C's procedure covers the ceremony.
 
 ## 3. Run the reference verifier
 
 ```sh
-cva-seal verify --ledger audit.export.jsonl --trust-root trust_root.json
-cva-seal verify --ledger audit.export.jsonl --trust-root trust_root.json --json
+cva-seal verify --records audit.export.jsonl --trust trust_root.json
+cva-seal verify --records audit.export.jsonl --trust trust_root.json --json
 ```
 
 `cva-seal` is installed by `pip install -e .`. `python -m cva.provenance.seal.cli` is
@@ -55,7 +56,7 @@ wrong*.
 If you know how many records there should be, from an independent counter:
 
 ```sh
-cva-seal verify --ledger audit.export.jsonl --trust-root trust_root.json --expected-count 412
+cva-seal verify --records audit.export.jsonl --trust trust_root.json --expected-count 412
 ```
 
 **Each finding's class names which arithmetic failed, not who did it:**

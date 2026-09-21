@@ -150,11 +150,11 @@ def test_setup_md_host_path_runs_end_to_end(tmp_path: Path):
     r = _run(*seal, "export", "--ledger", "ledger/audit.db",
              "--out", "ledger/audit.export.jsonl", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    r = _run(*seal, "verify", "--ledger", "ledger/audit.export.jsonl",
-             "--trust-root", "ledger/trust_root.json", cwd=tmp_path)
+    r = _run(*seal, "verify", "--records", "ledger/audit.export.jsonl",
+             "--trust", "ledger/trust_root.json", cwd=tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
-    r = _run(*seal, "verify", "--ledger", "ledger/audit.export.jsonl",
-             "--trust-root", "ledger/trust_root.json", "--json", cwd=tmp_path)
+    r = _run(*seal, "verify", "--records", "ledger/audit.export.jsonl",
+             "--trust", "ledger/trust_root.json", "--json", cwd=tmp_path)
     assert r.returncode == 0 and r.stdout.lstrip().startswith("{"), r.stdout[:200]
 
 
@@ -167,8 +167,8 @@ def test_verification_procedure_exit_codes_are_the_ones_it_documents(tmp_path: P
          "--unit", "u", "--trust-out", "ledger/t.json", cwd=tmp_path)
     _run(*seal, "export", "--ledger", "ledger/a.db", "--out", "e.jsonl", cwd=tmp_path)
 
-    unreadable = _run(*seal, "verify", "--ledger", "missing.jsonl",
-                      "--trust-root", "ledger/t.json", cwd=tmp_path)
+    unreadable = _run(*seal, "verify", "--records", "missing.jsonl",
+                      "--trust", "ledger/t.json", cwd=tmp_path)
     assert unreadable.returncode == 1
 
     export = tmp_path / "e.jsonl"
@@ -176,6 +176,6 @@ def test_verification_procedure_exit_codes_are_the_ones_it_documents(tmp_path: P
     edited = text.replace('"unit":"u"', '"unit":"v"', 1)
     assert edited != text, "the fixture edit did not apply; the test would prove nothing"
     export.write_text(edited)
-    tampered = _run(*seal, "verify", "--ledger", "e.jsonl", "--trust-root", "ledger/t.json",
+    tampered = _run(*seal, "verify", "--records", "e.jsonl", "--trust", "ledger/t.json",
                     cwd=tmp_path)
     assert tampered.returncode == 2, tampered.stdout + tampered.stderr

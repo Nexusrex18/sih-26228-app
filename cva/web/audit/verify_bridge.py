@@ -34,12 +34,13 @@ class VerifyState:
     checked_at: float = 0.0
     records_checked: int = 0
     anchors_verified: int = 0
-    anchors_in_chain: int = 0
+    #: Module C's `verify --json` does not report anchor events in the chain, so this stays
+    #: None rather than being approximated: "N anchor files supplied" is a different fact.
+    anchors_in_chain: int | None = None
     unwitnessed_records: int = 0
     declared_gaps: int = 0
     durability: str = ""
     loss_window: str = ""
-    worst: str = "info"
     findings: tuple[dict[str, Any], ...] = ()
     limitations: tuple[str, ...] = ()
     command: tuple[str, ...] = field(default=())
@@ -122,8 +123,11 @@ def verify(ledger_path: Path | None, trust_root: Path | None, *,
         if not p.is_file():
             return _unavailable(f"the {name} file {p} does not exist")
 
-    argv = [*_executable(), "verify", "--ledger", str(ledger_path),
-            "--trust-root", str(trust_root), "--json"]
+    # Module C's contract (it owns `cva-seal`): `--records` takes the ledger .db or a JSONL
+    # export, `--trust` the trust root. Anchors and payload sidecars are not passed here; the
+    # dashboard verifies the chain it holds, and says what that leaves unexcluded.
+    argv = [*_executable(), "verify", "--records", str(ledger_path),
+            "--trust", str(trust_root), "--json"]
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s,
                               shell=False, check=False, env=_env())
@@ -145,22 +149,31 @@ def verify(ledger_path: Path | None, trust_root: Path | None, *,
     if not isinstance(payload, dict):
         return _unavailable("cva-seal verify returned a non-object result")
 
-    findings = tuple(payload.get("findings") or ())
-    clean = bool(payload.get("ok")) and proc.returncode == EXIT_CLEAN
+    # Module C names a finding's class `class`; the dashboard (and every other finding in
+    # this system) calls it `attack_class`. Everything else passes through as given.
+    findings = tuple(
+        {**{k: v for k, v in f.items() if k != "class"},
+         "attack_class": f.get("attack_class", f.get("class"))}
+        for f in (payload.get("findings") or ()) if isinstance(f, dict))
+    clean = bool(payload.get("clean")) and proc.returncode == EXIT_CLEAN
+    anchors = int(payload.get("anchors_verified") or 0)
+    # The one limitation Module C states itself, in its own text-mode output. It is theirs,
+    # quoted, not a claim this dashboard makes up.
+    limitations = () if anchors else (
+        "No external anchor was supplied, so tail truncation and a wholesale rewrite by "
+        "the key holder cannot be excluded.",)
     return VerifyState(
         state="OK" if clean else "FAILED",
         detail="" if clean else f"{len(findings)} finding(s) above info",
         checked_at=time.time(),
         records_checked=int(payload.get("records_checked") or 0),
-        anchors_verified=int(payload.get("anchors_verified") or 0),
-        anchors_in_chain=int(payload.get("anchors_in_chain") or 0),
-        unwitnessed_records=int(payload.get("unwitnessed_records") or 0),
+        anchors_verified=anchors,
+        anchors_in_chain=None,
+        unwitnessed_records=int(payload.get("records_in_unwitnessed_window") or 0),
         declared_gaps=int(payload.get("declared_gaps") or 0),
         durability=str(payload.get("durability") or ""),
-        loss_window=str(payload.get("loss_window") or ""),
-        worst=str(payload.get("worst") or "info"),
         findings=findings,
-        limitations=tuple(payload.get("limitations") or ()),
+        limitations=limitations,
         command=tuple(argv))
 
 

@@ -320,7 +320,7 @@ def test_an_approver_exports_and_the_export_verifies_on_its_own(stack, browser_f
 
     # A third party's check: the CLI, the export and the trust root. No dashboard.
     v = subprocess.run([sys.executable, "-m", "cva.provenance.seal.cli", "verify",
-                        "--ledger", export, "--trust-root", str(stack.trust_root)],
+                        "--records", export, "--trust", str(stack.trust_root)],
                        capture_output=True, text=True, timeout=300, env=_env())
     assert v.returncode == 0, v.stdout + v.stderr
 

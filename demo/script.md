@@ -99,7 +99,7 @@ Open `/tmp/demo.export.jsonl` in an editor and change **one character** inside o
 record's payload. Then:
 
 ```sh
-cva-seal verify --ledger /tmp/demo.export.jsonl --trust-root ledger/trust_root.json
+cva-seal verify --records /tmp/demo.export.jsonl --trust ledger/trust_root.json
 ```
 
 **Show:** exit status 2 and a `record_edit` finding naming the exact `seq`.
@@ -107,7 +107,7 @@ cva-seal verify --ledger /tmp/demo.export.jsonl --trust-root ledger/trust_root.j
 **Then the honest part.** Restore the file, delete the **last** five lines, and verify again:
 
 ```sh
-cva-seal verify --ledger /tmp/demo.export.jsonl --trust-root ledger/trust_root.json
+cva-seal verify --records /tmp/demo.export.jsonl --trust ledger/trust_root.json
 ```
 
 **Say:** "Clean. Deleting the tail of a ledger is invisible without an external anchor

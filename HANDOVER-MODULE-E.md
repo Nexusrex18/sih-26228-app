@@ -99,8 +99,12 @@ overflow. Screenshots land in `.scratch/e2e-screens/`.
 - **Second reader** for `docs/coverage-standing.yaml`.
 - `scripts/vendor_web_assets.py` has never run (it needs a network) and is now mostly
   moot: the sign-in page bundles IBM Plex from `@fontsource` in `cva/web/static/fonts/`.
-- The **VERIFICATION-PROCEDURE** covers only what this build's `cva-seal` has. Module C's
-  anchors, `explain`, `proof` and independent verifier are not in this repo.
+- **Two `cva-ledgerd`s.** Module C ships its own daemon (`cva/provenance/seal/ledgerd.py`,
+  a different wire protocol) beside Module E's (`cva/ledgerd/`, the one the dashboard and
+  the image use). Both kept on the rebase onto `modules`; which one ships is a team call.
+- The dashboard's verify bridge follows Module C's `cva-seal verify` contract
+  (`--records`, `--trust`, `clean`, `records_in_unwitnessed_window`). It passes no anchor,
+  so the Verification page states the unwitnessed window and why it is unbounded.
 
 ---
 

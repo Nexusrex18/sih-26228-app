@@ -178,7 +178,7 @@ regenerated.
 
 ```sh
 cva-seal export --ledger ledger/audit.db --out ledger/audit.export.jsonl
-cva-seal verify --ledger ledger/audit.export.jsonl --trust-root ledger/trust_root.json
+cva-seal verify --records ledger/audit.export.jsonl --trust ledger/trust_root.json
 ```
 
 Then stop and remove the containers, volumes and image:

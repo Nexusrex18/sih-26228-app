@@ -87,7 +87,11 @@ export default function VerificationPage() {
                 label="Anchors"
                 value={state.anchors_verified}
                 countUp
-                note={`of ${state.anchors_in_chain} in chain`}
+                note={
+                  state.anchors_in_chain === null
+                    ? "verified against the chain"
+                    : `of ${state.anchors_in_chain} in chain`
+                }
               />
               {/* The unwitnessed window is the number this page exists to show: those
                   records are still trusting the key holder alone. It is never a zero by

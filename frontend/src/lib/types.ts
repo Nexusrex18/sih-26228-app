@@ -244,7 +244,8 @@ export interface VerifyState {
   checked_at: string;
   records_checked: number;
   anchors_verified: number;
-  anchors_in_chain: number;
+  /** null when the verifier does not report it (Module C's `verify --json` does not). */
+  anchors_in_chain: number | null;
   unwitnessed_records: number;
   declared_gaps: number;
   durability: string;
