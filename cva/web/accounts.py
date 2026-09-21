@@ -253,5 +253,72 @@ class AccountStore:
         self._conn.close()
 
 
+def main(argv: list[str] | None = None) -> int:
+    """`python -m cva.web.accounts` — the operator's way to create the first accounts.
+
+    The dashboard's admin page needs an admin to exist, so the first account has to come
+    from somewhere else, and this is it. A password is read from the terminal (never
+    echoed) or, for scripted setup, as one line on stdin with `--password-stdin`. It is
+    never an argument: argv is visible to every user on the host through `ps`.
+    """
+    import argparse
+    import getpass
+    import sys
+
+    from .config import load
+
+    ap = argparse.ArgumentParser(prog="python -m cva.web.accounts",
+                                 description="Manage cva-web's local accounts")
+    ap.add_argument("--db", default=None,
+                    help="accounts database (default: accounts_db from the cva-web config)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("create", help="create an account")
+    c.add_argument("actor_id")
+    c.add_argument("--role", required=True, choices=list(ROLES))
+    c.add_argument("--password-stdin", action="store_true",
+                   help="read the password as one line from stdin instead of the terminal")
+    sub.add_parser("list", help="list accounts and roles")
+    for name in ("disable", "enable"):
+        sub.add_parser(name, help=f"{name} an account").add_argument("actor_id")
+    r = sub.add_parser("set-role", help="change a role (ends that user's live sessions)")
+    r.add_argument("actor_id")
+    r.add_argument("role", choices=list(ROLES))
+    a = ap.parse_args(argv)
+
+    store = AccountStore(Path(a.db) if a.db else load().accounts_db)
+    try:
+        if a.cmd == "create":
+            if a.password_stdin:
+                password = sys.stdin.readline().rstrip("\n")
+            else:
+                password = getpass.getpass(f"password for {a.actor_id}: ")
+                if getpass.getpass("again: ") != password:
+                    print("the two passwords differ; nothing was created", file=sys.stderr)
+                    return 1
+            acct = store.create(a.actor_id, password, a.role)
+            print(f"created {acct.actor_id} ({acct.role})")
+        elif a.cmd == "list":
+            for acct in store.list_accounts():
+                state = "disabled" if acct.disabled else "active"
+                print(f"{acct.actor_id}\t{acct.role}\t{state}")
+        elif a.cmd in ("disable", "enable"):
+            store.set_disabled(a.actor_id, a.cmd == "disable")
+            print(f"{a.cmd}d {a.actor_id}")
+        elif a.cmd == "set-role":
+            acct = store.set_role(a.actor_id, a.role)
+            print(f"{acct.actor_id} is now {acct.role}; their live sessions are ended")
+    except AccountError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+    return 0
+
+
 __all__ = ["ROLES", "SCRYPT_MAXMEM", "SCRYPT_N", "SCRYPT_P", "SCRYPT_R", "Account",
-           "AccountError", "AccountStore", "derive", "validate_actor_id", "validate_role"]
+           "AccountError", "AccountStore", "derive", "main", "validate_actor_id",
+           "validate_role"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

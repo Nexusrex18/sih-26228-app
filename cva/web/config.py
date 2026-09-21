@@ -46,6 +46,13 @@ class WebConfig:
     #: credentials on a shared network.
     tls_certfile: Path | None = None
     tls_keyfile: Path | None = None
+    #: The container case, declared rather than inferred. On a bridge network the process
+    #: MUST bind 0.0.0.0 to be reachable through `-p` at all, so the bind address stops
+    #: meaning "reachable beyond this host" — the publish spec decides that. Setting this
+    #: transfers S9's obligation to the runtime: publish to host loopback only
+    #: (`-p 127.0.0.1:8713:8713`). `-p 8713:8713` recreates the plaintext-LAN case S9 exists
+    #: to forbid. Only the image's entrypoint sets it.
+    bind_trusts_container_boundary: bool = False
 
     # --- session and lockout (S6, S8) ----------------------------------------------------
     session_idle_timeout_s: int = 900          # 15 minutes
@@ -74,7 +81,8 @@ class WebConfig:
 
     # ---------------------------------------------------------------------------------------
     def __post_init__(self) -> None:
-        if self.bind_host != "127.0.0.1" and not (self.tls_certfile and self.tls_keyfile):
+        if (self.bind_host != "127.0.0.1" and not self.bind_trusts_container_boundary
+                and not (self.tls_certfile and self.tls_keyfile)):
             raise ConfigError(
                 "S9: bind_host is not loopback, so TLS is REQUIRED — set tls_certfile and "
                 "tls_keyfile. A dashboard reachable on a LAN over plain HTTP puts analyst "
@@ -99,7 +107,7 @@ class WebConfig:
 
 _PATHS = frozenset({"reports_dir", "index_db", "accounts_db", "ledgerd_socket", "trust_root",
                     "ledger_path", "tls_certfile", "tls_keyfile"})
-_BOOLS = frozenset({"four_eyes"})
+_BOOLS = frozenset({"four_eyes", "bind_trusts_container_boundary"})
 _STRS = frozenset({"bind_host", "source"})
 _INTS = frozenset({f.name for f in fields(WebConfig)}) - _PATHS - _BOOLS - _STRS
 

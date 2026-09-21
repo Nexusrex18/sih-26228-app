@@ -1,0 +1,8 @@
+{
+  "writers": {
+    "10002": ["analyst_event"],
+    "10003": ["scan_record"]
+  },
+  "readers": [10002],
+  "same_uid_ok": false
+}

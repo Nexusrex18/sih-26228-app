@@ -49,6 +49,8 @@ seal = ["cryptography>=42", "rfc8785>=0.1"]
 [project.scripts]
 cva = "cva.cli:main"
 cva-seal = "cva.provenance.seal.cli:main"   # Mode C operator tool (Module C plan §7.11)
+cva-web = "cva.web.app:main"                # the analyst dashboard (Module E)
+cva-ledgerd = "cva.ledgerd.server:main"     # holds the signing key so cva-web never does
 
 [tool.cva.index]
 # Consumed by `make lock` / `make bundle`; recorded here so the setting is discoverable

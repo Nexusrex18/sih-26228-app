@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -271,7 +272,14 @@ def code_commit() -> str:
     outside a git checkout has no commit, `append_scan_record` catches the refusal and
     reports it, and that is the honest outcome. Nothing here pads it to 40 characters —
     a zero-padded digest is a lie in exactly the format a verifier trusts.
+
+    An image has no `.git`, so the image build bakes the commit into `CVA_CODE_COMMIT`. It
+    is used only if it is exactly 40 lowercase hex characters; anything else is ignored
+    rather than trusted, and the git lookup (then `"unknown"`) decides.
     """
+    baked = os.environ.get("CVA_CODE_COMMIT", "")
+    if len(baked) == 40 and all(c in "0123456789abcdef" for c in baked):
+        return baked
     try:
         return subprocess.run(["git", "rev-parse", "HEAD"],
                               capture_output=True, text=True, timeout=5,

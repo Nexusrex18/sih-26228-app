@@ -107,6 +107,16 @@ def test_code_commit_is_forty_hex_or_the_word_unknown():
         c in "0123456789abcdef" for c in value)), value
 
 
+def test_an_image_bakes_the_commit_in_and_only_a_real_one_is_trusted(monkeypatch):
+    """No `.git` inside an image, so the build sets CVA_CODE_COMMIT. A malformed value is
+    ignored rather than recorded."""
+    monkeypatch.setenv("CVA_CODE_COMMIT", "1" * 40)
+    assert code_commit() == "1" * 40
+    for bad in ("abc1234", "G" * 40, "0" * 39, "1" * 41):
+        monkeypatch.setenv("CVA_CODE_COMMIT", bad)
+        assert code_commit() != bad
+
+
 def test_the_daemons_record_is_readable_back_and_names_this_scan(ledgerd: Path,
                                                                  ledger_path: Path):
     from cva.provenance.seal import SealedLedger

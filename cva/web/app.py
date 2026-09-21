@@ -13,7 +13,7 @@ from flask import Flask, g, render_template, request, session
 
 from . import security
 from .accounts import AccountStore
-from .config import WebConfig, load
+from .config import ConfigError, WebConfig, load
 from .reports.index import ReportIndex
 from .services import VerifyCache
 from .workflow.ledgerd_client import LedgerdClient
@@ -186,6 +186,21 @@ def run(cfg: WebConfig | None = None) -> None:
     from waitress import serve
 
     cfg = cfg or load()
+    if cfg.tls_certfile or cfg.tls_keyfile:
+        # waitress does not terminate TLS. Serving anyway would put plaintext on the LAN that
+        # S9's config check was satisfied would be encrypted — and mark the session cookie
+        # `Secure`, so no browser would even send it back. Fail closed instead.
+        raise ConfigError(
+            "tls_certfile/tls_keyfile are set, but cva-web's server (waitress) does not "
+            "terminate TLS itself. Bind 127.0.0.1 and put a TLS-terminating reverse proxy in "
+            "front of it; this process will not serve plaintext while configured as if it "
+            "were encrypted.")
+    if cfg.bind_trusts_container_boundary and cfg.bind_host != "127.0.0.1":
+        log.warning("bind_trusts_container_boundary: listening on %s without TLS. S9 now "
+                    "depends on the runtime publishing this port to HOST LOOPBACK ONLY "
+                    "(-p 127.0.0.1:%d:%d). Publishing it on all interfaces puts analyst "
+                    "credentials on the wire in plaintext.",
+                    cfg.bind_host, cfg.bind_port, cfg.bind_port)
     app = create_app(cfg)
     log.info("cva-web on http://%s:%d (reports=%s, ledgerd=%s)",
              cfg.bind_host, cfg.bind_port, cfg.reports_dir, cfg.ledgerd_socket)
