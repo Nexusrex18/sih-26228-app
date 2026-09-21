@@ -56,8 +56,9 @@ the socket while the dashboard is running. It needs `frontend/out` built.
 
 **Mobile pass:** done in code: 44px targets, a card/table split on `/scan` via a shared
 `ContributorCard`, and `prefers-reduced-transparency` / `prefers-contrast` in `globals.css`.
-**Not yet watched in a browser at 390px.** Browser automation was unavailable in the
-session that did it. Do that first.
+Checked in a real browser at 390px and at desktop width for every page and every fixture
+scan by `tests/e2e/test_in_a_real_browser.py` (Playwright): no JS errors, no horizontal
+overflow. Screenshots land in `.scratch/e2e-screens/`.
 
 ---
 
@@ -91,7 +92,9 @@ session that did it. Do that first.
 
 - **Build the image**: pin the digest, then run `make -f docker/image.mk image` and `podman`.
   Watch the disk: it was at 93%.
-- **A browser pass at 390px** on all 8 pages.
+- **Apply the linear.app taste notes** (`.scratch/taste/linear.app.md`) to the dashboard:
+  colour only on status, hierarchy by text luminance, hairlines over glows, colour-only
+  hover feedback. The sign-in page already follows them.
 - **Rehearse the demo** and fill in `rehearsal-log.md`.
 - **Second reader** for `docs/coverage-standing.yaml`.
 - `scripts/vendor_web_assets.py` has never run (it needs a network) and is now mostly
