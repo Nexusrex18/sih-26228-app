@@ -145,7 +145,14 @@ def reproduction_of(result, command: str | None = None) -> dict[str, Any]:
 
 
 def standing_limitations(target: dict[str, Any],
-                         embedding_gap: str | None = None) -> list[str]:
+                         embedding_gap: str | None = None,
+                         standing_path: Any = None) -> list[str]:
+    """The generated half, then the reviewed half (`docs/coverage-standing.yaml`, plan §7.8).
+
+    The order is deliberate: what this scan could not do comes first, because it is specific
+    to the scan in hand, and the standing statements — true of every scan — come after. The
+    merge only appends, so no edit to the reviewed file can remove a generated limitation.
+    """
     from cva.loaders.safety import S3_SANDBOX_LIMITATION  # lazy: keeps the report import light
     out = [*STANDING_LIMITATIONS, str(S3_SANDBOX_LIMITATION)]
     if embedding_gap:
@@ -185,6 +192,11 @@ def standing_limitations(target: dict[str, Any],
     # The POSITIVE case — a declared spec, applied at scan time — is not a limitation and is
     # not asserted here. `target.preprocess_hash` is the report's statement that a spec was
     # declared and used; the schema's description of that field says what its presence means.
+    from cva.report import standing  # lazy: the loader reads a file and imports yaml
+
+    for line in standing.load(standing_path).lines():
+        if line and line not in out:
+            out.append(line)
     return out
 
 

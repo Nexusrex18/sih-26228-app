@@ -1,0 +1,460 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================ tokens
+ * Surfaces are a blue-cool graphite, never black: black is a void, this is an instrument.
+ * Signal hues are reserved for disposition and seal state, and colour is never the only
+ * carrier of either — every state is icon + word + colour.
+ */
+@layer base {
+  :root {
+    --surface-deep: 220 32% 6%;
+    --surface: 219 28% 8%;
+    --surface-panel: 218 26% 11%;
+    --surface-raised: 217 24% 15%;
+    --line: 217 24% 18%;
+    --line-strong: 216 22% 24%;
+
+    /* Rank is carried by luminance, not by size: four cool-tinted steps, brightest for the
+     * few things that must be read first (titles, the numbers), dimmest for metadata. */
+    --ink-strong: 214 30% 97%;
+    --ink: 215 22% 89%;
+    --ink-muted: 216 16% 74%;
+    --ink-faint: 217 11% 56%;
+
+    --accent: 219 93% 67%;
+    --accent-dim: 220 38% 32%;
+
+    --quarantine: 8 73% 59%;
+    --review: 39 71% 55%;
+    --accept: 158 35% 47%;
+    --pending: 264 62% 68%;
+    --absent: 213 17% 62%;
+
+    --shadow: 220 60% 2%;
+
+    /* Type: IBM Plex, bundled. Condensed for display, Sans for prose, Mono for data. */
+    --font-sans: "IBM Plex Sans";
+    --font-display: "IBM Plex Sans Condensed";
+    --font-mono: "IBM Plex Mono";
+
+    /* Glass: a panel over the drifting field, not a flat card on a flat page. Its edge is a
+     * hairline — a lit inner edge plus a dark outer ring — never a blurred drop shadow: on a
+     * dark surface a soft shadow reads as mud, a lit edge reads as a bevel. */
+    --glass: 218 30% 12% / 0.62;
+    --edge-lit: 0 0% 100% / 0.07;
+    --edge-ring: 220 60% 2% / 0.55;
+    --glow: 219 93% 67% / 0.18;
+
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  }
+
+  :root.light {
+    --glass: 0 0% 100% / 0.72;
+    /* On a light surface a white lit edge is invisible; the hairline is a darker ring. */
+    --edge-lit: 0 0% 100% / 0.9;
+    --edge-ring: 217 30% 20% / 0.1;
+    --glow: 221 64% 51% / 0.14;
+    --surface-deep: 215 30% 93%;
+    --surface: 213 33% 97%;
+    --surface-panel: 0 0% 100%;
+    --surface-raised: 0 0% 100%;
+    --line: 215 25% 89%;
+    --line-strong: 215 20% 80%;
+
+    --ink-strong: 218 36% 8%;
+    --ink: 217 30% 15%;
+    --ink-muted: 216 18% 32%;
+    --ink-faint: 215 13% 45%;
+
+    --accent: 221 64% 51%;
+    --accent-dim: 221 55% 82%;
+
+    --quarantine: 8 67% 46%;
+    --review: 36 73% 38%;
+    --accept: 158 45% 33%;
+    --pending: 264 45% 48%;
+    --absent: 215 17% 43%;
+
+    --shadow: 217 40% 30%;
+  }
+
+  * {
+    @apply border-line;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-surface text-ink font-sans antialiased;
+    font-feature-settings: "kern" 1, "liga" 1;
+    text-rendering: optimizeLegibility;
+    /* A deep vertical falloff so the surface has a light source, not a flat fill. The light
+     * is neutral: hue on this page belongs to status, and a tinted room competes with it. */
+    background-image: radial-gradient(
+        120% 60% at 50% -10%,
+        hsl(var(--ink) / 0.05),
+        transparent 60%
+      ),
+      linear-gradient(hsl(var(--surface)), hsl(var(--surface-deep)));
+    background-attachment: fixed;
+  }
+
+  h1,
+  h2,
+  h3,
+  .font-display {
+    font-family: var(--font-display), var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: -0.01em;
+  }
+
+  /* Tabular figures everywhere a number can change, so a count that ticks up does not
+   * reflow the row it sits in. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-surface rounded-sm;
+  }
+
+  ::selection {
+    background: hsl(var(--accent) / 0.3);
+  }
+
+  /* An analyst under stress is the user, and some of them have vestibular disorders.
+   * Everything ambient stops; nothing that carries meaning was carried by motion alone. */
+  /* Reduced motion means FEWER and gentler, not zero. Every ambient and positional
+   * animation stops; short opacity and colour transitions stay, because they carry state
+   * (a chip changing, a row highlighting) and move nothing. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+    }
+    .lift:hover,
+    .lift {
+      transform: none !important;
+    }
+    [class*="active:scale"]:active {
+      transform: none !important;
+    }
+  }
+
+  /* Translucency is a hierarchy cue here, not a look: the sticky header floats over
+   * scrolling findings and the sheet floats over the page beneath it. Where the user has
+   * asked for less of it, the surfaces go solid and the blur goes away entirely — a
+   * frosted panel that is hard to read is worse than a plain one. */
+  @media (prefers-reduced-transparency: reduce) {
+    header,
+    .backdrop-blur-sm,
+    .backdrop-blur-md,
+    .backdrop-blur-xl,
+    [data-sheet],
+    [data-sheet-scrim] {
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+    header {
+      background-color: hsl(var(--surface)) !important;
+    }
+    [data-sheet] {
+      background-color: hsl(var(--surface-panel)) !important;
+    }
+    /* The ambient field is decoration and the only thing here that is. */
+    .grid-field,
+    .aurora {
+      display: none;
+    }
+    .glass {
+      background: hsl(var(--surface-panel));
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+  }
+
+  /* Higher contrast: solid surfaces, defined borders, and — the one that matters for this
+   * product — a denser, more opaque hatch. The hatch is how an UNAVAILABLE check is told
+   * apart from a clean one, so it must survive a contrast preference rather than wash out
+   * with the rest of the low-alpha fills. */
+  @media (prefers-contrast: more) {
+    :root {
+      --line: 215 24% 34%;
+      --line-strong: 215 26% 48%;
+      --ink-muted: 215 25% 84%;
+      --ink-faint: 215 20% 70%;
+    }
+    :root.light {
+      --line: 215 25% 62%;
+      --line-strong: 215 28% 40%;
+      --ink-muted: 216 30% 22%;
+      --ink-faint: 215 25% 32%;
+    }
+    header,
+    [data-sheet],
+    .glass {
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      background-color: hsl(var(--surface-panel)) !important;
+    }
+    .hatched::before {
+      background-image: repeating-linear-gradient(
+        -45deg,
+        hsl(var(--absent) / 0.55) 0 2px,
+        transparent 2px 9px
+      );
+      opacity: 1;
+    }
+  }
+}
+
+@layer components {
+  /* The instrument grid. The only decoration in the whole system: it sits behind
+   * everything at low opacity and stops a dark page reading as a void. */
+  .grid-field {
+    background-image:
+      linear-gradient(hsl(var(--line) / 0.5) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--line) / 0.5) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse 120% 80% at 50% 0%, #000 0%, transparent 78%);
+  }
+
+  /* THE HATCH.
+   * An UNAVAILABLE or DEGRADED check is not greyed out. Every other dashboard fades what
+   * did not run, which is precisely the lie this product cannot tell: "absence of evidence
+   * must not render as evidence of absence" is its central claim. The hatch is visually
+   * loud but not alarming, and the drift is slow enough to read as "still true" rather
+   * than "loading". */
+  .hatched {
+    position: relative;
+  }
+  .hatched::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background-image: repeating-linear-gradient(
+      -45deg,
+      hsl(var(--absent) / 0.2) 0 1px,
+      transparent 1px 9px
+    );
+    background-size: 12.73px 12.73px;
+    @apply animate-hatch-drift;
+    opacity: 0.75;
+  }
+  .hatched > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* THE SEQ RAIL — the signature element.
+   * A vertical spine of ledger sequence numbers with a highlight travelling downward, the
+   * direction records are appended. It encodes the one genuinely unusual fact about this
+   * product: the ledger is ordered by `seq` and never by the clock, because the host clock
+   * is untrusted. */
+  .seqrail {
+    position: relative;
+    padding-left: 3.5rem;
+  }
+  .seqrail::before {
+    content: "";
+    position: absolute;
+    left: 1.3125rem;
+    top: 0.375rem;
+    bottom: 0.375rem;
+    width: 2px;
+    border-radius: 2px;
+    background: linear-gradient(hsl(var(--line-strong)), hsl(var(--line)));
+  }
+  .seqrail::after {
+    content: "";
+    position: absolute;
+    left: 1.3125rem;
+    width: 2px;
+    height: 4.25rem;
+    border-radius: 2px;
+    background: linear-gradient(transparent, hsl(var(--accent)), transparent);
+    @apply animate-rail-travel;
+  }
+
+  .shimmer {
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      hsl(var(--ink) / 0.08) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    @apply animate-shimmer;
+  }
+
+  /* ---------------------------------------------------------------- depth
+   * Glass is used where a panel floats over the ambient field: it tells the eye what is
+   * content and what is the room. Solid under reduced-transparency and more-contrast. */
+  .glass {
+    background: hsl(var(--glass));
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    box-shadow:
+      inset 0 0 0 0.5px hsl(var(--edge-lit)),
+      0 0 0 1px hsl(var(--edge-ring));
+  }
+
+  /* The one soft shadow in the system, reserved for layers that float over the page — the
+   * decide sheet, ⌘K, tooltips, toasts. Everything that sits IN the page gets a hairline. */
+  .float-shadow {
+    box-shadow:
+      inset 0 0 0 0.5px hsl(var(--edge-lit)),
+      0 0 0 1px hsl(var(--edge-ring)),
+      0 2px 32px 0 hsl(var(--shadow) / 0.35);
+  }
+
+  /* Hover answers with colour, never movement: a surface used hundreds of times a day
+   * should respond instantly and never make the eye chase anything. Pointer devices only —
+   * a tap is not a hover. */
+  @media (hover: hover) and (pointer: fine) {
+    .lift {
+      transition:
+        border-color 140ms var(--ease-out),
+        background-color 140ms var(--ease-out);
+    }
+    .lift:hover {
+      border-color: hsl(var(--line-strong));
+      background-color: hsl(var(--surface-raised) / 0.55);
+    }
+  }
+
+  /* A selected chip, tab or row. Neutral on purpose: selection is not a status, and blue on
+   * every active filter would compete with the disposition hues that ARE status. Rank comes
+   * from the brighter surface and text plus a lit edge. */
+  .sel-on {
+    border-color: hsl(var(--line-strong));
+    background-color: hsl(var(--surface-raised));
+    color: hsl(var(--ink-strong));
+    box-shadow: inset 0 0 0 0.5px hsl(var(--edge-lit));
+  }
+  .sel-off {
+    border-color: hsl(var(--line));
+    background-color: transparent;
+    color: hsl(var(--ink-faint));
+    transition:
+      color 140ms var(--ease-out),
+      border-color 140ms var(--ease-out),
+      background-color 140ms var(--ease-out);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .sel-off:hover {
+      color: hsl(var(--ink));
+      border-color: hsl(var(--line-strong));
+    }
+  }
+
+  /* The ambient field: a slow drift behind the grid. Constant motion, so linear. Neutral
+   * light only — accept/pending hues in the room would read as a status nobody set. */
+  .aurora {
+    background:
+      radial-gradient(40% 35% at 20% 10%, hsl(var(--ink) / 0.05), transparent 70%),
+      radial-gradient(35% 30% at 85% 20%, hsl(var(--ink) / 0.03), transparent 70%),
+      radial-gradient(45% 40% at 60% 95%, hsl(var(--ink) / 0.025), transparent 70%);
+    background-size: 160% 160%;
+    animation: aurora-drift 36s linear infinite alternate;
+  }
+  @keyframes aurora-drift {
+    0% { background-position: 0% 0%, 100% 0%, 50% 100%; }
+    100% { background-position: 30% 20%, 70% 30%, 30% 70%; }
+  }
+  .grid-field {
+    animation: grid-drift 60s linear infinite;
+  }
+  @keyframes grid-drift {
+    to { background-position: 64px 64px, 64px 64px; }
+  }
+
+  /* A status dot that breathes: the state is live, not a stale label. */
+  .pulse-dot {
+    position: relative;
+  }
+  .pulse-dot::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.35;
+    animation: pulse-ring 2.4s var(--ease-out) infinite;
+  }
+  @keyframes pulse-ring {
+    0% { transform: scale(0.6); opacity: 0.45; }
+    100% { transform: scale(2.2); opacity: 0; }
+  }
+
+  /* THE LEDGER PULSE — the signature. A signal trace whose beat is the ledger's own seq:
+   * one blip per record, drawn left to right and scrolling, the way an instrument shows a
+   * live channel. It encodes the product's unusual fact — the ledger, not the clock, is
+   * what advances — and it is the one piece of motion the whole design spends boldly. */
+  .ledger-trace {
+    animation: trace-scroll 6s linear infinite;
+  }
+  @keyframes trace-scroll {
+    to { transform: translateX(-50%); }
+  }
+  .ledger-trace-glow {
+    filter: drop-shadow(0 0 4px currentColor);
+  }
+
+  /* A scanning sweep across the verified shield. */
+  .sweep-mask {
+    position: relative;
+    overflow: hidden;
+  }
+  .sweep-mask::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 30%, hsl(0 0% 100% / 0.18) 50%, transparent 70%);
+    transform: translateX(-120%);
+    animation: sweep-pass 4.5s var(--ease-in-out) infinite;
+  }
+  @keyframes sweep-pass {
+    0%, 55% { transform: translateX(-120%); }
+    100% { transform: translateX(120%); }
+  }
+
+  [cmdk-group-heading] {
+    @apply px-3 pb-1 pt-3 font-mono text-2xs uppercase tracking-wider text-ink-faint;
+  }
+
+  /* Chart tooltip, shared by every chart so hover reads the same everywhere. */
+  .chart-tip {
+    @apply float-shadow rounded-md border border-line-strong px-3 py-2 text-xs;
+    background: hsl(var(--surface-panel) / 0.96);
+    backdrop-filter: blur(8px);
+  }
+
+  /* Scrollbars, because a dark instrument with a bright default scrollbar looks unfinished. */
+  .scroll-slim {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--line-strong)) transparent;
+  }
+  .scroll-slim::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scroll-slim::-webkit-scrollbar-thumb {
+    background: hsl(var(--line-strong));
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .scroll-slim::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

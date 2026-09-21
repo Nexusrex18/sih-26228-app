@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Evidence unavailable{% endblock %}
+{% block heading %}Evidence unavailable{% endblock %}
+{% block subheading %}{{ digest[:16] }}&hellip;{% endblock %}
+{% block content_class %} narrow{% endblock %}
+
+{% block content %}
+<section class="block">
+  <div class="empty hatched">
+    <h3>This evidence file was not served</h3>
+    <p class="lede">{{ reason }}</p>
+    <p class="note">Evidence is content-addressed: the path <em>is</em> the sha256 of the
+      bytes. The hash is recomputed on every read, and a file whose contents no longer hash
+      to its name is not the evidence the finding cited &mdash; so it is refused rather than
+      shown under a label it no longer earns.</p>
+    <p class="note">The finding is unchanged. What is missing is one piece of its supporting
+      material, and this page exists so that absence is visible rather than a broken image.</p>
+  </div>
+</section>
+{% endblock %}

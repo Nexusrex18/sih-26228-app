@@ -1,0 +1,32 @@
+{# The shell for the only server-rendered pages left: sign-in, errors, and the evidence
+   route's "not served" page. The dashboard itself is the Next.js app at /app/.
+   Autoescape is ON (Flask default) and there is no `|safe` anywhere — S1's whole point. #}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{# `same-origin`, matching the header — never `no-referrer`. A meta tag overrides the
+   header, and under `no-referrer` Firefox sends `Origin: null` on the login POST, so S7's
+   origin check refused every sign-in. Cross-origin requests still get no Referer. #}
+<meta name="referrer" content="same-origin">
+<title>{% block title %}CVA{% endblock %} &middot; CV Integrity Assurance</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<link rel="icon" href="{{ url_for('static', filename='mark.svg') }}" type="image/svg+xml">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+<a class="skiplink" href="#main">Skip to content</a>
+{% block shell %}
+<main class="content narrow" id="main">
+  <header class="topbar">
+    <div class="topbar-title">
+      <strong>{% block heading %}CV Integrity Assurance{% endblock %}</strong>
+      <span class="tiny">{% block subheading %}Analyst governance &middot; offline{% endblock %}</span>
+    </div>
+  </header>
+  {% block content %}{% endblock %}
+</main>
+{% endblock %}
+<script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</body>
+</html>

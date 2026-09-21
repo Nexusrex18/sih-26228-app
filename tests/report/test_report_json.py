@@ -38,6 +38,7 @@ from cva.core.types import (
     Severity,
 )
 from cva.report import coverage, report_json
+from cva.report import standing
 from cva.report.coverage import STANDING_LIMITATIONS
 
 SCHEMA = Path(__file__).resolve().parents[2] / "schemas" / "report.schema.json"
@@ -537,8 +538,17 @@ def test_a_check_that_was_planned_then_raised_is_not_assessed():
 
 # --- standing limitations ----------------------------------------------------------------------
 
+#: The reviewed half (`docs/coverage-standing.yaml`) is appended to every statement, so the
+#: tests below — which are about the GENERATED half — trim it and assert separately that it
+#: is there and that it is last.
+_REVIEWED = standing.load().lines()
+
+
 def _limits(target: dict[str, Any]) -> list[str]:
-    return report_json.standing_limitations(target)
+    """The generated half alone."""
+    out = report_json.standing_limitations(target)
+    assert out[-len(_REVIEWED):] == _REVIEWED, "the reviewed half is always last"
+    return out[:-len(_REVIEWED)]
 
 
 def test_the_base_standing_limitations_are_always_present_plus_the_sandbox_one():
@@ -546,6 +556,26 @@ def test_the_base_standing_limitations_are_always_present_plus_the_sandbox_one()
     assert base[:len(STANDING_LIMITATIONS)] == STANDING_LIMITATIONS
     assert len(base) == len(STANDING_LIMITATIONS) + 1
     assert len(set(base)) == len(base)
+
+
+def test_the_reviewed_half_is_merged_in_and_cannot_remove_a_generated_one():
+    """Plan §7.8: code declares what it does, humans declare what the code depends on.
+
+    The merge only appends. A hand-edited file cannot delete a generated limitation, so no
+    edit to the reviewed file can make a scan look better than the registry says it is.
+    """
+    full = report_json.standing_limitations({})
+    assert full[:len(STANDING_LIMITATIONS)] == STANDING_LIMITATIONS
+    assert _REVIEWED and full[-len(_REVIEWED):] == _REVIEWED
+    assert len(set(full)) == len(full), "a duplicated statement is never printed twice"
+
+
+def test_a_missing_reviewed_file_says_so_rather_than_printing_a_shorter_statement(tmp_path):
+    """A bundle assembled without the file still produces a report — one that says the
+    reviewed half is absent. A shorter coverage statement must never read as a cleaner one."""
+    absent = report_json.standing_limitations({}, None, tmp_path / "not-here.yaml")
+    assert absent[:len(STANDING_LIMITATIONS)] == STANDING_LIMITATIONS
+    assert absent[-1] == standing.MISSING
 
 
 def test_a_model_with_a_digest_adds_no_weight_digest_limitation_whatever_its_format():
@@ -583,14 +613,15 @@ def test_the_missing_digest_limitation_depends_on_the_model_format():
 def test_the_limitations_reach_report_json_from_the_target():
     res = scan(FakeModel(), RunContext(), "deep", registries=EMPTY)      # onnx, no digest
     rep = report_json.build(res)
-    assert rep["coverage"]["standing_limitations"] == _limits(rep["target"])
+    assert rep["coverage"]["standing_limitations"] == _limits(rep["target"]) + _REVIEWED
+    generated = len(STANDING_LIMITATIONS) + len(_REVIEWED)
     # sandbox + missing weight digest + no declared preprocessing spec
-    assert len(rep["coverage"]["standing_limitations"]) == len(STANDING_LIMITATIONS) + 3
+    assert len(rep["coverage"]["standing_limitations"]) == generated + 3
     hashed = report_json.build(scan(HashedModel(), RunContext(), "deep", registries=EMPTY))
-    assert len(hashed["coverage"]["standing_limitations"]) == len(STANDING_LIMITATIONS) + 2
+    assert len(hashed["coverage"]["standing_limitations"]) == generated + 2
     declared = report_json.build(scan(PreprocessedModel(), RunContext(), "deep",
                                       registries=EMPTY))
-    assert len(declared["coverage"]["standing_limitations"]) == len(STANDING_LIMITATIONS) + 1
+    assert len(declared["coverage"]["standing_limitations"]) == generated + 1
 
 
 NO_SPEC_LIMITATION = (
