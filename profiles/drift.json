@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0.0",
+  "name": "baseline",
+  "budget_tier": "standard",
+  "thresholds": {},
+  "psi": {
+    "n_bins": 10,
+    "alpha": 0.05,
+    "min_samples": 20,
+    "min_reference_n": 20,
+    "min_incoming_n": 20,
+    "min_ks_effect": 0.15,
+    "permutations": 199,
+    "seed": 0,
+    "axis_thresholds": {}
+  },
+  "disposition": {
+    "rules": [
+      {
+        "id": "D1",
+        "detector_prefix": "prov.",
+        "min_severity": "high",
+        "disposition": "quarantine",
+        "description": "deterministic provenance failure"
+      },
+      {
+        "id": "D2",
+        "attack_class": "benign_conversion",
+        "disposition": "review",
+        "description": "benign conversion: never the same rule as a genuine substitution"
+      },
+      {
+        "id": "D6",
+        "attack_class": "module:D",
+        "min_severity": "low",
+        "disposition": "review",
+        "cap": "review",
+        "description": "Uncalibrated Module D evidence routes by severity, capped at review."
+      },
+      {
+        "id": "C1",
+        "detector_prefix": "model.intrinsic_probes",
+        "min_severity": "low",
+        "disposition": "review",
+        "cap": "review",
+        "description": "intrinsic probes are individually weak signals whose value is the ranking they hand Neural Cleanse; a high score alone cannot justify quarantine"
+      },
+      {
+        "id": "C2",
+        "attack_class": "activation_anomaly",
+        "min_severity": "low",
+        "disposition": "review",
+        "cap": "review",
+        "description": "the activation-statistics half of weight_stats is reference-free and detects gross structural damage, not a backdoor: capped at review"
+      },
+      {
+        "id": "C3",
+        "attack_class": "model_anomalous",
+        "min_severity": "low",
+        "disposition": "review",
+        "cap": "review",
+        "description": "'something is wrong and we cannot name it' is deliberately not an attack attribution: capped at review, never quarantine"
+      },
+      {
+        "id": "D3",
+        "min_confidence": 0.9,
+        "min_severity": "high",
+        "disposition": "quarantine"
+      },
+      {
+        "id": "D4",
+        "min_posterior": 0.25,
+        "requires_ci_excludes_cohort": true,
+        "disposition": "quarantine",
+        "description": "contributor posterior; evaluated on contributor rows, not findings"
+      },
+      {
+        "id": "D5",
+        "min_confidence": 0.6,
+        "min_severity": "low",
+        "disposition": "review"
+      },
+      {
+        "id": "D7",
+        "disposition": "accept",
+        "description": "otherwise"
+      }
+    ]
+  }
+}

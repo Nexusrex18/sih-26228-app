@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="CVA">
+  <rect width="32" height="32" rx="6" fill="#0e1219"/>
+  <rect x="3.5" y="3.5" width="25" height="25" rx="4" fill="none" stroke="#33476e"/>
+  <!-- the seq rail: the mark is the thing the product is ordered by -->
+  <path d="M10 8v16" stroke="#5b8ff9" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="10" cy="11" r="1.8" fill="#4fa383"/>
+  <circle cx="10" cy="16" r="1.8" fill="#dda23f"/>
+  <circle cx="10" cy="21" r="1.8" fill="#e35d4a"/>
+  <path d="M16 11h8M16 16h6M16 21h7" stroke="#8293a8" stroke-width="1.6" stroke-linecap="round"/>
+</svg>

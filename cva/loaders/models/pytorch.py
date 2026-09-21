@@ -6,6 +6,7 @@ untrusted by premise, so weights_only=True is mandatory, not advisory
 """
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +15,69 @@ import torch
 import torch.nn as nn
 
 from cva.core.capability import Capability, CapabilitySet
-from .base import ProbeLog, digest_weights, softmax
-
 from cva.loaders.safety import check_torch_version as _check_torch_version
+from cva.loaders.safety import load_in_sandbox as _load_in_sandbox
+
+from .base import ProbeLog, arch_hash_of, digest_weights, softmax
+from .torchscript import _is_torchscript_archive
+
+
+def load_checkpoint_untrusted(path: str | Path) -> bytes:
+    """The S3 sandbox entry point. Imported BY NAME in a fresh subprocess, so it must be
+    module-level and must not close over anything.
+
+    It returns BYTES, never tensors, and that is not a convenience — it is the only thing
+    that works and it is also the right shape for a sandbox boundary.
+
+    A `torch.Tensor` does not travel through a `multiprocessing.Pipe` by value. Its
+    reduction hands over shared memory by PASSING A FILE DESCRIPTOR, which opens a second
+    Unix-domain socket back to the parent's resource sharer. Inside this sandbox that
+    cannot work — the child has chdir'd into a temp directory that is deleted on exit — and
+    it fails as a clean exit with an empty pipe, which the caller can only report as "died,
+    treated as hostile".
+
+    Even where it worked it would be wrong. The point of the boundary is that nothing live
+    crosses it; handing the parent a descriptor into memory the untrusted load just
+    populated gives back a share of exactly what was isolated. Re-serialising costs one
+    extra copy and keeps the boundary a boundary.
+    """
+    import io
+
+    _check_torch_version()
+    blob = torch.load(Path(path), map_location="cpu", weights_only=True)
+    buf = io.BytesIO()
+    torch.save(blob, buf)
+    return buf.getvalue()
+
+
+def _read_checkpoint(path: Path, sandboxed: bool = True) -> dict:
+    """S2 + S3 together, which is the only way either of them is worth much.
+
+    `weights_only=True` (S2) is what stops the pickle executing a payload, and it is
+    mandatory rather than advisory — CVE-2025-32434, closed properly in 2.6.0. But it
+    only constrains the PICKLE opcodes. The zip reader and the tensor deserialiser beneath
+    it are ordinary C code parsing an attacker-supplied file, and a memory-safety bug there
+    is reached before any opcode is interpreted. S3 is the answer to that one: the read
+    happens in a spawned subprocess, so a decoder that dies takes a child with it and not
+    the process holding the ledger.
+
+    `sandboxed=False` exists for the in-process path where the file is already trusted —
+    a battery of reference models we generated ourselves. It is not the default, because
+    the premise of this whole module is that the supplier is not trusted.
+
+    Note the honest limit, stated in full at safety.S3_SANDBOX_LIMITATION: this is a
+    Python-level sandbox, not an OS-level one.
+    """
+    if not sandboxed:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    import io
+
+    raw = _load_in_sandbox(
+        "cva.loaders.models.pytorch:load_checkpoint_untrusted", path)
+    # weights_only again on the way back in. These bytes were written by our own
+    # torch.save in the child from already-sanitised tensors, so nothing hostile should
+    # remain — but "should" is not a control, and the flag costs nothing.
+    return torch.load(io.BytesIO(raw), map_location="cpu", weights_only=True)
 
 
 class TorchModelHandle:
@@ -47,6 +108,16 @@ class TorchModelHandle:
 
     def torch_module(self) -> nn.Module:
         return self._m
+
+    def arch_hash(self) -> str:
+        """The module tree plus every parameter's SHAPE — never its values. Two models
+        that differ only by training are the same architecture and must hash the same;
+        widening a layer must not."""
+        toks = [f"{name}:{type(mod).__name__}"
+                for name, mod in self._m.named_modules() if name]
+        toks += [f"p:{name}:{tuple(q.shape)}"
+                 for name, q in sorted(self._m.named_parameters())]
+        return arch_hash_of(toks)
 
     def activations(self, x: np.ndarray) -> dict[str, np.ndarray]:
         out: dict[str, np.ndarray] = {}
@@ -143,25 +214,35 @@ class PyTorchLoader:
         self.arch_registry = arch_registry or {}
 
     def supports(self, path: Path) -> bool:
-        """A modern torch.save writes a zip archive, exactly like a TorchScript archive,
-        so the magic bytes cannot tell them apart. The only reliable test is to try."""
+        """Sniff the archive DIRECTORY. Never deserialise here.
+
+        A modern `torch.save` writes a zip archive exactly as a TorchScript archive does, so
+        the magic bytes alone cannot tell them apart — but the zip's member NAMES can, and
+        reading them decompresses nothing. This used to call `torch.jit.load` and then
+        `torch.load`, both of which deserialise attacker-controlled bytes, and `supports()`
+        runs OUTSIDE the sandbox that `load()` runs inside: every registered loader sniffs
+        every candidate file, so this was the widest-reach code path in the loader stack and
+        the least protected. `weights_only=True` narrows the primitive; it is not a sandbox,
+        and the threat model's boundary is the sandbox.
+
+        The cost is precision, and it is the right trade: a zip that is not TorchScript and
+        carries no `state_dict` reaches `load()`, where the sandbox holds and the error is
+        raised with a name on it. A sniff that is wrong in that direction fails safely.
+        """
         if path.suffix not in {".pt", ".pth"}:
             return False
-        try:
-            torch.jit.load(str(path), map_location="cpu")
-            return False                       # it is TorchScript; that loader owns it
-        except Exception:
-            pass
+        if _is_torchscript_archive(path):
+            return False                       # that loader owns it
         try:
             _check_torch_version()
-            blob = torch.load(path, map_location="cpu", weights_only=True)
-            return isinstance(blob, dict) and "state_dict" in blob
         except Exception:
             return False
+        return zipfile.is_zipfile(path)
 
-    def load(self, path: Path, model_id: str | None = None) -> TorchModelHandle:
+    def load(self, path: Path, model_id: str | None = None,
+             sandboxed: bool = True) -> TorchModelHandle:
         _check_torch_version()
-        blob = torch.load(path, map_location="cpu", weights_only=True)  # MANDATORY
+        blob = _read_checkpoint(path, sandboxed=sandboxed)
         if isinstance(blob, dict) and "state_dict" in blob:
             arch = blob.get("arch")
             state = blob["state_dict"]
@@ -178,10 +259,41 @@ class PyTorchLoader:
             )
         module = self.arch_registry[arch](**meta.get("arch_kwargs", {}))
         module.load_state_dict(state)
+        # PR #6 fixed exactly this in TorchScriptLoader and the fix was not carried here:
+        # `int(meta.get("num_classes", 10))` fabricates a fact about the model under audit
+        # and it reaches the report as though it had been read off the model. The
+        # architecture is instantiated by then, so the forward pass is available — ask it,
+        # and fail loudly rather than default. `input_shape` keeps its declared default
+        # because it is the one fact a checkpoint does not carry and the probe needs it to
+        # run at all; a wrong shape makes the probe return None, which raises below.
+        shape = tuple(meta.get("input_shape", (3, 32, 32)))
+        declared = meta.get("num_classes")
+        probed = _probe_num_classes(module, shape)
+        if probed is None and declared is None:
+            raise ValueError(
+                f"{path.name}: cannot determine num_classes — a forward pass at input shape "
+                f"{shape} did not yield a 2-D output. Add 'num_classes' (and 'input_shape' "
+                "if it is not 3x32x32) to the checkpoint, or export to TorchScript/ONNX.")
+        if probed is not None and declared is not None and int(declared) != probed:
+            raise ValueError(
+                f"{path.name}: declared num_classes={declared} but the model actually "
+                f"outputs {probed}. The declaration is metadata the supplier controls; the "
+                "forward pass is the model. They must agree or neither can be reported.")
         return TorchModelHandle(
             module,
             model_id or path.stem,
-            tuple(meta.get("input_shape", (3, 32, 32))),
-            int(meta.get("num_classes", 10)),
+            shape,
+            probed if probed is not None else int(declared),
             source=path,
         )
+
+
+def _probe_num_classes(module, input_shape: tuple[int, ...]) -> int | None:
+    """Ask the model, rather than the file that ships alongside it."""
+    try:
+        module.eval()
+        with torch.no_grad():
+            out = module(torch.zeros((1, *input_shape)))
+        return int(out.shape[1]) if out.ndim == 2 else None
+    except Exception:
+        return None

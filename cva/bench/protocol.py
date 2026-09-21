@@ -13,8 +13,8 @@ Two leaks this exists to prevent, both of which have already happened in this pr
 """
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Sequence
 
 import numpy as np
 

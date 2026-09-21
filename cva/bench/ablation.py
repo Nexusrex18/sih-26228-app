@@ -6,8 +6,8 @@ not move separation should be removed.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Sequence
 
 from .protocol import Subject
 from .stats import separation

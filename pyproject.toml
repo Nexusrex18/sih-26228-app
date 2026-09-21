@@ -1,13 +1,113 @@
 [project]
 name = "cva"
 version = "0.1.0"
-description = "Trustworthy CV Integrity Assurance — Module B (model integrity)"
+description = "CV Integrity Assurance — offline dataset, model and inference-provenance assurance (SIH 26228)"
 requires-python = ">=3.11"
+
+# --- the pins that are security or size controls, not conveniences ---------
+#
+# torch>=2.6.0  — CVE-2025-32434 (CVSS 9.3). `weights_only=True` existed from 2.4 and did
+#                 NOT fully close the RCE path until 2.6.0. The model supplier is untrusted
+#                 by premise, so this is a floor, not a preference. Asserted at V3, and the
+#                 assertion MUST version-compare: '2.14.0' >= '2.6' is False as strings.
+#
+# The wheel index is pinned to download.pytorch.org/whl/cpu — see [tool.cva.index] below
+# and backend_plan.md §5.7. On the default PyPI index the linux torch wheel drags in 14
+# nvidia-* packages plus triton: ~3.03 GB against ~176 MB. That one setting IS the bundle
+# size target. Asserted at V3 (no nvidia present) and V12 (none in the tar).
 dependencies = [
-  "torch>=2.6.0",          # CVE-2025-32434: weights_only=True only fully safe from 2.6.0
-  "onnx>=1.15", "onnxruntime>=1.17", "numpy>=1.26", "scipy>=1.11",
-  "matplotlib>=3.8", "pillow>=10",
+  "torch>=2.6.0",
+  "torchvision>=0.21",
+  "onnx>=1.15",
+  "onnxruntime>=1.17",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "matplotlib>=3.8",
+  "pillow>=10",
+  "jsonschema>=4.18",       # Draft202012Validator — see core/profile.py on why the draft is explicit
+  "PyYAML>=6",
+  "packaging>=23",          # version comparison; never string-compare a version
+  "pytest-socket>=0.7",     # a PRODUCT dependency: cva selftest calls it programmatically (§5.8)
 ]
+
+[project.optional-dependencies]
+# Module A (data integrity). cleanlab is AGPL-3.0-or-later — accepted, backend_plan.md §5.12.
+# Each dependency still owes ADR-006's disconnected-sandbox smoke test before release.
+data = ["imagehash>=4.3", "cleanlab>=2.6", "adversarial-robustness-toolbox>=1.17",
+        "scikit-learn>=1.3", "pyyaml>=6.0"]
+# Mode A only — the attack lab and the benchmark harness. Never enters the bundle tar.
+dev = ["pytest>=8", "hypothesis>=6", "ruff>=0.5", "mypy>=1.10",
+       "playwright>=1.45"]   # tests/e2e/test_in_a_real_browser.py; drives system Chrome
+# Module E's runtime (Flask dashboard + waitress). `pip install --no-index` inside the image
+# resolves against the wheelhouse, so these have to be IN it — Module-E §2, O9. `jsonschema`
+# is already a core dependency.
+network = ["Flask>=3", "Werkzeug>=3", "Jinja2>=3.1", "MarkupSafe>=2.1", "itsdangerous>=2.1",
+           "click>=8.1", "blinker>=1.7", "waitress>=3"]
+# Mode C — the field seal SDK. The whole point of CI invariant 4 is that this list stays
+# this short: an operator asked to install the ML stack to record one detection declines.
+seal = ["cryptography>=42", "rfc8785>=0.1"]
+
+[project.scripts]
+cva = "cva.cli:main"
+cva-seal = "cva.provenance.seal.cli:main"   # Mode C operator tool (Module C plan §7.11)
+cva-web = "cva.web.app:main"                # the analyst dashboard (Module E)
+cva-ledgerd = "cva.ledgerd.server:main"     # holds the signing key so cva-web never does
+
+[tool.cva.index]
+# Consumed by `make lock` / `make bundle`; recorded here so the setting is discoverable
+# rather than living only in a shell history.
+torch_index_url = "https://download.pytorch.org/whl/cpu"
+
+# Module C seal SDK — the whole runtime budget (plan §2.1): cryptography + rfc8785 + stdlib.
+provenance = ["cryptography>=42", "rfc8785>=0.1.4"]
+provenance-dev = ["pytest>=8", "hypothesis>=6", "ruff", "mypy"]
+
+# Flat layout with several top-level directories (cva, attacklab, profiles, tests, artifacts):
+# without this, setuptools refuses to guess and `pip install -e .` fails. Ship the scanner
+# package and the attack lab; the tests, profiles and build artefacts are not packages.
+[tool.setuptools.packages.find]
+include = ["cva*", "attacklab*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+  "slow: exercises a real optimisation loop or corpus — excluded from the fast gate",
+  "corpus: needs artifacts/corpus, which `python -m attacklab.build` generates (Mode A)",
+  "e2e: starts the real cva-ledgerd and cva-web processes and drives them over HTTP",
+]
+
+[tool.ruff]
+line-length = 96
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+# E501  long lines are in prose comments, which are load-bearing here
+# E702/E701/E741  the existing house style in attacklab/ and the Module B detectors; churning
+#                 another seat's files to satisfy a formatter is not a backend change
+# UP042  `class X(str, Enum)` is deliberate — StrEnum changes `format()` semantics and these
+#         values are written into hashed JSON
+ignore = ["E501", "E701", "E702", "E741", "UP042"]
+
+[tool.mypy]
+# 3.12 = the dev machine (backend_plan.md §4.3). numpy's bundled stubs use `type`
+# statements, which mypy rejects under a 3.11 target even though the package imports fine.
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# strict on core/ only, per B0. core/ is the frozen contract four other seats build
+# against; a type error there is a contract error, not a local defect.
+[[tool.mypy.overrides]]
+module = "cva.core.*"
+disallow_untyped_defs = true
+disallow_any_generics = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = ["onnx.*", "onnxruntime.*", "scipy.*", "matplotlib.*", "torchvision.*", "yaml.*",
+          "pytest_socket.*", "rfc8785.*", "hypothesis.*"]
+ignore_missing_imports = true

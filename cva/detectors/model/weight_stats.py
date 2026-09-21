@@ -16,8 +16,7 @@ from __future__ import annotations
 import numpy as np
 
 from cva.core.capability import Availability, Capability
-from cva.core.types import (Disposition, Evidence, Finding, Nature, Severity,
-                              unavailable_finding)
+from cva.core.types import Disposition, Evidence, Finding, Nature, Severity, unavailable_finding
 from cva.detectors.base import CheckContext, register
 
 
@@ -132,6 +131,16 @@ class WeightStatisticsCheck:
                 "activations are not extractable from this model, so the activation half "
                 "of PS 2.2.2's 'parameter or activation statistics' was not assessed.",
                 (Capability.MODEL_ACTIVATIONS,), "activation_anomaly",
+                Availability.DEGRADED)]
+        if ctx.probes_x is None or not len(ctx.probes_x):
+            # Activations are extractable but there is nothing to extract them FROM: without
+            # probe inputs this half cannot run, and saying so beats indexing None.
+            return [unavailable_finding(
+                self.id, self.version, model.model_id,
+                "no probe inputs were supplied, so there was nothing to run the model on and "
+                "the activation half of PS 2.2.2's 'parameter or activation statistics' was "
+                "not assessed.",
+                (Capability.REFERENCE_CLEAN_SET,), "activation_anomaly",
                 Availability.DEGRADED)]
         x = ctx.probes_x[: int(ctx.opt("activation_probes", 128))]
         acts = model.activations(x.astype(np.float32))

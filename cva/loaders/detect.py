@@ -7,19 +7,52 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .models import ONNXLoader, PyTorchLoader, TorchScriptLoader
+from .models import KerasLoader, ONNXLoader, PyTorchLoader, TorchScriptLoader
+from .preprocess import attach_preprocess
 from .safety import prescan
 
 
-def detect_and_load(path, arch_registry=None, model_id=None, enforce_safety: bool = True):
+def detect_and_load(path, arch_registry=None, model_id=None, enforce_safety: bool = True,
+                    preprocess=None):
+    """Load `path` with whichever loader supports it.
+
+    `preprocess` is the path of a DECLARED preprocessing spec (`--preprocess`). When None, the
+    sidecar `<path>.preprocess.json` is used if it exists. A spec found either way is validated
+    and its hash/ref/bytes attached to the handle (`cva.loaders.preprocess`); one that is
+    malformed raises rather than being ignored. No spec, nothing attached.
+    """
     path = Path(path)
-    report = prescan(path)                     # S1: hash before open
-    if enforce_safety and not report.safe_to_load:
+    # S1: hash before open. A SavedModel is a directory and `prescan` hashes one file; the
+    # Keras loader owns the directory case (it converts from the graph, never running layers).
+    report = prescan(path) if path.is_file() else None
+    if enforce_safety and report is not None and not report.safe_to_load:
         raise RuntimeError(
             f"refusing to load {path.name}: " + "; ".join(report.reasons))
-    for loader in (ONNXLoader(), TorchScriptLoader(), PyTorchLoader(arch_registry or {})):
+    for loader in (ONNXLoader(), TorchScriptLoader(), KerasLoader(),
+                   PyTorchLoader(arch_registry or {})):
         if loader.supports(path):
             handle = loader.load(path, model_id=model_id)
             handle.safety = report
+            attach_preprocess(handle, path, preprocess)
             return handle
     raise ValueError(f"no loader supports {path.name}")
+
+
+DATASET_LOADERS = ("COCOLoader", "YOLOLoader", "VOCLoader", "ImageFolderLoader")
+
+
+def load_dataset(path):
+    """Dataset-side auto-detection, most specific format first.
+
+    Order is semantic. COCO, YOLO and VOC each have structural markers (a manifest with
+    `images` + `annotations`; `images/` + `labels/`; `Annotations/` + `JPEGImages/`).
+    ImageFolder has none — any directory of folders of images matches it — so it goes LAST and
+    can never win against a format that has real evidence. `GenericDataset` is not here: it
+    is constructed by hand, with the two functions that say what its layout means.
+    """
+    from .datasets import COCOLoader, ImageFolderLoader, VOCLoader, YOLOLoader
+    path = Path(path)
+    for loader in (COCOLoader(), YOLOLoader(), VOCLoader(), ImageFolderLoader()):
+        if loader.supports(path):
+            return loader.load(path)
+    raise ValueError(f"no dataset loader supports {path}")

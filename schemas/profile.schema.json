@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sih26228.local/schemas/profile/1.0.0/profile.schema.json",
+  "title": "CVA scan profile",
+  "description": "Two orthogonal axes in ONE schema, not eight files (§5.6, resolving C11). The four POLICY profiles (baseline/strict/blackbox/selftest) each declare a default BUDGET tier (triage/standard/deep/forensic), and any tier is selectable against any policy via --budget-tier. Unknown keys are a LOAD ERROR, not a warning: a profile with a typo'd threshold silently runs at the default, and the operator believes they tightened something they did not.",
+
+  "type": "object",
+  "required": ["schema_version", "name", "budget_tier", "thresholds", "disposition"],
+
+  "$comment": "unevaluatedProperties, NOT additionalProperties. The latter is evaluated against sibling `properties` only and DOES NOT COMPOSE under allOf/oneOf — which is exactly how a base schema plus four variants wants to be written. Getting it wrong fails in the flattering direction: the baseline validates, the strict variant does not, and the obvious 'fix' is to delete the constraint.",
+  "unevaluatedProperties": false,
+
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "name": {
+      "enum": ["baseline", "strict", "blackbox", "selftest", "triage", "standard", "deep", "forensic"],
+      "description": "The four policies, plus the four budget-tier names: a bare `--profile <tier>` is a legal invocation (the existing Module B call sites pass one), so a resolved profile can carry a tier name."
+    },
+    "description": { "type": "string" },
+
+    "budget_tier": {
+      "enum": ["triage", "standard", "deep", "forensic"],
+      "description": "The second axis. A check excluded here reports UNAVAILABLE with exclusion_reason='budget' and an estimated cost — NOT a fifth Availability state (§5.5). Cost-awareness lands in the schema at B1 even though profiles land at B6, because retrofitting it after detectors exist means touching every one of them."
+    },
+
+    "checks": {
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "description": "null = every registered check. An explicit list is how a budget tier excludes; the excluded checks still appear in the plan and the coverage statement, stating why."
+    },
+    "except_checks": {
+      "type": "array", "items": { "type": "string" },
+      "description": "A tier that means 'every registered check except these'. Resolved against the registry at plan time, so the tier cannot drift from it: a hand-typed inclusion list named ids that were not in the registry and made real checks read as budget-excluded."
+    },
+    "disabled_checks": {
+      "type": "array", "items": { "type": "string" },
+      "description": "The blackbox policy's mechanism: white-box detectors disabled UP FRONT, so the report says 'not asked to' rather than 'could not' — two different facts about the scan."
+    },
+
+    "embedding_max_images": {
+      "type": "integer", "minimum": 0,
+      "description": "Largest dataset the tier will embed. 0 = the backbone is never loaded. Derived from the measured CPU img/s at B4 times the tier's time budget; a larger dataset is reported as not embedded with this reason, never silently subsampled."
+    },
+
+    "estimated_cost": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "check_id -> what lifting a budget exclusion would cost. NOT filled by the orchestrator any more: the strings embed the dataset size, so putting them in the profile gave the same profile a different profile_hash per dataset. The orchestrator now passes them to build_plan(costs=...) instead. A caller that supplies this block itself is still honoured (build_plan falls back to it when `costs` is None), and it then IS part of the hash."
+    },
+
+    "nc_top_k": {
+      "type": "integer", "minimum": 1,
+      "description": "Neural Cleanse: how many of the intrinsic-probe-ranked target classes to reverse-engineer. Tier-level (deep = 3, forensic = 999 = all); selftest lowers it to 1."
+    },
+    "nc_steps": {
+      "type": "integer", "minimum": 1,
+      "description": "Neural Cleanse: optimisation steps per class on the gradient path."
+    },
+    "nes_steps": {
+      "type": "integer", "minimum": 1,
+      "description": "Neural Cleanse: NES iterations per class on the gradient-free path (ONNX, frozen TorchScript, every query-only handle)."
+    },
+
+    "cost_ceiling_s": {
+      "type": ["number", "null"],
+      "description": "Derived from the MEASURED CPU throughput at B4, never from backend_revised §3.6's ~20 img/s figure: that is a 6 GB GPU number and no GPU exists in this project (§4.3, R6)."
+    },
+
+    "egress_guard": {
+      "type": "boolean", "default": false,
+      "description": "selftest arms pytest-socket programmatically. It must be called as a LIBRARY, not via pytest's --disable-socket flag: cva selftest is a product entry point, and relying on the flag means the guard is armed in CI and absent in the shipped binary — the deployment that matters."
+    },
+    "pin_clock": {
+      "type": "boolean", "default": false,
+      "description": "selftest only. With scan_id derived from --seed, this is what makes V10's diff EMPTY rather than merely small."
+    },
+    "scan_id_from_seed": { "type": "boolean", "default": false },
+
+    "thresholds": {
+      "type": "object",
+      "description": "No constant lives in code — every threshold comes from here, so a tuning change never requires a code change and the profile hash records exactly what was applied.",
+      "additionalProperties": { "type": ["number", "string", "boolean", "array", "null"] }
+    },
+
+    "detector_options": {
+      "type": "object",
+      "description": "Per-detector options, keyed by detector_id. This is the ONE mechanism by which a plug-in receives profile settings — §7.5's check() signature has no slot for them, and leaving each family to invent its own would put three different answers in three packages.",
+      "additionalProperties": { "type": "object" }
+    },
+
+    "evidence": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "description": "Evidence caps live in the profile so the <25 MB single-file HTML target is an EVIDENCE-COUNT BUDGET decided in advance, not something discovered on demo day. Base64 inflates 4/3.",
+      "properties": {
+        "max_images_per_finding": { "type": "integer", "minimum": 0 },
+        "max_findings_rendered": { "type": "integer", "minimum": 0 },
+        "max_report_bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "psi": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "description": "Backend does not implement PSI, but the profile must carry what the CORRECTED null needs: PSI ~ (1/N + 1/M)·chi2(B-1). The scale factor is the entire content of the published result (Post-Merge R1), and both sample sizes appear in the critical value.",
+      "properties": {
+        "n_bins": { "type": "integer", "minimum": 2 },
+        "min_samples": {"type": "integer", "minimum": 2},
+        "min_ks_effect": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "permutations": {"type": "integer", "minimum": 19},
+        "seed": {"type": "integer", "minimum": 0},
+        "axis_thresholds": {"type": "object", "additionalProperties": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}, "description": "Per-axis minimum KS effects; omitted axes use min_ks_effect. Not absolute quality or attack thresholds."},
+        "min_reference_n": { "type": "integer", "minimum": 1 },
+        "min_incoming_n": { "type": "integer", "minimum": 1 },
+        "alpha": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 }
+      }
+    },
+
+    "rollup": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "group_key": {
+          "enum": ["contributor", "batch", "source"],
+          "description": "PARAMETERISED, per PS audit G2: PS §2.2.1 names three levels — 'contributor, batch or source metadata' — and hard-coding one silently drops the other two."
+        },
+        "credible_mass": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "permutation_n": { "type": "integer", "minimum": 0 },
+        "min_group_n": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "disposition": {
+      "type": "object",
+      "required": ["rules"],
+      "unevaluatedProperties": false,
+      "description": "The policy is ONE FILE an organisation can change without touching code. Whichever rule fired is written into Finding.disposition_rule.",
+      "properties": {
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "description": "ORDER IS SEMANTIC and two constraints are easy to get wrong. D2 must sit ABOVE D3, or a benign conversion matches D3 first. And D1 must be SCOPED TO prov.* — a model.weight_digest mismatch is also a deterministic failure, so an unscoped D1 would swallow every substitution finding before D2 ever runs, quietly restoring the exact false alarm D2 exists to prevent.",
+          "items": {
+            "type": "object",
+            "required": ["id", "disposition"],
+            "unevaluatedProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "description": { "type": "string" },
+              "detector_prefix": { "type": ["string", "null"], "description": "e.g. 'prov.' — this is D1's scoping" },
+              "attack_class": { "type": ["string", "null"], "description": "D2 keys on attack_class == 'benign_conversion', NOT on a tolerance predicate: the tolerance band is DETECTOR-INTERNAL and the risk engine sees Findings, not fingerprints. Besides a literal class name this accepts the pseudo-value 'module:<X>', which matches EVERY class owned by module X in the taxonomy (D6 uses 'module:D' because Module D owns three classes and this field is a single string). It is not itself an attack class and never appears on a Finding." },
+              "min_confidence": { "type": ["number", "null"] },
+              "min_severity": {
+                "enum": ["info", "low", "medium", "high", "critical", null],
+                "description": "D1's and D5's floors are load-bearing. prov.* bypass calibration and arrive at confidence 1.0, so an unfloored D1 quarantines boundary_flip, degraded_gap and clock_regression — reintroducing the exact false alarm that boundary_flip was approved to remove."
+              },
+              "min_posterior": { "type": ["number", "null"] },
+              "requires_ci_excludes_cohort": { "type": ["boolean", "null"] },
+              "disposition": { "enum": ["accept", "review", "quarantine"] },
+              "cap": {
+                "enum": ["accept", "review", "quarantine", null],
+                "description": "D6: drift-vs-manipulation is CAPPED at review, never quarantine alone."
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "calibration": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "method": { "enum": ["isotonic", "none"] },
+        "exclude_detector_prefixes": {
+          "type": "array", "items": { "type": "string" },
+          "description": "prov.* — a hash mismatch is arithmetic, not a belief."
+        },
+        "min_points": { "type": "integer", "minimum": 2 }
+      }
+    },
+
+    "determinism": {
+      "type": "object",
+      "$comment": "CUBLAS_WORKSPACE_CONFIG is GPU-OVERLAY ONLY and has no place in a CPU profile.",
+      "unevaluatedProperties": false,
+      "properties": {
+        "seed": { "type": "integer" },
+        "torch_deterministic": { "type": "boolean" },
+        "ort_intra_op_num_threads": { "type": "integer", "minimum": 1 },
+        "ort_inter_op_num_threads": { "type": "integer", "minimum": 1 },
+        "ort_execution_mode": { "enum": ["ORT_SEQUENTIAL", "ORT_PARALLEL"] }
+      }
+    }
+  }
+}

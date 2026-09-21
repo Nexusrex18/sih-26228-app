@@ -1,6 +1,6 @@
 from cva.core.capability import Availability
-from cva.core.types import Disposition, Severity
 from cva.core.model import Manifest, ModelBattery
+from cva.core.types import Disposition, Severity
 from cva.detectors.base import CheckContext
 from cva.detectors.model.weight_digest import WeightDigestCheck
 

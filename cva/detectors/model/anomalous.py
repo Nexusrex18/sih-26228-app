@@ -11,9 +11,15 @@ from __future__ import annotations
 
 import numpy as np
 
-from cva.core.capability import Availability, Capability
-from cva.core.types import (Disposition, Evidence, Finding, Nature, Severity,
-                              unavailable_finding)
+from cva.core.capability import Capability
+from cva.core.types import (
+    Disposition,
+    Evidence,
+    Finding,
+    Nature,
+    Severity,
+    unavailable_finding,
+)
 from cva.detectors.base import CheckContext, register
 
 
@@ -27,6 +33,15 @@ class AnomalousBehaviourCheck:
 
     def check(self, model, ctx: CheckContext) -> list[Finding]:
         x, y = ctx.probes_x, ctx.probes_y
+        # See the same guard in model.neural_cleanse: REFERENCE_CLEAN_SET is granted by a
+        # probe ARRAY or a reference DATASET, and this method needs the array to query the
+        # model with. Without it the row is unavailable, not a crash reported as a tool bug.
+        if x is None or not len(x):
+            return [unavailable_finding(
+                self.id, self.version, model.model_id,
+                "needs clean probe images as an array to query the model with; a reference "
+                "dataset alone does not supply them",
+                (Capability.REFERENCE_CLEAN_SET,), "model_anomalous")]
         p = np.asarray(model.predict(x.astype(np.float32)))
         pred = p.argmax(1)
         acc = float((pred == y).mean()) if y is not None else float("nan")

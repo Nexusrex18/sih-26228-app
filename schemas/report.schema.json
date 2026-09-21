@@ -1,0 +1,321 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sih26228.local/schemas/report/1.0.0/report.schema.json",
+  "title": "CVA assurance report",
+  "description": "The named PS §2.3 deliverable. Versioned $id plus a schema_version on every instance: a report that cannot be re-read next month is not the 'reproducible audit log' PS §2.3 asks for. Module E's dashboard is a SECOND CONSUMER of this same file and never recomputes a disposition, confidence or coverage row.",
+  "type": "object",
+  "required": [
+    "schema_version", "scan_id", "created_at_utc", "produced_by", "access_assumptions",
+    "plan", "findings", "coverage", "reproduction"
+  ],
+  "unevaluatedProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+
+    "scan_id": {
+      "type": "string",
+      "pattern": "^s-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}$",
+      "description": "VOLATILE (§5.3). One grammar, two producers: a per-day counter normally, and the last 4 digits of sha256(seed) under --profile selftest. Module E validates this as a path segment and refuses anything else, so the selftest form has to match the same regex."
+    },
+    "created_at_utc": {
+      "type": "string", "format": "date-time",
+      "description": "VOLATILE (§5.3). Pinned to a frozen clock under --profile selftest."
+    },
+    "produced_by": {
+      "type": "object",
+      "required": ["code_commit", "profile_hash", "profile_name", "budget_tier"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "code_commit": { "type": "string" },
+        "profile_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "profile_name": { "type": "string" },
+        "budget_tier": { "enum": ["triage", "standard", "deep", "forensic"] },
+        "tool_version": { "type": "string" }
+      }
+    },
+
+    "target": {
+      "type": "object",
+      "description": "What was scanned. Absent members are absent facts, not empty strings.",
+      "unevaluatedProperties": false,
+      "properties": {
+        "model_id": { "type": "string" },
+        "model_format": { "type": "string" },
+        "model_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "arch_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$",
+          "description": "sha256 over the model's STRUCTURE (module/op types and parameter shapes), never its weights. Absent for a query-only model, which has no structure to read." },
+        "preprocess_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$",
+          "description": "sha256 of the JCS canonical form of the DECLARED preprocessing spec after quantisation (mean/std/value_range as floor(x*1e6+0.5) integers). Absent when the operator declared no spec. Its PRESENCE also means the spec was APPLIED to scan-time inputs — value_range, then per-channel mean/std — so a prov.recompute honouring the same spec reproduces the inputs this scan used. It did not, until item 5: scan-time inference resized and divided by 255 and ignored the declared normalisation entirely, which would have had prov.recompute flagging our own scan." },
+        "preprocess_ref": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Content-addressed pointer to the stored quantised spec, so prov.recompute can re-run it. Module C's record grammar, `sha256:<64 lowercase hex>` — the same string its `config.preprocess_ref` validator accepts. Backend emitted the bare `<hex>.json` until item 28: the hashes agreed, the strings did not, and nothing mapped between them. The evidence store's own filename for the same bytes remains `<preprocess_hash>.json`; a wire ref and a filename are two different things." },
+        "model_opset": { "type": ["integer", "null"],
+          "description": "READ from the model and recorded, never gated: ONNX Runtime accepts opset 7+ and a gate would reject valid models." },
+        "dataset_path": { "type": ["string", "null"] },
+        "dataset_format": { "type": ["string", "null"] },
+        "n_samples": { "type": ["integer", "null"] },
+        "n_categories": { "type": ["integer", "null"] }
+      }
+    },
+
+    "verdict": { "enum": ["ACCEPT", "REVIEW", "QUARANTINE"] },
+
+    "access_assumptions": {
+      "type": "object",
+      "description": "PS §2.2.2 requires access assumptions PER ASSESSMENT; this is the scan-level header that §7.4 prints, and each Finding carries its own list as well.",
+      "required": ["capabilities_present", "capabilities_absent"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "capabilities_present": { "type": "array", "items": { "type": "string" } },
+        "capabilities_absent": {
+          "type": "array",
+          "description": "Every absence carries a REASON. 'Gradients NOT AVAILABLE' alone is not an access assumption; 'onnxruntime-training not bundled (declared narrowing, ADR-001)' is.",
+          "items": {
+            "type": "object",
+            "required": ["capability", "reason"],
+            "unevaluatedProperties": false,
+            "properties": {
+              "capability": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "consequence": { "type": "string" }
+      }
+    },
+
+    "plan": {
+      "type": "array",
+      "description": "Resolved and printed BEFORE any work starts — coverage is known at minute zero. All four states print at equal prominence; a shorter report must never look like a cleaner result.",
+      "items": {
+        "type": "object",
+        "required": ["check_id", "state", "reason", "attack_classes"],
+        "unevaluatedProperties": false,
+        "properties": {
+          "check_id": { "type": "string" },
+          "state": { "$ref": "#/$defs/availability" },
+          "reason": { "type": "string" },
+          "missing": { "type": "array", "items": { "type": "string" } },
+          "mode": { "type": ["string", "null"], "description": "which degraded path was taken" },
+          "exclusion_reason": { "$ref": "#/$defs/exclusionReason" },
+          "estimated_cost": { "type": ["string", "null"] },
+          "attack_classes": { "type": "array", "items": { "type": "string" } },
+          "elapsed_s": { "type": ["number", "null"] }
+        }
+      }
+    },
+
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+
+    "contributor_risk": {
+      "type": "array",
+      "description": "PS §2.2.1's source-level aggregation. Rendered BEFORE individual findings: it is what an acceptance analyst acts on. A beta-binomial posterior, never a raw flag rate — 3/5 = 60% must not outrank 800/10000 = 8%.",
+      "items": {
+        "type": "object",
+        "required": ["group_key", "group_value", "n_samples", "n_flagged", "posterior_mean", "ci_low", "ci_high"],
+        "unevaluatedProperties": false,
+        "properties": {
+          "group_key": { "enum": ["contributor", "batch", "source"] },
+          "group_value": { "type": "string" },
+          "contributor_source": { "$ref": "#/$defs/contributorSource" },
+          "n_samples": { "type": "integer" },
+          "n_flagged": { "type": "integer" },
+          "posterior_mean": { "type": "number" },
+          "ci_low": { "type": "number" },
+          "ci_high": { "type": "number" },
+          "excludes_cohort_rate": { "type": "boolean", "description": "ci_low is above this group's cohort rate: the flag rate of the OTHER non-outlier groups, so a group never informs its own baseline." },
+          "cohort_rate_used": { "type": "number", "description": "The leave-one-out cohort rate THIS row was decided against — the number `excludes_cohort_rate` compares `ci_low` to. It differs per row and is not `contributor_baseline.cohort_rate`, which is the all-survivors rate over every group. Both are defensible; publishing only the one that was not used meant a reader recomputing the decision from the report could not reproduce it." },
+          "excludes_reference_rate": { "type": "boolean", "description": "Present only when a reference dataset was usable: ci_low is above the upper 95% bound of the reference dataset's flag rate. Informational; D4 stays keyed on excludes_cohort_rate." },
+          "disposition": { "$ref": "#/$defs/disposition" }
+        }
+      }
+    },
+
+    "contributor_baseline": {
+      "type": ["object", "null"],
+      "description": "B7's absolute rate against a reference clean set: a SECOND dataset the operator supplies with `--reference-dataset`, run through the same data checks. It guards the cohort prior's blind spot: a cohort contaminated as a whole, where no contributor stands out. null when none was supplied, or when it was supplied but unusable (then contributor_baseline_unavailable says why). The reference's findings appear nowhere else in this report.",
+      "required": ["reference_n", "reference_flagged", "reference_rate", "cohort_rate", "cohort_exceeds_reference"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "reference_n": { "type": "integer", "description": "images in the reference dataset" },
+        "reference_flagged": { "type": "integer", "description": "of those, sample-level findings that ran and were routed to review or quarantine: the same definition of 'flagged' the cohort uses" },
+        "reference_rate": { "type": "number" },
+        "reference_rate_ci_high": { "type": "number", "description": "upper end of the 95% Jeffreys interval on reference_rate; what the cohort is compared to, since a reference that flagged nothing does not show a true rate of zero" },
+        "cohort_rate": { "type": "number", "description": "the scanned dataset's robust cohort rate: the flag rate of its groups after upper-tail outlier groups are set aside (first grouping key with data). This is the ALL-SURVIVORS rate and it is what this baseline comparison uses; it is NOT what any individual contributor_risk row was decided against — each of those carries its own leave-one-out `cohort_rate_used`." },
+        "cohort_exceeds_reference": { "type": "boolean", "description": "cohort_rate is above reference_rate_ci_high: the cohort prior is unreliable here, because the baseline every group is compared with is itself dirtier than clean data" }
+      }
+    },
+    "contributor_baseline_unavailable": {
+      "type": "string",
+      "description": "Present only when a reference dataset was supplied but its flag rate could not be computed (over the embedding ceiling, no embedding index, a check raised, or nothing to run). Never present when none was supplied."
+    },
+
+    "permutation_test": {
+      "type": ["object", "null"],
+      "description": "Mandatory at B7: are flags non-randomly distributed across groups AT ALL? This is the Sybil case the cohort prior structurally cannot see.",
+      "unevaluatedProperties": false,
+      "properties": {
+        "statistic": { "type": "number" },
+        "p_value": { "type": "number" },
+        "n_permutations": { "type": "integer" },
+        "conclusion": { "type": "string" }
+      }
+    },
+
+    "provenance_summary": {
+      "type": ["object", "null"],
+      "description": "Printed EVEN WHEN NOTHING FAILED (Module C open item O9). System-Overview says Module C 'only enters the report on failure', which is right about FINDINGS and wrong about the SECTION: a report with no provenance section is indistinguishable from a scan where provenance was never checked. Absence of evidence must not render as evidence of absence.",
+      "unevaluatedProperties": false,
+      "properties": {
+        "records_verified": { "type": "integer" },
+        "anchors_checked": { "type": "integer" },
+        "declared_degraded_intervals": { "type": "integer" },
+        "records_after_last_anchor": { "type": "integer", "description": "the unwitnessed window" },
+        "custody_type": { "type": "string" },
+        "durability_window": { "type": "string" },
+        "ledger_state": { "enum": ["sealed", "differs", "not_sealed"] },
+        "not_assessed_reason": { "type": "string", "description": "Present when an inference ledger WAS supplied and the capability resolved, but no prov.* check is registered with the scanner, so nothing in the ledger was verified. Without it the report shows a satisfied capability and no provenance rows, which reads as 'nothing to report' when the truth is 'nothing was checked'." }
+      }
+    },
+
+    "drift_summary": { "type": ["object", "null"] },
+
+    "calibration": {
+      "type": ["object", "null"],
+      "description": "The system's own confidence is evidence, and evidence gets shown — so the reliability diagram and Brier score live INSIDE the coverage statement, not in an appendix.",
+      "unevaluatedProperties": false,
+      "properties": {
+        "method": { "type": "string" },
+        "brier": { "type": ["number", "null"] },
+        "scored_on": {
+          "enum": ["out_of_fold", "none"],
+          "description": "How `brier` and `reliability_bins` were measured. `out_of_fold` means every prediction scored here came from a curve fitted without the point it predicted — the only basis on which a reliability diagram may be read as a quality claim. `none` means the fit had no second group to hold out, so no score is reported rather than an in-sample one presented as held out."
+        },
+        "calibrated_detectors": {
+          "type": "array", "items": { "type": "string" },
+          "description": "The detector ids a calibrator was actually fitted for. Everything else in the report carries its detector's OWN raw score, and the disposition table's confidence thresholds (D3, D5) are not applied to those findings — they route on severity alone and are capped at review. Without this list a reader cannot tell which confidences are on the calibrated scale."
+        },
+        "reliability_bins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["p_mean", "empirical", "n"],
+            "unevaluatedProperties": false,
+            "properties": {
+              "p_mean": { "type": "number" },
+              "empirical": { "type": "number" },
+              "n": { "type": "integer" }
+            }
+          }
+        },
+        "excluded_detectors": {
+          "type": "array", "items": { "type": "string" },
+          "description": "prov.* bypass calibration entirely: a hash mismatch is arithmetic, not a belief. Fitting a curve to a deterministic check produces a calibrated probability on a certainty, and feeding a degenerate class to the isotonic fit corrupts it for every other detector."
+        }
+      }
+    },
+
+    "coverage": {
+      "type": "object",
+      "description": "GENERATED by walking the registry's attack_class/requires declarations — never hand-assembled. PS §2.2.5's explicit non-coverage statement.",
+      "required": ["counts_only_kind", "assessed", "not_assessed", "never_covered"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "counts_only_kind": {
+          "const": "attack",
+          "description": "operational classes are true reports about the system's own state, not attack classes we claim to detect; counting them would inflate the statement with things no attacker does."
+        },
+        "assessed": { "$ref": "#/$defs/classToChecks" },
+        "not_assessed": { "$ref": "#/$defs/classToChecks" },
+        "never_covered": { "type": "array", "items": { "type": "string" } },
+        "operational_reports": { "type": "array", "items": { "type": "string" } },
+        "standing_limitations": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "reproduction": {
+      "type": "object",
+      "description": "PS §2.3's reproducible audit log. DECLARING THE VOLATILE SET IS THE DELIVERABLE (§5.3) — 'byte-identical twice' is impossible as stated, because scan_id and created_at_utc are volatile by design, and an auditor needs to know which fields are expected to differ rather than be handed an assertion that cannot hold.",
+      "required": ["command", "volatile_paths", "seeds"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "command": { "type": "string" },
+        "volatile_paths": {
+          "type": "array", "items": { "type": "string" },
+          "description": "JSON PATHS, not bare field names: scan_id is on the report AND on every finding, so a top-level deletion is not enough and the diff must walk the tree."
+        },
+        "seeds": { "type": "object" },
+        "env": { "type": "object" },
+        "version_pins_hash": { "type": ["string", "null"] },
+        "determinism_notes": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+
+  "$defs": {
+    "availability": { "enum": ["OK", "DEGRADED", "UNAVAILABLE", "ERROR"] },
+    "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+    "disposition": { "enum": ["accept", "review", "quarantine"] },
+    "nature": { "enum": ["adversarial", "quality", "indeterminate"] },
+    "exclusionReason": { "enum": ["capability", "budget", null] },
+    "contributorSource": {
+      "enum": ["sidecar", "directory", "format_field", "exif_cluster", "none", null]
+    },
+    "classToChecks": {
+      "type": "object",
+      "additionalProperties": { "type": "array", "items": { "type": "string" } }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["kind", "caption"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "kind": { "enum": ["image_crop", "contact_sheet", "heatmap", "plot", "table", "hash", "json"] },
+        "caption": { "type": "string" },
+        "path": {
+          "type": ["string", "null"],
+          "description": "The BARE CONTENT HASH, resolved against the shared <out_dir>/evidence/. Never scan_id-prefixed: that would smuggle the volatile field back into every finding."
+        },
+        "data": { "description": "In-memory payload; transport, not the record. Materialised into the store and hashed at write time." }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "finding_id", "scan_id", "detector_id", "detector_version", "target_type",
+        "target_ref", "severity", "confidence", "score_raw", "threshold", "reason",
+        "attack_class", "evidence", "access_assumptions", "limitations", "disposition",
+        "disposition_rule", "produced_by", "nature", "availability"
+      ],
+      "unevaluatedProperties": false,
+      "properties": {
+        "finding_id": {
+          "type": "string", "pattern": "^[0-9a-f]{16}$",
+          "description": "sha256(detector_id‖detector_version‖target_type‖target_ref‖attack_class)[:16] — SCAN-INVARIANT. If it hashed scan_id, every finding would be volatile and the reproducibility diff would be worthless."
+        },
+        "scan_id": { "type": "string", "description": "VOLATILE — §5.3" },
+        "detector_id": { "type": "string" },
+        "detector_version": { "type": "string" },
+        "target_type": { "enum": ["sample", "contributor", "batch", "model", "record", "dataset"] },
+        "target_ref": { "type": "string" },
+        "severity": { "$ref": "#/$defs/severity" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "score_raw": { "type": "number" },
+        "threshold": { "type": "number" },
+        "reason": {
+          "type": "string", "minLength": 1,
+          "description": "Must NAME THE EVIDENCE, not just a score. 'Suspicious sample (score 0.87)' is a number wearing a finding's clothes; if a template cannot be written in the evidential style, the detector should emit info severity."
+        },
+        "attack_class": { "type": "string", "description": "Must be declared in core/taxonomy.py — an undeclared string makes the coverage row silently vanish." },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+        "access_assumptions": { "type": "array", "items": { "type": "string" } },
+        "limitations": { "type": "array", "items": { "type": "string" } },
+        "disposition": { "$ref": "#/$defs/disposition" },
+        "disposition_rule": { "type": "string", "description": "WHICH rule fired — 'why this disposition?' always has a specific answer." },
+        "produced_by": { "type": "string" },
+        "nature": { "$ref": "#/$defs/nature" },
+        "exclusion_reason": { "$ref": "#/$defs/exclusionReason" },
+        "availability": { "$ref": "#/$defs/availability" }
+      }
+    }
+  }
+}

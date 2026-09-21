@@ -12,9 +12,9 @@ from __future__ import annotations
 import numpy as np
 
 from cva.core.capability import Capability
-from cva.core.types import (Disposition, Evidence, Finding, Nature, Severity,
-                              unavailable_finding)
+from cva.core.types import Disposition, Evidence, Finding, Nature, Severity, unavailable_finding
 from cva.detectors.base import CheckContext, register
+
 from .neural_cleanse import mad_anomaly_index
 
 
@@ -68,7 +68,6 @@ class UniversalMarginCheck:
                 (Capability.REFERENCE_CLEAN_SET,), "backdoor_trigger")]
 
         K = model.num_classes
-        order = ctx.profile.get("nc_class_order") or list(range(K))
         costs = np.array([universal_shift_cost(
             model, x, c, steps=int(ctx.opt("um_steps", 60)), seed=ctx.rng_seed)[0]
             for c in range(K)], dtype=np.float64)
@@ -120,9 +119,11 @@ def _plot(ctx, mid, costs, ai) -> str | None:
     if ctx.out_dir is None:
         return None
     try:
-        import matplotlib; matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         from pathlib import Path
+
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt  # noqa: E402
         d = Path(ctx.out_dir) / "evidence"; d.mkdir(parents=True, exist_ok=True)
         fig, ax = plt.subplots(figsize=(5.0, 2.4), dpi=130)
         cols = ["#e0544c" if a > 2 else "#5b8def" for a in ai]

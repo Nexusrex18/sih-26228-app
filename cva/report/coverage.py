@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cva.core.types import ATTACK_CLASSES
+from cva.core.taxonomy import TAXONOMY
 
 # Human-authored, reviewed deliberately, changes rarely. Code declares what it does;
 # humans declare what the code depends on.
@@ -25,27 +25,47 @@ STANDING_LIMITATIONS = [
     "separate, required step.",
     "The seal proves a record was produced by the pipeline and not altered since. It "
     "cannot attest that the input image was genuine before it entered the pipeline.",
+    # Item 24. `ContributorSource.EXIF_CLUSTER` is tier 4 of the §3 attribution precedence,
+    # it is in the frozen contract, and NO loader sets it — so a ratified tier exists in the
+    # type system and nowhere in behaviour. The enum member cannot simply be deleted (the
+    # contract is frozen and lists it), so the honest move is the other one the review
+    # offered: say the tier is skipped. An attribution tier that silently never resolves is
+    # exactly what the precedence table exists to prevent.
+    "Contributor attribution tier 4 — EXIF camera-serial clustering — is NOT implemented. "
+    "No loader resolves it, so a dataset whose contributors could only be identified by "
+    "clustering camera serials resolves no contributor at all rather than a tier-4 "
+    "hypothesis. Tiers 1-3 (signed sidecar, directory convention, format field) are "
+    "implemented; every report states which tier actually resolved each contributor.",
 ]
 
 
 def render_markdown(result) -> str:
-    from .report_json import coverage_of
+    from .report_json import coverage_of, verdict_line
     cov = coverage_of(result)
     out = [f"# Coverage statement — scan {result.scan_id}", "",
-           f"Model `{result.model_id}` ({result.model_fmt}). Verdict: **{result.verdict}**.",
+           f"{getattr(result, 'asset_kind', 'model').title()} `{result.model_id}` ({result.model_fmt}). "
+           f"Verdict: **{verdict_line(result)}**.",
            "", "## Attack classes assessed in this scan", ""]
     for ac, checks in cov["assessed"].items():
-        out.append(f"- `{ac}` — {ATTACK_CLASSES[ac]['desc']} — by {', '.join(checks)}")
+        out.append(f"- `{ac}` — {TAXONOMY[ac].desc} — by {', '.join(checks)}")
     out += ["", "## Attack classes NOT assessed in this scan", ""]
     for ac, checks in cov["not_assessed"].items():
-        out.append(f"- `{ac}` — {ATTACK_CLASSES[ac]['desc']} — {', '.join(checks)} could not run")
+        out.append(f"- `{ac}` — {TAXONOMY[ac].desc} — {', '.join(checks)} could not run")
     if cov["never_covered"]:
         out += ["", "## Attack classes no check covers at all", ""]
         out += [f"- `{ac}`" for ac in cov["never_covered"]]
     out += ["", "## Operational reports (not counted as coverage)", ""]
     out += [f"- `{ac}`" for ac in cov["operational_reports"]] or ["- none"]
+    if getattr(result, 'asset_kind', None) == 'dataset':
+        out += ["", "## Assessment limitations", ""]
+        for f in result.findings:
+            out += [f"- `{f.detector_id}`: {lim}" for lim in f.limitations]
     out += ["", "## Standing limitations", ""]
-    out += [f"- {l}" for l in STANDING_LIMITATIONS]
+    # Same source as report.json's coverage.standing_limitations, so the two never disagree
+    # (S3 sandbox and model-format limitations included). Lazy: report_json imports this module.
+    from .report_json import standing_limitations
+    out += [f"- {lim}" for lim in standing_limitations(
+        getattr(result, "target", None) or {}, getattr(result, "embedding_gap", None))]
     return "\n".join(out) + "\n"
 
 

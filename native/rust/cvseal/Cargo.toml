@@ -1,0 +1,8 @@
+[package]
+name = "cvseal"
+version = "0.1.0"
+edition = "2021"
+description = "Rust binding over the cvseal C core (cva-seal/1). No crates.io dependencies."
+build = "build.rs"
+
+[dependencies]

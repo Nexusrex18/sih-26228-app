@@ -2,5 +2,29 @@
 __pycache__/
 *.pyc
 artifacts/
+# Anchored. Unanchored, `reports/` also matched the source package cva/web/reports/ (the
+# report loader, the index and the seal check), which was then never committed: every
+# clone failed to import cva.web. tests/boundaries/test_no_source_is_gitignored.py fails
+# if any source file is ignored again.
+/reports/
+.cache/
+.scratch/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.egg-info/
+build/
+wheelhouse/
+cva-bundle.tar
+# Mode A fetches these; the bundle carries them. The SHA-256 pins are committed, the
+# bytes are not — an 88 MB checkpoint does not belong in git history.
+vendor/weights/*.pth
+vendor/dinov2/*
+!vendor/dinov2/.gitkeep
+
+# native build outputs (Module C, gate C9)
+native/c/*.o
+native/c/*.a
+native/c/cvseal
+native/rust/**/target/
+native/rust/**/Cargo.lock

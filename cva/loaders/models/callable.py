@@ -6,12 +6,12 @@ layer; it loses only the weight- and activation-based checks, and the report say
 """
 from __future__ import annotations
 
-import hashlib
-from typing import Any, Callable
+from collections.abc import Callable
 
 import numpy as np
 
 from cva.core.capability import Capability, CapabilitySet
+
 from .base import ProbeLog, softmax
 
 
@@ -58,6 +58,9 @@ class CallableHandle:
                 p.absent(Capability.MODEL_LOGITS, "endpoint returns probabilities only")
         except Exception as exc:
             p.absent(Capability.MODEL_PREDICT, f"call failed: {exc}")
+            # Every absent capability carries a reason; without this the LOGITS note was only
+            # ever written on the success path.
+            p.absent(Capability.MODEL_LOGITS, "no logits: the model could not be queried")
         for cap, why in (
             (Capability.MODEL_ACTIVATIONS, "query-only endpoint exposes no internals"),
             (Capability.MODEL_WEIGHTS, "query-only endpoint exposes no parameters"),

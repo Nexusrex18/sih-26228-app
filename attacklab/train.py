@@ -6,8 +6,7 @@ architectures, widths and splits are varied deliberately.
 """
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +14,7 @@ import torch
 import torch.nn as nn
 
 from .arch import ARCH_REGISTRY
-from .synth import CLASSES, Corpus, TRIGGERS, make_corpus, poison
+from .synth import CLASSES, TRIGGERS, Corpus
 
 
 def _size_kwarg(arch: str) -> str:

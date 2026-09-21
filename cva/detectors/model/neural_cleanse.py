@@ -17,7 +17,14 @@ from __future__ import annotations
 import numpy as np
 
 from cva.core.capability import Availability, Capability
-from cva.core.types import (Disposition, Evidence, Finding, Nature, Severity)
+from cva.core.types import (
+    Disposition,
+    Evidence,
+    Finding,
+    Nature,
+    Severity,
+    unavailable_finding,
+)
 from cva.detectors.base import CheckContext, register
 
 
@@ -71,7 +78,7 @@ def reverse_engineer_gradient(model, target: int, x: np.ndarray, steps: int = 40
     best_mask, best_patt, best_l1 = None, None, float("inf")
     up, down, patience, since = 1.5, 1.5 ** 1.5, 5, 0
 
-    for step in range(steps):
+    for _step in range(steps):
         opt.zero_grad()
         m = torch.sigmoid(mask_raw)
         p = torch.sigmoid(patt_raw)
@@ -149,13 +156,26 @@ class NeuralCleanseCheck:
 
     def check(self, model, ctx: CheckContext) -> list[Finding]:
         x = ctx.probes_x
+        # REFERENCE_CLEAN_SET is granted by a clean probe ARRAY or a clean reference DATASET
+        # (`RunContext.capabilities`), and this method needs the array: it optimises a patch
+        # against the model's own responses. Resolving OK on the dataset grant and then
+        # crashing on a None would surface as `tool.error` — a defect in the tool — where the
+        # honest answer is an unavailable row naming what was missing.
+        if x is None or not len(x):
+            return [unavailable_finding(
+                self.id, self.version, model.model_id,
+                "needs clean probe images as an array; a reference dataset alone does not "
+                "supply them (use --corpus, or --reference for a probe set)",
+                (Capability.REFERENCE_CLEAN_SET,), "backdoor_trigger")]
         K = model.num_classes
         caps = model.capabilities()
         has_grad = Capability.MODEL_GRADIENTS in caps
 
         # Top-K driven by the intrinsic ranking when one is available, so class count
         # stops being the thing that makes this infeasible.
-        order = ctx.profile.get("nc_class_order") or list(range(K))
+        # `run_state`, not `profile`: the ranking is a per-run input derived by
+        # model.intrinsic_probes, and the profile is hashed before any check runs.
+        order = ctx.run_state.get("nc_class_order") or list(range(K))
         topk = int(ctx.opt("nc_top_k", K))
         classes = list(order)[:topk]
 
@@ -181,7 +201,7 @@ class NeuralCleanseCheck:
         plot = _plot_norms(ctx, model.model_id, classes, norms, ai)
         ev = [Evidence("table", "per-class minimal trigger L1 norm and anomaly index",
                        data={str(c): {"l1": round(float(n), 2), "anomaly_index": round(float(a), 2)}
-                             for c, n, a in zip(classes, norms, ai)})]
+                             for c, n, a in zip(classes, norms, ai, strict=False)})]
         if img:
             ev.append(Evidence("image_crop",
                                f"reconstructed trigger for class {worst_cls}", path=img))
@@ -241,8 +261,9 @@ def _save_trigger(ctx, mid, cls, mask, pattern) -> str | None:
     try:
         import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         from pathlib import Path
+
+        import matplotlib.pyplot as plt
         d = Path(ctx.out_dir) / "evidence"; d.mkdir(parents=True, exist_ok=True)
         stamped = (mask * pattern).transpose(1, 2, 0)
         fig, axes = plt.subplots(1, 3, figsize=(5.4, 2.0), dpi=140)
@@ -263,8 +284,9 @@ def _plot_norms(ctx, mid, classes, norms, ai) -> str | None:
     try:
         import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         from pathlib import Path
+
+        import matplotlib.pyplot as plt
         d = Path(ctx.out_dir) / "evidence"; d.mkdir(parents=True, exist_ok=True)
         fig, ax = plt.subplots(figsize=(5.0, 2.4), dpi=130)
         colours = ["#e0544c" if a > 2 else "#5b8def" for a in ai]
